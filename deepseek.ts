@@ -29,7 +29,7 @@ export type Ferramenta = { name: string; description: string; input_schema: Reco
 export type Msg = { role: "user" | "assistant"; content: unknown };
 // blocos sao os content blocks do SDK ({type:"text",text} | {type:"tool_use",id,name,input});
 // devolvidos crus pra poderem ser relidos E reecoados como content de mensagem assistant.
-export type Resposta = { blocos: any[]; stop: string };
+export type Resposta = { blocos: any[]; stop: string; usage?: { in: number; out: number } };
 export type MensagemFn = (system: string, messages: Msg[], tools: Ferramenta[]) => Promise<Resposta>;
 
 let cliente: Anthropic | null = null;
@@ -53,7 +53,11 @@ export const mensagem: MensagemFn = async (system, messages, tools) => {
     messages: messages as any,
     tools: tools as any,
   });
-  return { blocos: resp.content as any[], stop: String(resp.stop_reason ?? "") };
+  const usage = {
+    in: Number(resp.usage?.input_tokens ?? 0),
+    out: Number(resp.usage?.output_tokens ?? 0),
+  };
+  return { blocos: resp.content as any[], stop: String(resp.stop_reason ?? ""), usage };
 };
 
 // Chamada simples sem ferramentas: devolve o texto concatenado (usado pelo revisor).
