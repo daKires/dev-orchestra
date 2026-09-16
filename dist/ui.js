@@ -100,46 +100,67 @@ const HTML = `<!doctype html>
   .badge.rodando { background:#3b3410; color:#e3b341; }
   .badge.COMPLETE { background:#0f3d20; color:#3fb950; }
   .badge.NEEDS-REVIEW, .badge.GATE-FAILED, .badge.FAILED, .badge.COMMIT-SKIP { background:#3d1a1a; color:#f85149; }
-  button.back { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; }
+  button.back { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; }
+  button.back:hover { border-color:#58a6ff; }
   /* grid de swarms */
-  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; padding:12px; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; padding:14px; }
   .empty { color:#8b949e; padding:24px; }
-  .scard { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; cursor:pointer; transition:border-color .1s; }
+  .scard { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; cursor:pointer; transition:border-color .1s; display:flex; flex-direction:column; gap:10px; }
   .scard:hover { border-color:#58a6ff; }
   .scard.rodando { border-left:3px solid #e3b341; }
   .scard.COMPLETE { border-left:3px solid #3fb950; }
   .scard.NEEDS-REVIEW, .scard.GATE-FAILED, .scard.FAILED, .scard.COMMIT-SKIP { border-left:3px solid #f85149; }
-  .scard .feat { font-weight:600; color:#e6edf3; margin-bottom:8px; word-break:break-word; }
+  .scard .feat { font-weight:700; color:#e6edf3; word-break:break-word; font-size:14px; }
   .scard .cmeta { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .scard .prog { font-size:12px; color:#8b949e; }
-  .scard .cwd { font-size:11px; color:#6e7681; margin-left:auto; word-break:break-all; }
+  .scard .prog { font-size:12px; color:#8b949e; font-weight:600; }
+  .scard .bar { height:6px; border-radius:3px; background:#21262d; overflow:hidden; }
+  .scard .barfill { height:100%; border-radius:3px; background:#8b949e; transition:width .2s; }
+  .scard .barfill.rodando { background:#e3b341; }
+  .scard .barfill.COMPLETE { background:#3fb950; }
+  .scard .barfill.NEEDS-REVIEW, .scard .barfill.GATE-FAILED, .scard .barfill.FAILED, .scard .barfill.COMMIT-SKIP { background:#f85149; }
+  .scard .cwd { font-size:11px; color:#6e7681; word-break:break-all; }
   /* detalhe */
-  main { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px; }
-  section { background:#161b22; border:1px solid #30363d; border-radius:6px; padding:10px; min-height:120px; }
-  section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#8b949e; margin:0 0 8px; }
-  .card { border:1px solid #30363d; border-radius:6px; padding:8px; margin-bottom:8px; }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:14px; }
+  section { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; min-height:120px; }
+  section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#8b949e; margin:0 0 10px; }
+  /* KPIs (agregado) full-width no topo do detalhe */
+  #metricas-agg { grid-column:1/-1; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+  .kpi { background:#161b22; border:1px solid #30363d; border-left:3px solid #58a6ff; border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:8px; }
+  .kpi .klabel { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8b949e; }
+  .kpi .kval { font-size:30px; font-weight:700; line-height:1; color:#e6edf3; }
+  .kpi.verde { border-left-color:#3fb950; } .kpi.verde .kval { color:#3fb950; }
+  .kpi.azul { border-left-color:#58a6ff; } .kpi.azul .kval { color:#58a6ff; }
+  .kpi.vermelho { border-left-color:#f85149; } .kpi.vermelho .kval { color:#f85149; }
+  .kpi.neutro { border-left-color:#8b949e; } .kpi.neutro .kval { color:#8b949e; }
+  /* slices */
+  #slices { display:flex; flex-direction:column; gap:8px; }
+  .card { background:#0d1117; border:1px solid #30363d; border-left:3px solid #30363d; border-radius:8px; padding:10px 12px; }
   .card.fila { opacity:.5; }
-  .card.rodando { border-color:#e3b341; }
-  .card.ok { border-color:#3fb950; }
-  .card.incompleta { border-color:#f85149; }
-  .card .t { font-weight:600; }
-  .card .sub { color:#8b949e; font-size:12px; margin-top:2px; }
-  #feed { max-height:420px; overflow:auto; display:flex; flex-direction:column; }
-  #feed .row { padding:2px 0; border-bottom:1px dashed #21262d; font-size:12.5px; }
+  .card.rodando { border-left-color:#e3b341; }
+  .card.ok { border-left-color:#3fb950; }
+  .card.incompleta { border-left-color:#f85149; }
+  .card .t { font-weight:600; color:#e6edf3; }
+  .card .sub { color:#8b949e; font-size:12px; margin-top:4px; }
+  /* tool calls */
+  #feed { max-height:420px; overflow:auto; display:flex; flex-direction:column; gap:2px; }
+  #feed .row { padding:3px 6px; border-bottom:1px dashed #21262d; font-size:12.5px; border-radius:4px; }
   #feed .row.err { color:#f85149; }
-  #metricas .row { padding:2px 0; border-bottom:1px dashed #21262d; font-size:12.5px; }
-  #metricas-agg { color:#8b949e; font-size:12px; margin-top:6px; border-top:1px solid #30363d; padding-top:4px; }
-  #gate .row { display:flex; gap:8px; align-items:center; padding:4px 0; flex-wrap:wrap; }
+  /* metricas por slice */
+  #metricas .row { padding:3px 0; border-bottom:1px dashed #21262d; font-size:12.5px; }
+  /* gate */
+  #gate .row { display:flex; gap:8px; align-items:center; padding:5px 0; flex-wrap:wrap; border-bottom:1px dashed #21262d; }
   #gate .st { font-weight:600; }
   #gate .st.ok { color:#3fb950; } #gate .st.falha { color:#f85149; } #gate .st.rodando { color:#e3b341; }
-  details { margin-top:4px; width:100%; } pre { white-space:pre-wrap; background:#0d1117; padding:8px; border-radius:4px; max-height:240px; overflow:auto; margin:4px 0 0; }
-  #diffs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:8px; }
-  #diffs button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; padding:2px 8px; cursor:pointer; font:inherit; }
-  #diffs button.on { background:#30363d; color:#e6edf3; }
+  details { margin-top:4px; width:100%; } pre { white-space:pre-wrap; background:#0d1117; padding:8px; border-radius:6px; max-height:240px; overflow:auto; margin:4px 0 0; border:1px solid #21262d; }
+  #diffs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+  #diffs button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:3px 9px; cursor:pointer; font:inherit; font-size:12px; }
+  #diffs button:hover { border-color:#58a6ff; }
+  #diffs button.on { background:#30363d; color:#e6edf3; border-color:#58a6ff; }
   .add { color:#3fb950; } .rem { color:#f85149; }
   #painel { margin-top:8px; white-space:pre-wrap; font-size:12.5px; }
-  button.copy { margin-top:6px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  button.copy { margin-top:8px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:5px 10px; cursor:pointer; font:inherit; }
+  button.copy:hover { border-color:#58a6ff; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } #metricas-agg { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>
 </head>
 <body>
@@ -153,10 +174,11 @@ const HTML = `<!doctype html>
 </header>
 <div id="grid"></div>
 <main id="detalhe" hidden>
+  <div id="metricas-agg"></div>
   <section><h2 id="d-feature">Slices</h2><div id="slices"></div></section>
   <section><h2>Tool calls</h2><div id="feed"></div></section>
   <section><h2>Gate</h2><div id="gate"></div></section>
-  <section><h2>Métricas</h2><div id="metricas"></div><div id="metricas-agg"></div></section>
+  <section><h2>Métricas</h2><div id="metricas"></div></section>
   <section><h2>Diff / Painel</h2><div id="diffs"></div><pre id="diffbody"></pre><pre id="painel"></pre><button class="copy" id="btn-copy" hidden>Copiar REVERTER</button></section>
 </main>
 <script>
@@ -198,6 +220,12 @@ function progressoDe(s) {
   var f = 0; for (var k in fim) f++;
   return total ? (f + '/' + total) : '';
 }
+function pctDe(s) {
+  var total = 0, fim = {};
+  for (var i = 0; i < s.events.length; i++) { var ev = s.events[i]; if (ev.t === 'slice') { total = ev.total; if (ev.status === 'ok' || ev.status === 'incompleta') fim[ev.idx] = 1; } }
+  var f = 0; for (var k in fim) f++;
+  return total ? Math.round((f / total) * 100) : 0;
+}
 function renderGrid() {
   if (atual) return;
   var g = document.getElementById('grid');
@@ -206,14 +234,21 @@ function renderGrid() {
   document.getElementById('h-sub').textContent = ids.length ? (ids.length + ' swarm(s)') : 'nenhum swarm ativo';
   if (!ids.length) { g.appendChild(el('div', 'empty', 'Rode  orchestra "feature"  em alguma sessao — os swarms aparecem aqui.')); return; }
   for (var i = 0; i < ids.length; i++) {
-    var s = swarms[ids[i]], st = statusDe(s), prog = progressoDe(s);
+    var s = swarms[ids[i]], st = statusDe(s), prog = progressoDe(s), pct = pctDe(s);
     var card = el('div', 'scard ' + st);
     card.appendChild(el('div', 'feat', s.feature));
     var meta = el('div', 'cmeta');
     meta.appendChild(el('span', 'badge ' + st, st));
     if (prog) meta.appendChild(el('span', 'prog', prog));
-    if (s.cwd) meta.appendChild(el('span', 'cwd', s.cwd));
     card.appendChild(meta);
+    if (prog) {
+      var bar = el('div', 'bar');
+      var fill = el('div', 'barfill ' + st);
+      fill.style.width = pct + '%';
+      bar.appendChild(fill);
+      card.appendChild(bar);
+    }
+    if (s.cwd) card.appendChild(el('div', 'cwd', s.cwd));
     (function (cid) { card.onclick = function () { abrir(cid); }; })(ids[i]);
     g.appendChild(card);
   }
@@ -247,7 +282,7 @@ function limparDetalhe() {
   document.getElementById('feed').innerHTML = '';
   document.getElementById('gate').innerHTML = '';
   document.getElementById('metricas').innerHTML = '';
-  document.getElementById('metricas-agg').textContent = '';
+  atualizarAgregadoMetricas();
   document.getElementById('diffs').innerHTML = '';
   document.getElementById('diffbody').textContent = '';
   document.getElementById('painel').textContent = '';
@@ -300,10 +335,12 @@ function addMetrica(ev) {
   root.appendChild(el('div', 'row', linha));
   atualizarAgregadoMetricas();
 }
+function kpiTile(label, valor, cor) {
+  return '<div class="kpi ' + cor + '"><div class="klabel">' + label + '</div><div class="kval">' + valor + '</div></div>';
+}
 function atualizarAgregadoMetricas() {
   var agg = document.getElementById('metricas-agg');
   var n = metricas.length;
-  if (!n) { agg.textContent = ''; return; }
   var primeira = 0, somaIter = 0, tocou = 0, custo = 0;
   for (var i = 0; i < n; i++) {
     var m = metricas[i];
@@ -312,9 +349,20 @@ function atualizarAgregadoMetricas() {
     if (m.tocouNoTeste > 0) tocou++;
     custo += m.custoUSD;
   }
-  agg.textContent = 'run (' + n + ' slice' + (n > 1 ? 's' : '') + '): '
-    + Math.round((primeira / n) * 100) + '% 1a | media ' + (somaIter / n).toFixed(1) + ' iter | '
-    + Math.round((tocou / n) * 100) + '% tocou teste | $ ' + custo.toFixed(4);
+  var vPrimeira, vIter, vTeste, vCusto, corTeste;
+  if (!n) {
+    vPrimeira = '—'; vIter = '—'; vTeste = '—'; vCusto = '—'; corTeste = 'neutro';
+  } else {
+    vPrimeira = Math.round((primeira / n) * 100) + '%';
+    vIter = (somaIter / n).toFixed(1);
+    vTeste = Math.round((tocou / n) * 100) + '%';
+    vCusto = '$' + custo.toFixed(4);
+    corTeste = tocou > 0 ? 'vermelho' : 'verde';
+  }
+  agg.innerHTML = kpiTile('Passou de 1ª', vPrimeira, 'verde')
+    + kpiTile('Média iterações', vIter, 'azul')
+    + kpiTile('Tocou no teste', vTeste, corTeste)
+    + kpiTile('Custo total', vCusto, 'azul');
 }
 function addGate(ev) {
   var root = document.getElementById('gate');

@@ -354,7 +354,7 @@ function atualizarAgregadoMetricas() {
     vIter = (somaIter / n).toFixed(1);
     vTeste = Math.round((tocou / n) * 100) + '%';
     vCusto = '$' + custo.toFixed(4);
-    corTeste = tocou > 0 ? 'verde' : 'vermelho';
+    corTeste = tocou > 0 ? 'vermelho' : 'verde';
   }
   agg.innerHTML = kpiTile('Passou de 1ª', vPrimeira, 'verde')
     + kpiTile('Média iterações', vIter, 'azul')
