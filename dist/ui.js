@@ -80,6 +80,7 @@ export function linhaDe(ev) {
         }
         case "diff": return "";
         case "painel": return "";
+        case "metrica": return `[T${ev.slice}] metrica: ${ev.iteracoes} iter, ${ev.passouDePrimeira ? "1a" : "reparo"}, teste:${ev.tocouNoTeste}, ${ev.tokensIn}+${ev.tokensOut} tok, $ ${ev.custoUSD.toFixed(4)}`;
         case "log": return ev.texto;
     }
 }
@@ -126,6 +127,8 @@ const HTML = `<!doctype html>
   #feed { max-height:420px; overflow:auto; display:flex; flex-direction:column; }
   #feed .row { padding:2px 0; border-bottom:1px dashed #21262d; font-size:12.5px; }
   #feed .row.err { color:#f85149; }
+  #metricas .row { padding:2px 0; border-bottom:1px dashed #21262d; font-size:12.5px; }
+  #metricas-agg { color:#8b949e; font-size:12px; margin-top:6px; border-top:1px solid #30363d; padding-top:4px; }
   #gate .row { display:flex; gap:8px; align-items:center; padding:4px 0; flex-wrap:wrap; }
   #gate .st { font-weight:600; }
   #gate .st.ok { color:#3fb950; } #gate .st.falha { color:#f85149; } #gate .st.rodando { color:#e3b341; }
@@ -153,6 +156,7 @@ const HTML = `<!doctype html>
   <section><h2 id="d-feature">Slices</h2><div id="slices"></div></section>
   <section><h2>Tool calls</h2><div id="feed"></div></section>
   <section><h2>Gate</h2><div id="gate"></div></section>
+  <section><h2>Métricas</h2><div id="metricas"></div><div id="metricas-agg"></div></section>
   <section><h2>Diff / Painel</h2><div id="diffs"></div><pre id="diffbody"></pre><pre id="painel"></pre><button class="copy" id="btn-copy" hidden>Copiar REVERTER</button></section>
 </main>
 <script>
@@ -160,6 +164,7 @@ var es = new EventSource('/events');
 var swarms = {};   // id -> { events:[], feature, cwd }
 var atual = null;  // swarm aberto no detalhe, ou null = grid
 var diffs = {};
+var metricas = []; // acumulador de metricas do swarm aberto (zona detalhe)
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -237,9 +242,12 @@ document.getElementById('btn-back').onclick = voltar;
 
 function limparDetalhe() {
   diffs = {};
+  metricas = [];
   document.getElementById('slices').innerHTML = '';
   document.getElementById('feed').innerHTML = '';
   document.getElementById('gate').innerHTML = '';
+  document.getElementById('metricas').innerHTML = '';
+  document.getElementById('metricas-agg').textContent = '';
   document.getElementById('diffs').innerHTML = '';
   document.getElementById('diffbody').textContent = '';
   document.getElementById('painel').textContent = '';
@@ -282,6 +290,31 @@ function upsertSlice(ev) {
   if (ev.motivo) sub.push('motivo: ' + ev.motivo);
   if (ev.ms) sub.push(ev.ms + 'ms');
   if (sub.length) card.appendChild(el('div', 'sub', sub.join(' | ')));
+}
+function addMetrica(ev) {
+  metricas.push(ev);
+  var root = document.getElementById('metricas');
+  var linha = '[T' + ev.slice + '] ' + ev.iteracoes + ' iter, ' + (ev.passouDePrimeira ? '1a' : 'reparo')
+    + ', teste:' + ev.tocouNoTeste + ', ' + ev.tokensIn + '+' + ev.tokensOut + ' tok, $ ' + ev.custoUSD.toFixed(4)
+    + (ev.ms != null ? ', ' + ev.ms + 'ms' : '');
+  root.appendChild(el('div', 'row', linha));
+  atualizarAgregadoMetricas();
+}
+function atualizarAgregadoMetricas() {
+  var agg = document.getElementById('metricas-agg');
+  var n = metricas.length;
+  if (!n) { agg.textContent = ''; return; }
+  var primeira = 0, somaIter = 0, tocou = 0, custo = 0;
+  for (var i = 0; i < n; i++) {
+    var m = metricas[i];
+    if (m.passouDePrimeira) primeira++;
+    somaIter += m.iteracoes;
+    if (m.tocouNoTeste > 0) tocou++;
+    custo += m.custoUSD;
+  }
+  agg.textContent = 'run (' + n + ' slice' + (n > 1 ? 's' : '') + '): '
+    + Math.round((primeira / n) * 100) + '% 1a | media ' + (somaIter / n).toFixed(1) + ' iter | '
+    + Math.round((tocou / n) * 100) + '% tocou teste | $ ' + custo.toFixed(4);
 }
 function addGate(ev) {
   var root = document.getElementById('gate');
@@ -329,6 +362,7 @@ function aplicar(ev) {
   else if (ev.t === 'tool') { addFeed('[T' + ev.slice + '] ' + ev.nome + (ev.alvo ? ' ' + ev.alvo : '') + (ev.ok ? '' : ' (' + (ev.resumo || 'erro') + ')'), !ev.ok); }
   else if (ev.t === 'gate') { addGate(ev); }
   else if (ev.t === 'diff') { addDiff(ev); }
+  else if (ev.t === 'metrica') { addMetrica(ev); }
   else if (ev.t === 'painel') {
     setDStatus(ev.status);
     if (ev.branch) document.getElementById('d-branch').textContent = ev.branch;

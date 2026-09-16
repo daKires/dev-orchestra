@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync } from "node:fs";
-import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, podeReparar, } from "./hermes.js";
+import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, podeReparar, custoUSD, ehTeste, } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns } from "./ui.js";
 import { escolherProvedor } from "./deepseek.js";
 const WIDTH = 64;
@@ -80,11 +80,19 @@ async function rodar(cwd, feature, plano) {
         let tentativa = 0;
         while (!g.ok && podeReparar(tentativa)) {
             tentativa++;
-            await agente(base, feature, {
+            const sliceIdx = plano.length + tentativa;
+            const inicioReparo = Date.now();
+            const r = await agente(base, feature, {
                 tarefa: "reparo: " + g.cmd,
                 arquivos_alvo: escritos,
                 descricao: `O comando "${g.cmd}" falhou apos as edicoes. Saida:\n${g.saida}\n\nConserte os arquivos ate o comando passar.`,
-            }, emit, plano.length + tentativa);
+            }, emit, sliceIdx);
+            // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
+            emit({
+                t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
+                tocouNoTeste: r.tocouNoTeste, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
+                custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
+            });
             g = await gate(cwd, emit, undefined, tentativa);
         }
         let status;
@@ -158,6 +166,16 @@ if (process.argv.includes("--selftest")) {
     assert.strictEqual(podeReparar(0, 0), false);
     assert.strictEqual(podeReparar(0, 1), true);
     assert.strictEqual(podeReparar(1, 1), false);
+    // ehTeste: reconhece os padroes comuns de arquivo de teste (pura, offline)
+    assert.strictEqual(ehTeste("src/foo.test.ts"), true);
+    assert.strictEqual(ehTeste("a/__tests__/x.ts"), true);
+    assert.strictEqual(ehTeste("test_x.py"), true);
+    assert.strictEqual(ehTeste("x_test.go"), true);
+    assert.strictEqual(ehTeste("src/index.ts"), false);
+    // custoUSD: mesma quantidade de tokens custa MAIS no pico (quarta 02:00 UTC) que off-peak (domingo 12:00 UTC)
+    const quartaPico = new Date(Date.UTC(2024, 0, 3, 2, 0, 0)); // quarta-feira, 02:00 UTC (peak)
+    const domingoOff = new Date(Date.UTC(2024, 0, 7, 12, 0, 0)); // domingo, 12:00 UTC (off-peak)
+    assert.ok(custoUSD(1e6, 1e6, quartaPico) > custoUSD(1e6, 1e6, domingoOff), "peak > off-peak");
     // escolherProvedor: nativa/OpenRouter/nenhuma (CA-1, CA-2, CA-4 -- pura, sem mexer em env em runtime)
     assert.strictEqual(escolherProvedor("dk", undefined).useAuthToken, false); // so' nativa
     assert.strictEqual(escolherProvedor(undefined, "or").useAuthToken, true); // so' OpenRouter
@@ -228,6 +246,20 @@ if (process.argv.includes("--selftest")) {
         assert.ok(w.recebidos.some((x) => x === "ok"), "tool_result ok");
         assert.deepStrictEqual(r.escritos, ["novo.txt"]);
         assert.strictEqual(r.ok, true);
+    })();
+    // Trava anti-alterar-teste: teste que JA existe e' imutavel; criar teste NOVO continua permitido.
+    await (async () => {
+        const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-tst-"));
+        await fsp.writeFile(path.join(base, "foo.test.ts"), "// teste existente\n");
+        const t = fake([
+            { blocos: [{ type: "tool_use", id: "t1", name: "escrever_arquivo", input: { caminho: "foo.test.ts", conteudo: "// sobrescrito\n" } }], stop: "tool_use" },
+            { blocos: [{ type: "tool_use", id: "t2", name: "escrever_arquivo", input: { caminho: "novo.test.ts", conteudo: "// teste novo\n" } }], stop: "tool_use" },
+            fim,
+        ]);
+        await agente(base, "f", alvo, nada, 1, t.fn);
+        assert.ok(t.recebidos.some((r) => r.startsWith("RECUSADO (teste imutavel")), "teste existente recusado");
+        assert.ok(t.recebidos.some((r) => r === "ok"), "teste novo permitido");
+        assert.strictEqual(await fsp.readFile(path.join(base, "foo.test.ts"), "utf8"), "// teste existente\n", "teste original preservado");
     })();
     // gate(): skip (sem comandos) / passa / falha (offline, via node -e)
     await (async () => {
