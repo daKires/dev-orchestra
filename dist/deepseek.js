@@ -44,7 +44,11 @@ export const mensagem = async (system, messages, tools) => {
         messages: messages,
         tools: tools,
     });
-    return { blocos: resp.content, stop: String(resp.stop_reason ?? "") };
+    const usage = {
+        in: Number(resp.usage?.input_tokens ?? 0),
+        out: Number(resp.usage?.output_tokens ?? 0),
+    };
+    return { blocos: resp.content, stop: String(resp.stop_reason ?? ""), usage };
 };
 // Chamada simples sem ferramentas: devolve o texto concatenado (usado pelo revisor).
 export async function texto(system, user) {

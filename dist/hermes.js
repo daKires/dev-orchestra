@@ -92,6 +92,46 @@ export function destrutivo(arquivo, antes, depois) {
     }
     return null;
 }
+// Converte um glob simples (suporta * e **) em regex ancorada, sem lib externa.
+function globRe(g) {
+    let esc = g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escapa os meta-regex (inclusive * e ?)
+    esc = esc.replace(/\\\*\\\*/g, ".*").replace(/\\\*/g, "[^/]*").replace(/\\\?/g, ".");
+    return new RegExp("^" + esc + "$");
+}
+// Trava anti-alterar-teste: pura, decide se um caminho relativo aponta pra um arquivo de TESTE.
+// Configuravel por HERMES_TEST_GLOB (csv de globs); sem ela, o default cobre os padroes comuns.
+export function ehTeste(rel) {
+    const p = rel.replace(/\\/g, "/"); // normaliza separador pro dashboard/FS
+    const nome = p.split("/").pop() || p;
+    const globs = (process.env.HERMES_TEST_GLOB || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (globs.length)
+        return globs.some((g) => globRe(g).test(p) || globRe(g).test(nome));
+    if (/\.(test|spec)\./i.test(nome))
+        return true; // foo.test.*, foo.spec.*
+    if (/^test_.*\.py$/i.test(nome))
+        return true; // test_*.py
+    if (/_test\.py$/i.test(nome))
+        return true; // *_test.py
+    if (/_test\.go$/i.test(nome))
+        return true; // *_test.go
+    if (/(^|\/)__tests__\//.test(p))
+        return true; // .../__tests__/...
+    if (/(^|\/)tests\//.test(p))
+        return true; // tests/... ou .../tests/...
+    return false;
+}
+// Custo em USD do slice: PEAK nos dias uteis (UTC) das 01h-04h e 06h-10h; senao OFF-PEAK. Precos por
+// milhao de tokens via env (defaults da DeepSeek nativa). Pura -> testavel no selftest.
+export function custoUSD(tin, tout, when = new Date()) {
+    const dia = when.getUTCDay(); // 0=domingo, 6=sabado
+    const hora = when.getUTCHours();
+    const peak = dia >= 1 && dia <= 5 && ((hora >= 1 && hora < 4) || (hora >= 6 && hora < 10));
+    const inP = Number(process.env.HERMES_PRICE_IN_PEAK ?? "0.30");
+    const inO = Number(process.env.HERMES_PRICE_IN_OFFPEAK ?? "0.15");
+    const outP = Number(process.env.HERMES_PRICE_OUT_PEAK ?? "1.20");
+    const outO = Number(process.env.HERMES_PRICE_OUT_OFFPEAK ?? "0.60");
+    return (tin / 1e6) * (peak ? inP : inO) + (tout / 1e6) * (peak ? outP : outO);
+}
 // Resolve um caminho relativo garantindo que fica DENTRO do projeto; senao null.
 export function dentro(base, rel) {
     const alvo = path.resolve(base, rel);
@@ -160,6 +200,12 @@ export async function execFerramenta(ctx, nome, input) {
                 atual = await fs.readFile(alvo, "utf8");
             }
             catch { }
+            // Trava: teste que JA existe e' imutavel (criar teste novo continua permitido). Antes do guard destrutivo.
+            if (ehTeste(rel) && atual) {
+                ctx.tocouNoTeste++;
+                tool(rel, false, "arquivo de teste (imutavel)");
+                return "RECUSADO (teste imutavel): altere o codigo, nao o teste";
+            }
             const motivo = atual ? destrutivo(rel, atual, conteudo) : (conteudo.trim() ? null : "saida vazia");
             if (motivo) {
                 tool(rel, false, motivo);
@@ -187,6 +233,7 @@ export async function execFerramenta(ctx, nome, input) {
             }
             catch (e) {
                 ctx.comandos.push(cmd + " (exit " + (e?.code ?? "?") + ")");
+                ctx.falhasCmd++; // conta a falha pra metrica (iteracoes ate verde)
                 const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
                 tool(cmd, false, "exit " + (e?.code ?? "?"));
                 return `exit ${e?.code ?? "?"}\n${saida}`;
@@ -212,15 +259,27 @@ export async function agente(base, feature, t, emit, sliceIdx, msgFn = mensagemR
     const user = `Feature: ${feature}\nTarefa: ${t.tarefa}\nArquivos-alvo: ${t.arquivos_alvo.join(", ") || "(voce decide)"}\n` +
         `Detalhes: ${t.descricao}\n` +
         (CMDS.length ? `Comandos de verificacao permitidos: ${CMDS.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
-    const ctx = { base, escritos: new Set(), comandos: [], emit, sliceIdx };
+    const ctx = {
+        base, escritos: new Set(), comandos: [], emit, sliceIdx,
+        falhasCmd: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
+    };
     const messages = [{ role: "user", content: user }];
     for (let turno = 0; turno < MAX_TURNS; turno++) {
-        const { blocos, stop } = await msgFn(sys, messages, FERRAMENTAS);
+        const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS);
+        if (usage) {
+            ctx.tokensIn += Number(usage.in ?? 0);
+            ctx.tokensOut += Number(usage.out ?? 0);
+        }
         messages.push({ role: "assistant", content: blocos });
         const usos = blocos.filter((b) => b?.type === "tool_use");
         if (stop !== "tool_use" || usos.length === 0) {
             const escritos = [...ctx.escritos];
-            return { escritos, comandos: ctx.comandos, ok: escritos.length > 0, motivo: escritos.length ? "" : "nenhum arquivo escrito" };
+            const ok = escritos.length > 0;
+            return {
+                escritos, comandos: ctx.comandos, ok, motivo: escritos.length ? "" : "nenhum arquivo escrito",
+                iteracoes: ctx.falhasCmd, passouDePrimeira: ok && ctx.falhasCmd === 0,
+                tocouNoTeste: ctx.tocouNoTeste, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
+            };
         }
         const resultados = [];
         for (const u of usos) {
@@ -229,15 +288,21 @@ export async function agente(base, feature, t, emit, sliceIdx, msgFn = mensagemR
         }
         messages.push({ role: "user", content: resultados });
     }
-    return { escritos: [...ctx.escritos], comandos: ctx.comandos, ok: false, motivo: `teto de ${MAX_TURNS} turnos atingido` };
+    return {
+        escritos: [...ctx.escritos], comandos: ctx.comandos, ok: false, motivo: `teto de ${MAX_TURNS} turnos atingido`,
+        iteracoes: ctx.falhasCmd, passouDePrimeira: false,
+        tocouNoTeste: ctx.tocouNoTeste, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
+    };
 }
 // Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida (CA-U3),
-// depois "rodando"/"ok"/"incompleta" conforme cada uma processa.
+// depois "rodando"/"ok"/"incompleta" conforme cada uma processa, e por fim uma "metrica" por slice.
 export async function construir(cwd, feature, plano, emit) {
     const base = path.resolve(cwd);
     const escritos = [];
     const rejeitados = [];
     const resultados = [];
+    // "metrica" ainda nao esta no union Evento (vem do slice de ui.ts); cast mantem o build verde.
+    const emitMetrica = (m) => emit(m);
     for (let idx = 0; idx < plano.length; idx++) {
         emit({ t: "slice", idx: idx + 1, total: plano.length, tarefa: plano[idx].tarefa, status: "fila" });
     }
@@ -253,17 +318,38 @@ export async function construir(cwd, feature, plano, emit) {
         catch (e) {
             const motivo = `erro: ${String(e?.message ?? e).slice(0, 80)}`;
             rejeitados.push(`${t.tarefa} (${motivo})`);
-            resultados.push({ tarefa: t.tarefa, ok: false, escritos: [], comandos: [], motivo });
-            emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo, ms: Date.now() - inicio });
+            const res = {
+                tarefa: t.tarefa, ok: false, escritos: [], comandos: [], motivo,
+                iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, tokensIn: 0, tokensOut: 0,
+            };
+            resultados.push(res);
+            const ms = Date.now() - inicio;
+            emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo, ms });
+            emitMetrica({
+                t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
+                tocouNoTeste: res.tocouNoTeste, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
+                custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
+            });
             continue;
         }
         escritos.push(...r.escritos);
         if (!r.ok)
             rejeitados.push(`${t.tarefa} (${r.motivo})`);
-        resultados.push({ tarefa: t.tarefa, ok: r.ok, escritos: r.escritos, comandos: r.comandos, motivo: r.motivo });
+        const res = {
+            tarefa: t.tarefa, ok: r.ok, escritos: r.escritos, comandos: r.comandos, motivo: r.motivo,
+            iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira, tocouNoTeste: r.tocouNoTeste,
+            tokensIn: r.tokensIn, tokensOut: r.tokensOut,
+        };
+        resultados.push(res);
+        const ms = Date.now() - inicio;
         emit({
             t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa,
-            status: r.ok ? "ok" : "incompleta", escritos: r.escritos, comandos: r.comandos, motivo: r.motivo, ms: Date.now() - inicio,
+            status: r.ok ? "ok" : "incompleta", escritos: r.escritos, comandos: r.comandos, motivo: r.motivo, ms,
+        });
+        emitMetrica({
+            t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
+            tocouNoTeste: res.tocouNoTeste, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
+            custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
         });
     }
     return { escritos, rejeitados, resultados };
