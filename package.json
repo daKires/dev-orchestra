@@ -1,0 +1,19 @@
+{
+  "name": "mcp-hermes-bridge",
+  "version": "3.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Ponte MCP local para o swarm Hermes",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3"
+  }
+}
