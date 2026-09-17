@@ -17,7 +17,7 @@ const PODA_MS = 6 * 3600 * 1000; // arquivos de run mais velhos que isso sao rem
 
 try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch {}
 
-export type Evento =
+export type Evento = { ts?: number } & (
   | { t: "run"; feature: string; cwd: string; total: number }
   | { t: "fase"; nome: string; info?: string }
   | { t: "slice"; idx: number; total: number; tarefa: string; status: "fila" | "rodando" | "ok" | "incompleta";
@@ -27,7 +27,8 @@ export type Evento =
   | { t: "diff"; arquivo: string; patch: string }
   | { t: "painel"; status: string; branch: string; baseline?: string; linhas: string[] }
   | { t: "metrica"; slice: number; iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; tokensIn: number; tokensOut: number; custoUSD: number; ms?: number }
-  | { t: "log"; texto: string };
+  | { t: "log"; texto: string }
+);
 
 export type Emitir = (ev: Evento) => void;
 
@@ -35,6 +36,7 @@ export type Emitir = (ev: Evento) => void;
 // reseta o card); os demais anexam. Best-effort (falha de I/O nao derruba a run). O hub le esse arquivo.
 export function emitir(ev: Evento): void {
   try {
+    if (ev.ts == null) ev.ts = Date.now(); // timestamp no feed (persistido no JSONL; o replay mostra a hora real)
     const linha = JSON.stringify(ev) + "\n";
     if (ev.t === "run") fs.writeFileSync(RUN_FILE, linha); // ponytail: sem teto de tamanho; run e' finita
     else fs.appendFileSync(RUN_FILE, linha);
@@ -89,6 +91,7 @@ const HTML = `<!doctype html>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:#0d1117; color:#c9d1d9; font:14px/1.5 ui-monospace,Consolas,monospace; }
   header { padding:12px 16px; background:#161b22; border-bottom:1px solid #30363d; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
   header h1 { font-size:15px; margin:0; color:#e6edf3; font-weight:600; }
@@ -99,11 +102,16 @@ const HTML = `<!doctype html>
   .badge.NEEDS-REVIEW, .badge.GATE-FAILED, .badge.FAILED, .badge.COMMIT-SKIP { background:#3d1a1a; color:#f85149; }
   button.back { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; }
   button.back:hover { border-color:#58a6ff; }
+  /* barra de filtros/ordenacao do grid */
+  #grid-tools { display:flex; gap:6px; flex-wrap:wrap; padding:14px 14px 0; }
+  .chip { background:#21262d; border:1px solid #30363d; color:#c9d1d9; border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; }
+  .chip.on { background:#30363d; color:#e6edf3; }
   /* grid de swarms */
   #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; padding:14px; }
   .empty { color:#8b949e; padding:24px; }
   .scard { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; cursor:pointer; transition:border-color .1s; display:flex; flex-direction:column; gap:10px; }
   .scard:hover { border-color:#58a6ff; }
+  .scard:focus-visible { outline:2px solid #58a6ff; outline-offset:2px; }
   .scard.rodando { border-left:3px solid #e3b341; }
   .scard.COMPLETE { border-left:3px solid #3fb950; }
   .scard.NEEDS-REVIEW, .scard.GATE-FAILED, .scard.FAILED, .scard.COMMIT-SKIP { border-left:3px solid #f85149; }
@@ -155,6 +163,8 @@ const HTML = `<!doctype html>
   #diffs button.on { background:#30363d; color:#e6edf3; border-color:#58a6ff; }
   .add { color:#3fb950; } .rem { color:#f85149; }
   #painel { margin-top:8px; white-space:pre-wrap; font-size:12.5px; }
+  #reverter { margin-top:10px; font-size:12.5px; color:#c9d1d9; }
+  #reverter code { background:#0d1117; border:1px solid #21262d; border-radius:4px; padding:2px 6px; color:#e6edf3; }
   button.copy { margin-top:8px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:5px 10px; cursor:pointer; font:inherit; }
   button.copy:hover { border-color:#58a6ff; }
   @media (max-width:900px) { main { grid-template-columns:1fr; } #metricas-agg { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -169,6 +179,12 @@ const HTML = `<!doctype html>
   <span class="muted" id="d-branch"></span>
   <span class="badge" id="d-status" hidden></span>
 </header>
+<div id="grid-tools" hidden>
+  <button class="chip on" data-filtro="todos">Todos</button>
+  <button class="chip" data-filtro="rodando">Rodando</button>
+  <button class="chip" data-filtro="problemas">Problemas</button>
+  <button class="chip" data-filtro="concluidos">Concluídos</button>
+</div>
 <div id="grid"></div>
 <main id="detalhe" hidden>
   <div id="metricas-agg"></div>
@@ -176,7 +192,8 @@ const HTML = `<!doctype html>
   <section><h2>Tool calls</h2><div id="feed"></div></section>
   <section><h2>Gate</h2><div id="gate"></div></section>
   <section><h2>Métricas</h2><div id="metricas"></div></section>
-  <section><h2>Diff / Painel</h2><div id="diffs"></div><pre id="diffbody"></pre><pre id="painel"></pre><button class="copy" id="btn-copy" hidden>Copiar REVERTER</button></section>
+  <section><h2>Diff</h2><div id="diffs"></div><pre id="diffbody"></pre></section>
+  <section><h2>Painel</h2><pre id="painel"></pre><div id="reverter" hidden></div><button class="copy" id="btn-copy" hidden>Copiar comando de reverter</button></section>
 </main>
 <script>
 var es = new EventSource('/events');
@@ -184,6 +201,8 @@ var swarms = {};   // id -> { events:[], feature, cwd }
 var atual = null;  // swarm aberto no detalhe, ou null = grid
 var diffs = {};
 var metricas = []; // acumulador de metricas do swarm aberto (zona detalhe)
+var filtroAtual = 'todos'; // filtro do grid (CA-8)
+var autoAberto = false;    // ja reabriu o swarm salvo na sessao? (CA-7)
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -192,18 +211,28 @@ function el(tag, cls, text) {
   return e;
 }
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function p2(n) { return (n < 10 ? '0' : '') + n; }
 
 es.onmessage = function (msg) {
   var d = JSON.parse(msg.data);
   var id = d.swarm;
-  if (d.drop) { delete swarms[id]; if (atual === id) voltar(); else renderGrid(); return; }
+  if (d.drop) { delete swarms[id]; if (atual === id) voltar(); else renderGrid(); autoAbrir(); return; }
   var ev = d.ev;
   if (!swarms[id]) swarms[id] = { events: [], feature: id, cwd: '' };
   swarms[id].events.push(ev);
   if (ev.t === 'run') { swarms[id].feature = ev.feature; swarms[id].cwd = ev.cwd; }
   if (atual === id) aplicar(ev);
-  else if (!atual) renderGrid();
+  else if (!atual) { upsertCard(id); atualizarContador(); aplicarGrid(); }
+  autoAbrir();
 };
+
+// Reabre o swarm que estava aberto antes do reload (uma vez por sessao).
+function autoAbrir() {
+  if (autoAberto || atual) return;
+  var salvo = null;
+  try { salvo = sessionStorage.getItem('hermes_atual'); } catch (e) {}
+  if (salvo && swarms[salvo]) { autoAberto = true; abrir(salvo); }
+}
 
 // ---- grid ----
 function statusDe(s) {
@@ -223,37 +252,117 @@ function pctDe(s) {
   var f = 0; for (var k in fim) f++;
   return total ? Math.round((f / total) * 100) : 0;
 }
-function renderGrid() {
-  if (atual) return;
-  var g = document.getElementById('grid');
-  g.innerHTML = '';
+function atualizarContador() {
   var ids = Object.keys(swarms);
   document.getElementById('h-sub').textContent = ids.length ? (ids.length + ' swarm(s)') : 'nenhum swarm ativo';
-  if (!ids.length) { g.appendChild(el('div', 'empty', 'Rode  orchestra "feature"  em alguma sessao — os swarms aparecem aqui.')); return; }
-  for (var i = 0; i < ids.length; i++) {
-    var s = swarms[ids[i]], st = statusDe(s), prog = progressoDe(s), pct = pctDe(s);
-    var card = el('div', 'scard ' + st);
-    card.appendChild(el('div', 'feat', s.feature));
+}
+function ehProblema(st) { return st === 'NEEDS-REVIEW' || st === 'GATE-FAILED' || st === 'FAILED' || st === 'COMMIT-SKIP'; }
+function categoria(s) {
+  var st = statusDe(s);
+  if (st === 'rodando') return 0;
+  if (ehProblema(st)) return 1;
+  return 2;
+}
+function passaFiltro(s) {
+  if (filtroAtual === 'todos') return true;
+  var st = statusDe(s);
+  if (filtroAtual === 'rodando') return st === 'rodando';
+  if (filtroAtual === 'problemas') return ehProblema(st);
+  if (filtroAtual === 'concluidos') return st === 'COMPLETE';
+  return true;
+}
+// Atualiza (ou cria) o card de um swarm IN-PLACE, sem reconstruir o grid todo (CA-3).
+function upsertCard(id) {
+  if (!swarms[id]) return;
+  var g = document.getElementById('grid');
+  var card = document.getElementById('gcard-' + id);
+  if (!card) {
+    card = el('div', 'scard');
+    card.id = 'gcard-' + id;
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.appendChild(el('div', 'feat'));
     var meta = el('div', 'cmeta');
-    meta.appendChild(el('span', 'badge ' + st, st));
-    if (prog) meta.appendChild(el('span', 'prog', prog));
+    meta.appendChild(el('span', 'badge'));
+    meta.appendChild(el('span', 'prog'));
     card.appendChild(meta);
-    if (prog) {
-      var bar = el('div', 'bar');
-      var fill = el('div', 'barfill ' + st);
-      fill.style.width = pct + '%';
-      bar.appendChild(fill);
-      card.appendChild(bar);
-    }
-    if (s.cwd) card.appendChild(el('div', 'cwd', s.cwd));
-    (function (cid) { card.onclick = function () { abrir(cid); }; })(ids[i]);
+    var bar = el('div', 'bar');
+    bar.appendChild(el('div', 'barfill'));
+    card.appendChild(bar);
+    card.appendChild(el('div', 'cwd'));
+    (function (cid) {
+      card.onclick = function () { abrir(cid); };
+      card.onkeydown = function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(cid); }
+      };
+    })(id);
     g.appendChild(card);
   }
+  var s = swarms[id], st = statusDe(s), prog = progressoDe(s), pct = pctDe(s);
+  card.className = 'scard ' + st;
+  card.setAttribute('aria-label', 'Abrir run: ' + s.feature + ' (' + st + ')');
+  card.querySelector('.feat').textContent = s.feature;
+  var badge = card.querySelector('.badge');
+  badge.className = 'badge ' + st;
+  badge.textContent = st;
+  var progEl = card.querySelector('.prog');
+  progEl.textContent = prog;
+  progEl.hidden = !prog;
+  var barEl = card.querySelector('.bar');
+  barEl.hidden = !prog;
+  var fill = card.querySelector('.barfill');
+  fill.className = 'barfill ' + st;
+  fill.style.width = pct + '%';
+  var cwdEl = card.querySelector('.cwd');
+  cwdEl.textContent = s.cwd;
+  cwdEl.hidden = !s.cwd;
 }
+// Aplica empty-state, ordem (rodando > problemas > resto) e filtro; remove cards orfaos.
+function aplicarGrid() {
+  var g = document.getElementById('grid');
+  var cards = g.querySelectorAll('.scard');
+  for (var i = 0; i < cards.length; i++) {
+    var cid = cards[i].id.slice(6);
+    var s = swarms[cid];
+    if (!s) { cards[i].parentNode.removeChild(cards[i]); continue; }
+    cards[i].style.order = categoria(s);
+    cards[i].style.display = passaFiltro(s) ? '' : 'none';
+  }
+  var tem = Object.keys(swarms).length > 0;
+  var empty = document.getElementById('grid-empty');
+  if (tem) {
+    if (empty) empty.parentNode.removeChild(empty);
+    document.getElementById('grid-tools').hidden = false;
+  } else {
+    if (!empty) { empty = el('div', 'empty', 'Rode  orchestra "feature"  em alguma sessao — os swarms aparecem aqui.'); empty.id = 'grid-empty'; g.appendChild(empty); }
+    document.getElementById('grid-tools').hidden = true;
+  }
+}
+function renderGrid() {
+  if (atual) return;
+  var ids = Object.keys(swarms);
+  atualizarContador();
+  for (var i = 0; i < ids.length; i++) upsertCard(ids[i]);
+  aplicarGrid();
+}
+// chips de filtro (CA-8)
+(function () {
+  var chips = document.querySelectorAll('#grid-tools .chip');
+  function marcar() {
+    for (var i = 0; i < chips.length; i++) chips[i].className = chips[i].getAttribute('data-filtro') === filtroAtual ? 'chip on' : 'chip';
+  }
+  for (var i = 0; i < chips.length; i++) {
+    (function (chip) {
+      chip.onclick = function () { filtroAtual = chip.getAttribute('data-filtro'); marcar(); aplicarGrid(); };
+    })(chips[i]);
+  }
+  marcar();
+})();
 
 // ---- roteamento grid <-> detalhe ----
 function abrir(id) {
   atual = id;
+  try { sessionStorage.setItem('hermes_atual', id); } catch (e) {}
   document.getElementById('grid').hidden = true;
   document.getElementById('detalhe').hidden = false;
   document.getElementById('btn-back').hidden = false;
@@ -261,6 +370,7 @@ function abrir(id) {
 }
 function voltar() {
   atual = null;
+  try { sessionStorage.removeItem('hermes_atual'); } catch (e) {}
   document.getElementById('detalhe').hidden = true;
   document.getElementById('btn-back').hidden = true;
   document.getElementById('d-cwd').textContent = '';
@@ -283,6 +393,8 @@ function limparDetalhe() {
   document.getElementById('diffs').innerHTML = '';
   document.getElementById('diffbody').textContent = '';
   document.getElementById('painel').textContent = '';
+  var rev = document.getElementById('reverter');
+  if (rev) { rev.hidden = true; rev.textContent = ''; }
   document.getElementById('btn-copy').hidden = true;
   document.getElementById('d-branch').textContent = '';
 }
@@ -302,11 +414,17 @@ function setDStatus(st) {
 }
 
 // ---- paineis do detalhe (alimentados por aplicar()) ----
-function addFeed(text, err) {
+function addFeed(text, err, ts) {
   var feed = document.getElementById('feed');
-  feed.appendChild(el('div', 'row' + (err ? ' err' : ''), text));
+  var prefix = '';
+  if (ts != null) {
+    var dt = new Date(ts);
+    prefix = p2(dt.getHours()) + ':' + p2(dt.getMinutes()) + ':' + p2(dt.getSeconds()) + ' ';
+  }
+  var atFundo = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 4; // (CA-2) so' auto-scroll se ja estiver no fundo
+  feed.appendChild(el('div', 'row' + (err ? ' err' : ''), prefix + text));
   while (feed.children.length > 500) feed.removeChild(feed.firstChild);
-  feed.scrollTop = feed.scrollHeight;
+  if (atFundo) feed.scrollTop = feed.scrollHeight;
 }
 function upsertSlice(ev) {
   var root = document.getElementById('slices');
@@ -400,11 +518,11 @@ function addDiff(ev) {
 function aplicar(ev) {
   if (ev.t === 'run') { setDStatus('rodando'); }
   else if (ev.t === 'fase') {
-    addFeed(ev.nome + (ev.info ? ': ' + ev.info : ''));
+    addFeed(ev.nome + (ev.info ? ': ' + ev.info : ''), false, ev.ts);
     if (ev.nome === 'branch' && ev.info) document.getElementById('d-branch').textContent = ev.info.replace(' (existente)', '');
   }
-  else if (ev.t === 'slice') { upsertSlice(ev); if (ev.status === 'rodando') addFeed('Tarefa ' + ev.idx + '/' + ev.total + ': ' + ev.tarefa); }
-  else if (ev.t === 'tool') { addFeed('[T' + ev.slice + '] ' + ev.nome + (ev.alvo ? ' ' + ev.alvo : '') + (ev.ok ? '' : ' (' + (ev.resumo || 'erro') + ')'), !ev.ok); }
+  else if (ev.t === 'slice') { upsertSlice(ev); if (ev.status === 'rodando') addFeed('Tarefa ' + ev.idx + '/' + ev.total + ': ' + ev.tarefa, false, ev.ts); }
+  else if (ev.t === 'tool') { addFeed('[T' + ev.slice + '] ' + ev.nome + (ev.alvo ? ' ' + ev.alvo : '') + (ev.ok ? '' : ' (' + (ev.resumo || 'erro') + ')'), !ev.ok, ev.ts); }
   else if (ev.t === 'gate') { addGate(ev); }
   else if (ev.t === 'diff') { addDiff(ev); }
   else if (ev.t === 'metrica') { addMetrica(ev); }
@@ -412,18 +530,25 @@ function aplicar(ev) {
     setDStatus(ev.status);
     if (ev.branch) document.getElementById('d-branch').textContent = ev.branch;
     document.getElementById('painel').textContent = 'STATUS: ' + ev.status + '\\n' + ev.linhas.join('\\n');
+    var rev = document.getElementById('reverter');
+    var btn = document.getElementById('btn-copy');
     if (ev.baseline) {
-      var btn = document.getElementById('btn-copy');
-      btn.hidden = false;
       var cmd = 'git checkout ' + ev.baseline.slice(0, 8) + ' -- .';
+      rev.hidden = false;
+      rev.innerHTML = 'Reverter tudo pro estado antes do swarm: <code>' + esc(cmd) + '</code>';
+      btn.hidden = false;
       btn.onclick = function () {
         navigator.clipboard.writeText(cmd);
         btn.textContent = 'Copiado!';
-        setTimeout(function () { btn.textContent = 'Copiar REVERTER'; }, 1500);
+        setTimeout(function () { btn.textContent = 'Copiar comando de reverter'; }, 1500);
       };
+    } else {
+      rev.hidden = true;
+      rev.textContent = '';
+      btn.hidden = true;
     }
   }
-  else if (ev.t === 'log') { if (ev.texto) addFeed(ev.texto); }
+  else if (ev.t === 'log') { if (ev.texto) addFeed(ev.texto, false, ev.ts); }
 }
 
 renderGrid();
