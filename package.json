@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node dist/index.js --selftest"
+    "test": "npm run build && node dist/index.js --selftest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
