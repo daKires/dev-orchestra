@@ -5,7 +5,9 @@
   "private": true,
   "description": "Ponte MCP local para o swarm Hermes",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node dist/index.js --selftest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

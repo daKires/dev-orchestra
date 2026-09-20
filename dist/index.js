@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync } from "node:fs";
-import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, podeReparar, custoUSD, ehTeste, } from "./hermes.js";
+import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, resolverComandos, podeReparar, custoUSD, ehTeste, } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns } from "./ui.js";
 import { escolherProvedor } from "./deepseek.js";
 const WIDTH = 64;
@@ -51,7 +51,8 @@ function frame(opts) {
 }
 // Roda o swarm: baseline -> agentes (serial) -> GATE (+reparo) -> revisor -> commit local.
 // Todo evento vai pro dashboard web (SSE) E deriva uma linha pro stderr/arquivo (retrocompat). Nunca lanca.
-async function rodar(cwd, feature, plano) {
+// Allowlist/gate vem do package.json do ALVO (override do planner vence; fallback pro env legado).
+async function rodar(cwd, feature, plano, override) {
     try {
         writeFileSync(LOG_FILE, "");
     }
@@ -73,10 +74,13 @@ async function rodar(cwd, feature, plano) {
     emit({ t: "run", feature, cwd, total: plano.length });
     try {
         const base = path.resolve(cwd);
+        // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
+        const { cmds, gate: gateCmds, origem } = await resolverComandos(cwd, override);
+        emit({ t: "fase", nome: "comandos", info: origem + (cmds.length ? " (" + cmds.length + " cmd)" : " (sem comandos)") });
         const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
-        const { rejeitados, resultados, escritos } = await construir(cwd, feature, plano, emit);
-        // GATE deterministico (fail-closed): sem HERMES_GATE, g.rodou=false e segue como antes.
-        let g = await gate(cwd, emit);
+        const { rejeitados, resultados, escritos } = await construir(cwd, feature, plano, emit, cmds);
+        // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
+        let g = await gate(cwd, emit, gateCmds);
         let tentativa = 0;
         while (!g.ok && podeReparar(tentativa)) {
             tentativa++;
@@ -86,14 +90,14 @@ async function rodar(cwd, feature, plano) {
                 tarefa: "reparo: " + g.cmd,
                 arquivos_alvo: escritos,
                 descricao: `O comando "${g.cmd}" falhou apos as edicoes. Saida:\n${g.saida}\n\nConserte os arquivos ate o comando passar.`,
-            }, emit, sliceIdx);
+            }, emit, sliceIdx, cmds);
             // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
             emit({
                 t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
                 tocouNoTeste: r.tocouNoTeste, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
                 custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
             });
-            g = await gate(cwd, emit, undefined, tentativa);
+            g = await gate(cwd, emit, gateCmds, tentativa);
         }
         let status;
         let rev = null;
@@ -234,15 +238,15 @@ if (process.argv.includes("--selftest")) {
         const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-st-"));
         // CA-5: escrever fora do projeto e' recusado
         const g = fake([{ blocos: [{ type: "tool_use", id: "a", name: "escrever_arquivo", input: { caminho: "../fora.txt", conteudo: "x" } }], stop: "tool_use" }, fim]);
-        await agente(base, "f", alvo, nada, 1, g.fn);
+        await agente(base, "f", alvo, nada, 1, [], g.fn);
         assert.ok(g.recebidos.some((r) => r.startsWith("ERRO: caminho fora")), "path guard");
-        // CA-6: comando fora da allowlist e' bloqueado (HERMES_CMDS vazia no selftest)
+        // CA-6: comando fora da allowlist e' bloqueado (allowlist vazia no selftest)
         const c = fake([{ blocos: [{ type: "tool_use", id: "b", name: "rodar_comando", input: { comando: "rm -rf /" } }], stop: "tool_use" }, fim]);
-        await agente(base, "f", alvo, nada, 1, c.fn);
+        await agente(base, "f", alvo, nada, 1, [], c.fn);
         assert.ok(c.recebidos.some((r) => r.includes("nao permitido")), "allowlist");
         // CA-4 + escrita valida: ciclo completo devolve tool_result "ok" e registra o arquivo
         const w = fake([{ blocos: [{ type: "tool_use", id: "c", name: "escrever_arquivo", input: { caminho: "novo.txt", conteudo: "conteudo valido\n" } }], stop: "tool_use" }, fim]);
-        const r = await agente(base, "f", { tarefa: "t", arquivos_alvo: ["novo.txt"], descricao: "d" }, nada, 1, w.fn);
+        const r = await agente(base, "f", { tarefa: "t", arquivos_alvo: ["novo.txt"], descricao: "d" }, nada, 1, [], w.fn);
         assert.ok(w.recebidos.some((x) => x === "ok"), "tool_result ok");
         assert.deepStrictEqual(r.escritos, ["novo.txt"]);
         assert.strictEqual(r.ok, true);
@@ -256,7 +260,7 @@ if (process.argv.includes("--selftest")) {
             { blocos: [{ type: "tool_use", id: "t2", name: "escrever_arquivo", input: { caminho: "novo.test.ts", conteudo: "// teste novo\n" } }], stop: "tool_use" },
             fim,
         ]);
-        await agente(base, "f", alvo, nada, 1, t.fn);
+        await agente(base, "f", alvo, nada, 1, [], t.fn);
         assert.ok(t.recebidos.some((r) => r.startsWith("RECUSADO (teste imutavel")), "teste existente recusado");
         assert.ok(t.recebidos.some((r) => r === "ok"), "teste novo permitido");
         assert.strictEqual(await fsp.readFile(path.join(base, "foo.test.ts"), "utf8"), "// teste existente\n", "teste original preservado");
@@ -295,7 +299,7 @@ if (process.argv.includes("--selftest")) {
             }
             return fim;
         };
-        await agente(base, "f", { tarefa: "reparo", arquivos_alvo: [], descricao: "conserta" }, e, 99, msgFn);
+        await agente(base, "f", { tarefa: "reparo", arquivos_alvo: [], descricao: "conserta" }, e, 99, [], msgFn);
         g = await gate(base, e, [cmd], 1);
         assert.strictEqual(g.ok, true, "gate deveria passar apos o reparo");
         assert.ok(eventos.some((ev) => ev.t === "gate" && ev.tentativa === 1 && ev.status === "ok"));
@@ -309,6 +313,7 @@ server.registerTool("executar_orchestra", {
     description: "Implementa uma feature num diretorio via swarm DeepSeek. O Claude planeja em SLICES e passa o plano; " +
         "cada slice roda em serie como um agente DeepSeek (le/edita arquivos e roda comandos de verificacao " +
         "permitidos), depois um GATE deterministico (typecheck/testes) e so entao revisor + commit local. " +
+        "A allowlist e o gate sao resolvidos do package.json do alvo (override opcional em cada um). " +
         "Progresso ao vivo no dashboard web (ver stderr pra URL).",
     inputSchema: {
         cwd: z.string().describe("Pasta do projeto onde implementar"),
@@ -320,8 +325,17 @@ server.registerTool("executar_orchestra", {
             descricao: z.string().describe("O que fazer nessa slice"),
         }))
             .describe("Plano do Claude: slices de alto nivel (um agente por slice, pode tocar varios arquivos)"),
+        override: z
+            .object({
+            cmds: z.array(z.string()).optional().describe("Allowlist explicita de comandos permitidos (vence o package.json)"),
+            gate: z.array(z.string()).optional().describe("Comandos do GATE explicitos (vence o package.json)"),
+        })
+            .optional()
+            .describe("Override opcional da allowlist/gate (senao resolve do package.json do alvo)"),
     },
-}, async ({ cwd, feature, plano }) => ({ content: [{ type: "text", text: await rodar(cwd, feature, plano) }] }));
+}, async ({ cwd, feature, plano, override }) => ({
+    content: [{ type: "text", text: await rodar(cwd, feature, plano, override) }],
+}));
 await server.connect(new StdioServerTransport());
 iniciarUI();
 process.stderr.write("[hermes-bridge] listening (stdio)\n");
