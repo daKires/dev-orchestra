@@ -8,14 +8,55 @@ import path from "node:path";
 const pexec = promisify(execFile); // git
 const pshell = promisify(exec); // comandos allowlisted / gate (build/teste/typecheck)
 const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
-// allowlist de comandos que o agente pode rodar, ex.: "npm run build,npm test,npx tsc --noEmit"
-const CMDS = (process.env.HERMES_CMDS || "").split(",").map((s) => s.trim()).filter(Boolean);
 const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
-// Gate deterministico: comandos que TEM que passar antes do commit (fail-closed). Vazio = sem gate (retrocompat).
-const GATE_CMDS = (process.env.HERMES_GATE || "").split(",").map((s) => s.trim()).filter(Boolean);
 export const REPAIR_TRIES = Number(process.env.HERMES_REPAIR_TRIES ?? "1");
 export function podeReparar(tentativa, tries = REPAIR_TRIES) {
     return tentativa < tries;
+}
+// Resolve COMANDOS/gate a partir do package.json do alvo (auto-detect), com override do planner e
+// fallback pro env legado (HERMES_CMDS/HERMES_GATE). PURA -> testavel no selftest.
+export function resolverDeScripts(scripts, override, envCmds, envGate) {
+    let cmds;
+    let gate;
+    let origem;
+    if (scripts) {
+        cmds = Object.keys(scripts).map((k) => "npm run " + k);
+        if (scripts.test)
+            cmds.push("npm test");
+        gate = [];
+        if (scripts.typecheck)
+            gate.push("npm run typecheck");
+        if (scripts.test)
+            gate.push("npm test");
+        if (gate.length === 0 && scripts.build)
+            gate.push("npm run build");
+        origem = "package.json";
+    }
+    else {
+        cmds = envCmds || [];
+        gate = envGate || [];
+        origem = envGate && envGate.length ? "env" : "nenhum";
+    }
+    // Precedencia final: override vence (cada um independente).
+    const cmdsFinal = override?.cmds ?? cmds;
+    const gateFinal = override?.gate ?? gate;
+    return { cmds: cmdsFinal, gate: gateFinal, origem };
+}
+// Le <cwd>/package.json e o env legado; delega pra resolverDeScripts. Nunca lanca.
+export async function resolverComandos(cwd, override) {
+    let scripts = null;
+    try {
+        const raw = await fs.readFile(path.join(cwd, "package.json"), "utf8");
+        const j = JSON.parse(raw);
+        if (j && typeof j === "object" && j.scripts && typeof j.scripts === "object")
+            scripts = j.scripts;
+    }
+    catch {
+        scripts = null;
+    }
+    const envCmds = (process.env.HERMES_CMDS || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const envGate = (process.env.HERMES_GATE || "").split(",").map((s) => s.trim()).filter(Boolean);
+    return resolverDeScripts(scripts, override, envCmds, envGate);
 }
 async function git(cwd, args) {
     const { stdout } = await pexec("git", args, { cwd, windowsHide: true });
@@ -221,9 +262,9 @@ export async function execFerramenta(ctx, nome, input) {
         }
         if (nome === "rodar_comando") {
             const cmd = String(input?.comando ?? "").trim();
-            if (!CMDS.includes(cmd)) {
+            if (!ctx.cmds.includes(cmd)) {
                 tool(cmd, false, "nao permitido");
-                return `ERRO: comando nao permitido. Allowlist: ${CMDS.join(" | ") || "(vazia)"}`;
+                return `ERRO: comando nao permitido. Allowlist: ${ctx.cmds.join(" | ") || "(vazia)"}`;
             }
             try {
                 const { stdout, stderr } = await pshell(cmd, { cwd: base, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024 });
@@ -249,8 +290,8 @@ export async function execFerramenta(ctx, nome, input) {
 }
 // UM agente: loop multi-turn tool_use<->tool_result ate end_turn ou o teto de turnos.
 // msgFn injetavel pro selftest (client fake, sem rede). sliceIdx identifica o card/feed no dashboard
-// (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa).
-export async function agente(base, feature, t, emit, sliceIdx, msgFn = mensagemReal) {
+// (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa). cmds e' a allowlist resolvida.
+export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal) {
     const sys = "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
         "Fluxo: leia os arquivos relevantes (ler_arquivo/listar), edite com escrever_arquivo passando SEMPRE o " +
         "conteudo COMPLETO e final do arquivo (sem cercas ```), e havendo comando de verificacao permitido rode " +
@@ -258,9 +299,9 @@ export async function agente(base, feature, t, emit, sliceIdx, msgFn = mensagemR
         "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls).";
     const user = `Feature: ${feature}\nTarefa: ${t.tarefa}\nArquivos-alvo: ${t.arquivos_alvo.join(", ") || "(voce decide)"}\n` +
         `Detalhes: ${t.descricao}\n` +
-        (CMDS.length ? `Comandos de verificacao permitidos: ${CMDS.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
+        (cmds.length ? `Comandos de verificacao permitidos: ${cmds.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
     const ctx = {
-        base, escritos: new Set(), comandos: [], emit, sliceIdx,
+        base, escritos: new Set(), comandos: [], cmds, emit, sliceIdx,
         falhasCmd: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
     };
     const messages = [{ role: "user", content: user }];
@@ -296,7 +337,7 @@ export async function agente(base, feature, t, emit, sliceIdx, msgFn = mensagemR
 }
 // Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida (CA-U3),
 // depois "rodando"/"ok"/"incompleta" conforme cada uma processa, e por fim uma "metrica" por slice.
-export async function construir(cwd, feature, plano, emit) {
+export async function construir(cwd, feature, plano, emit, cmds) {
     const base = path.resolve(cwd);
     const escritos = [];
     const rejeitados = [];
@@ -313,7 +354,7 @@ export async function construir(cwd, feature, plano, emit) {
         emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "rodando" });
         let r;
         try {
-            r = await agente(base, feature, t, emit, sliceIdx);
+            r = await agente(base, feature, t, emit, sliceIdx, cmds);
         }
         catch (e) {
             const motivo = `erro: ${String(e?.message ?? e).slice(0, 80)}`;
@@ -358,9 +399,9 @@ export async function diffStaged(cwd) {
     await git(cwd, ["add", "-A"]);
     return await git(cwd, ["diff", "--cached"]).catch(() => "");
 }
-// Gate deterministico: roda os comandos de HERMES_GATE em serie contra o cwd; qualquer exit != 0
+// Gate deterministico: roda os comandos resolvidos por-projeto em serie contra o cwd; qualquer exit != 0
 // falha e para ali (fail-closed). cmds/tentativa injetaveis pro selftest e pro loop de reparo.
-export async function gate(cwd, emit, cmds = GATE_CMDS, tentativa = 0) {
+export async function gate(cwd, emit, cmds = [], tentativa = 0) {
     for (const cmd of cmds) {
         emit({ t: "gate", cmd, status: "rodando", tentativa: tentativa || undefined });
         try {
