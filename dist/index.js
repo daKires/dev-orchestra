@@ -5,10 +5,10 @@ import assert from "node:assert";
 import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, resolverComandos, podeReparar, custoUSD, ehTeste, existeExecutavel, ehFalhaAmbiente, } from "./hermes.js";
-import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns } from "./ui.js";
-import { escolherProvedor } from "./deepseek.js";
+import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel } from "./ui.js";
+import { escolherProvedor, comTentativas, CanceladoError } from "./deepseek.js";
 const WIDTH = 64;
 const SEP = "+" + "-".repeat(WIDTH - 2) + "+";
 // Arquivo de log ao vivo (retrocompat; o dashboard web e' a UI principal agora). orchestra define HERMES_LOG.
@@ -52,7 +52,7 @@ function frame(opts) {
 // Roda o swarm: baseline -> agentes (serial) -> GATE (+reparo) -> revisor -> commit local.
 // Todo evento vai pro dashboard web (SSE) E deriva uma linha pro stderr/arquivo (retrocompat). Nunca lanca.
 // Allowlist/gate vem do package.json do ALVO (override do planner vence; fallback pro env legado).
-async function rodar(cwd, feature, plano, override) {
+async function rodar(cwd, feature, plano, override, sinalChat) {
     try {
         writeFileSync(LOG_FILE, "");
     }
@@ -71,11 +71,17 @@ async function rodar(cwd, feature, plano, override) {
             toFile(linha);
         }
     };
-    emit({ t: "run", feature, cwd, total: plano.length });
+    // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
+    const { cmds: cmdsBrutos, gate: gateCmds, origem } = await resolverComandos(cwd, override);
+    emit({ t: "run", feature, cwd, total: plano.length, plano, cmds: cmdsBrutos, gate: gateCmds });
+    // Cancelamento: tool cancelada no chat OU botao da UI (arquivo <run>.cancel, visto por poll de 1s).
+    const porArquivo = new AbortController();
+    const cancelFile = arquivoCancel(runAtual());
+    const poll = setInterval(() => { if (existsSync(cancelFile))
+        porArquivo.abort(); }, 1000);
+    const signal = sinalChat ? AbortSignal.any([sinalChat, porArquivo.signal]) : porArquivo.signal;
     try {
         const base = path.resolve(cwd);
-        // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
-        const { cmds: cmdsBrutos, gate: gateCmds, origem } = await resolverComandos(cwd, override);
         // Checagem previa (antes de baseline/agentes, custo $0): gate com executavel inexistente aborta a
         // run inteira (senao terminaria em GATE-FAILED); allowlist so perde o comando e avisa.
         for (const c of gateCmds)
@@ -90,45 +96,63 @@ async function rodar(cwd, feature, plano, override) {
         }
         emit({ t: "fase", nome: "comandos", info: origem + (cmds.length ? " (" + cmds.length + " cmd)" : " (sem comandos)") });
         const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
-        const { rejeitados, resultados, escritos } = await construir(cwd, feature, plano, emit, cmds);
+        const { rejeitados, resultados, escritos, cancelado } = await construir(cwd, feature, plano, emit, cmds, signal);
+        const parou = cancelado || rejeitados.length > 0; // slice falhou ou cancelou: sem gate, sem commit
         // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
-        let g = await gate(cwd, emit, gateCmds);
-        let tentativa = 0;
-        while (!g.ok && podeReparar(tentativa)) {
-            tentativa++;
-            const sliceIdx = plano.length + tentativa;
-            const inicioReparo = Date.now();
-            const r = await agente(base, feature, {
-                tarefa: "reparo: " + g.cmd,
-                arquivos_alvo: escritos,
-                descricao: `O comando "${g.cmd}" falhou apos as edicoes. Saida:\n${g.saida}\n\nConserte os arquivos ate o comando passar.`,
-            }, emit, sliceIdx, cmds);
-            // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
-            emit({
-                t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
-                tocouNoTeste: r.tocouNoTeste, falhasAmbiente: r.falhasAmbiente, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
-                custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
-            });
-            g = await gate(cwd, emit, gateCmds, tentativa);
+        let g = { ok: true, cmd: "", saida: "", rodou: false };
+        if (!parou) {
+            g = await gate(cwd, emit, gateCmds, 0, signal);
+            let tentativa = 0;
+            while (!g.ok && !signal.aborted && podeReparar(tentativa)) {
+                tentativa++;
+                const sliceIdx = plano.length + tentativa;
+                const inicioReparo = Date.now();
+                let r;
+                try {
+                    r = await agente(base, feature, {
+                        tarefa: "reparo: " + g.cmd,
+                        arquivos_alvo: escritos,
+                        descricao: `O comando "${g.cmd}" falhou apos as edicoes. Saida:\n${g.saida}\n\nConserte os arquivos ate o comando passar.`,
+                    }, emit, sliceIdx, cmds, undefined, signal);
+                }
+                catch {
+                    break;
+                } // cancelado durante o reparo
+                // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
+                emit({
+                    t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
+                    tocouNoTeste: r.tocouNoTeste, falhasAmbiente: r.falhasAmbiente, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
+                    custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
+                });
+                g = await gate(cwd, emit, gateCmds, tentativa, signal);
+            }
         }
         let status;
         let rev = null;
-        if (g.rodou && !g.ok) {
+        if (cancelado || signal.aborted) {
+            status = "CANCELED"; // para e mantem os arquivos no working tree; nada commitado
+        }
+        else if (parou) {
+            status = "NEEDS-REVIEW"; // slice falhou: resto pulado, sem gate/commit
+        }
+        else if (g.rodou && !g.ok) {
             status = "GATE-FAILED"; // fail-closed: nao revisa nem commita codigo que nao passou no gate
         }
         else {
             const diff = await diffStaged(cwd);
             rev = await revisar(cwd, feature, diff, emit);
             emit({ t: "fase", nome: "revisor", info: (rev.ok ? "OK" : "ATENCAO") + (rev.ajustes ? " - " + rev.ajustes : "") });
-            status = rejeitados.length ? "NEEDS-REVIEW" : "COMPLETE";
-            try {
-                await commit(cwd, feature, emit);
-            }
-            catch (e) {
-                emit({ t: "fase", nome: "commit", info: String(e?.message ?? e) });
-                if (status === "COMPLETE")
+            status = "COMPLETE";
+            if (signal.aborted)
+                status = "CANCELED"; // ultimo ponto de corte: depois do commit o cancel e' ignorado
+            else
+                try {
+                    await commit(cwd, feature, emit);
+                }
+                catch (e) {
+                    emit({ t: "fase", nome: "commit", info: String(e?.message ?? e) });
                     status = "COMMIT-SKIP";
-            }
+                }
         }
         // Painel final: resumo por tarefa (nao o log inteiro).
         const linhas = [];
@@ -159,6 +183,13 @@ async function rodar(cwd, feature, plano, override) {
         const painel = frame({ titulo: "HERMES // FALHA", cwd, linhas: vivo, status: "FAILED" });
         toFile(painel + "\n");
         return painel;
+    }
+    finally {
+        clearInterval(poll);
+        try {
+            unlinkSync(cancelFile);
+        }
+        catch { }
     }
 }
 // Self-check offline (sem API): painel, slug, parse do plano, guardas, gate, reparo, eventos, e o loop do agente com client fake.
@@ -343,6 +374,79 @@ if (process.argv.includes("--selftest")) {
         assert.strictEqual(g.ok, true, "gate deveria passar apos o reparo");
         assert.ok(eventos.some((ev) => ev.t === "gate" && ev.tentativa === 1 && ev.status === "ok"));
     })();
+    // comTentativas: ocioso re-tenta o MESMO turno e desiste na 3a; erro transitorio + sucesso volta; cancelado nao re-tenta (CA-2/3)
+    await (async () => {
+        const tentativas = [];
+        let chamadas = 0;
+        const trava = (sinal) => { chamadas++; return new Promise((_, falha) => sinal.addEventListener("abort", () => falha(new Error("aborted")))); };
+        await assert.rejects(comTentativas(trava, { ociosoMs: 30, esperas: [1], tentativas: 3, onTentativa: (n) => tentativas.push(n) }), /sem resposta.*3 tentativas/);
+        assert.strictEqual(chamadas, 3, "3 tentativas no total");
+        assert.deepStrictEqual(tentativas, [2, 3]);
+        let vez = 0;
+        const volta = await comTentativas(async () => { if (++vez === 1)
+            throw new Error("terminated"); return "ok"; }, { esperas: [1] });
+        assert.strictEqual(volta, "ok", "conexao caida re-tenta e recupera");
+        await assert.rejects(comTentativas(async () => { throw Object.assign(new Error("bad"), { status: 400 }); }, { esperas: [1] }), /bad/);
+        const ctrl = new AbortController();
+        const p = comTentativas(trava, { signal: ctrl.signal, ociosoMs: 10_000 });
+        ctrl.abort();
+        await assert.rejects(p, CanceladoError);
+    })();
+    // agente: erro de API vira slice falha COM tokens; sem escrita + verificacao ok = ok (sem mudancas) (CA-2/4)
+    await (async () => {
+        const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
+        const t0 = { tarefa: "t", arquivos_alvo: [], descricao: "d" };
+        let n = 0;
+        const cai = async () => {
+            if (++n === 1)
+                return { blocos: [{ type: "tool_use", id: "l", name: "listar", input: { caminho: "." } }], stop: "tool_use", usage: { in: 10, out: 5 } };
+            throw new Error("terminated (apos 3 tentativas)");
+        };
+        const r1 = await agente(base, "f", t0, nada, 1, [], cai);
+        assert.strictEqual(r1.ok, false);
+        assert.ok(r1.motivo.startsWith("erro:"), r1.motivo);
+        assert.strictEqual(r1.tokensIn, 10, "tokens preservados");
+        const ok0 = `"${process.execPath}" -e "process.exit(0)"`;
+        const verifica = fake([{ blocos: [{ type: "tool_use", id: "v", name: "rodar_comando", input: { comando: ok0 } }], stop: "tool_use" }, fim]);
+        const r2 = await agente(base, "f", t0, nada, 1, [ok0], verifica.fn);
+        assert.strictEqual(r2.ok, true, "verificacao passou");
+        assert.strictEqual(r2.semMudancas, true);
+        const r3 = await agente(base, "f", t0, nada, 1, [], fake([fim]).fn);
+        assert.strictEqual(r3.ok, false, "sem escrita e sem verificacao = falha");
+    })();
+    // construir: 1a slice falha -> resto "pulada"; signal abortado -> cancelado (CA-3/4)
+    await (async () => {
+        const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-cons-"));
+        const plano2 = [{ tarefa: "a", arquivos_alvo: [], descricao: "" }, { tarefa: "b", arquivos_alvo: [], descricao: "" }];
+        const evs = [];
+        const r = await construir(base, "f", plano2, (e) => evs.push(e), [], undefined, fake([fim]).fn);
+        assert.strictEqual(r.cancelado, false);
+        assert.strictEqual(r.rejeitados.length, 1, "parou na primeira");
+        assert.ok(evs.some((e) => e.t === "slice" && e.idx === 2 && e.status === "pulada"), "slice 2 pulada");
+        assert.ok(!evs.some((e) => e.t === "slice" && e.idx === 2 && e.status === "rodando"), "slice 2 nao rodou");
+        const ctrl = new AbortController();
+        ctrl.abort();
+        const c = await construir(base, "f", plano2, () => { }, [], ctrl.signal, fake([fim]).fn);
+        assert.strictEqual(c.cancelado, true);
+    })();
+    // arquivo por run: duas runs no mesmo processo = dois arquivos, nenhum truncado (CA-5)
+    (() => {
+        emitirUI({ t: "run", feature: "st1", cwd: "c", total: 0 });
+        const a = runAtual();
+        emitirUI({ t: "log", texto: "x" });
+        emitirUI({ t: "run", feature: "st2", cwd: "c", total: 0 });
+        const b = runAtual();
+        assert.notStrictEqual(a, b, "ids distintos");
+        const m = lerRuns(path.dirname(arquivoCancel(a)));
+        assert.strictEqual(m.get(a).length, 2, "run 1 intacta");
+        assert.strictEqual(m.get(b).length, 1);
+        for (const id of [a, b]) {
+            try {
+                unlinkSync(path.join(path.dirname(arquivoCancel(id)), id + ".jsonl"));
+            }
+            catch { }
+        }
+    })();
     console.log("selftest ok");
     process.exit(0);
 }
@@ -372,9 +476,9 @@ server.registerTool("executar_orchestra", {
             .optional()
             .describe("Override opcional da allowlist/gate (senao resolve do package.json do alvo)"),
     },
-}, async ({ cwd, feature, plano, override }) => ({
-    content: [{ type: "text", text: await rodar(cwd, feature, plano, override) }],
+}, async ({ cwd, feature, plano, override }, extra) => ({
+    content: [{ type: "text", text: await rodar(cwd, feature, plano, override, extra.signal) }],
 }));
 await server.connect(new StdioServerTransport());
-iniciarUI();
+void iniciarUI();
 process.stderr.write("[hermes-bridge] listening (stdio)\n");
