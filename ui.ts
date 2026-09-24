@@ -210,6 +210,7 @@ function criarServidor(): http.Server {
       const c: Cliente = { res, offsets: new Map() };
       clientes.add(c);
       enviar(c); // replay do estado atual (todas as runs) pra quem acabou de conectar
+      sse(c, { pronto: true }); // fim do replay: a UI so aplica depois disso (sem estado pela metade)
       req.on("close", () => clientes.delete(c));
       return;
     }

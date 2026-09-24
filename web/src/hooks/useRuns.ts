@@ -1,21 +1,28 @@
 import { useEffect, useReducer, useState } from "react";
 import { aplicar, vazio, type Msg } from "@/lib/estado";
 
-// SSE /events -> reducer. Mensagens chegam em rajada no replay: acumula e aplica 1x por frame.
+// SSE /events -> reducer. O replay inicial chega em rajada e so' e' aplicado quando o hub manda
+// {pronto} (senao uma run aparece pela metade, ex. "interrompida"); depois, 1 lote por frame.
 export function useRuns() {
   const [estado, despachar] = useReducer(aplicar, vazio);
   const [conectado, setConectado] = useState(false);
   useEffect(() => {
     let fila: Msg[] = [];
     let agendado = 0;
+    let pronto = false;
+    const liberar = () => { pronto = true; const lote = fila; fila = []; despachar(lote); };
+    const reserva = setTimeout(liberar, 2000); // hub sem {pronto}: nao segura pra sempre
     const es = new EventSource("/events");
     es.onopen = () => setConectado(true);
     es.onerror = () => setConectado(false);
     es.onmessage = (m) => {
-      try { fila.push(JSON.parse(m.data)); } catch { return; }
-      if (!agendado) agendado = requestAnimationFrame(() => { agendado = 0; const lote = fila; fila = []; despachar(lote); });
+      let d: Msg & { pronto?: boolean };
+      try { d = JSON.parse(m.data); } catch { return; }
+      if (d.pronto) { if (!pronto) { clearTimeout(reserva); liberar(); } return; }
+      fila.push(d);
+      if (pronto && !agendado) agendado = requestAnimationFrame(() => { agendado = 0; const lote = fila; fila = []; despachar(lote); });
     };
-    return () => { es.close(); cancelAnimationFrame(agendado); };
+    return () => { es.close(); cancelAnimationFrame(agendado); clearTimeout(reserva); };
   }, []);
   return { estado, conectado };
 }
