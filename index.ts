@@ -29,7 +29,7 @@ function pintar(chave: string, texto: string): string {
   else if (/ERRO|FAILED|FALHA/.test(chave)) c = C.red;
   else if (/REJEITADO|BLOQUEADO|INCOMPLETA|ATENCAO/.test(chave)) c = C.yellow;
   else if (/-> ok|concluida| OK|commit local/.test(chave)) c = C.green;
-  else if (/^\[T\d+\] (ler|listar|escrever|rodar)/.test(chave)) c = C.cyan;
+  else if (/^\[T\d+\] (ler|listar|buscar|escrever|editar|rodar)/.test(chave)) c = C.cyan;
   return c ? c + texto + C.reset : texto;
 }
 
@@ -253,6 +253,21 @@ if (process.argv.includes("--selftest")) {
     const ra = await agente(base, "f", alvo, nada, 1, ["nao-existe-xyz"], amb.fn as any);
     assert.strictEqual(ra.falhasAmbiente, 1, "falha de ambiente contada");
     assert.strictEqual(ra.iteracoes, 0, "ambiente nao conta iteracao");
+    // editar_arquivo: troca trecho unico (inclusive em arquivo CRLF); ausente/repetido e' recusado; buscar acha a linha
+    await fsp.writeFile(path.join(base, "e.txt"), "a = 1\r\nb = 2\r\nb = 2\r\n");
+    const ed = fake([
+      { blocos: [{ type: "tool_use", id: "e1", name: "editar_arquivo", input: { caminho: "e.txt", antigo: "a = 1\n", novo: "a = 9\n" } }], stop: "tool_use" },
+      { blocos: [{ type: "tool_use", id: "e2", name: "editar_arquivo", input: { caminho: "e.txt", antigo: "b = 2", novo: "x" } }], stop: "tool_use" },
+      { blocos: [{ type: "tool_use", id: "e3", name: "editar_arquivo", input: { caminho: "e.txt", antigo: "zzz", novo: "x" } }], stop: "tool_use" },
+      { blocos: [{ type: "tool_use", id: "e4", name: "buscar", input: { padrao: "a = 9" } }], stop: "tool_use" },
+      fim,
+    ]);
+    await agente(base, "f", alvo, nada, 1, [], ed.fn as any);
+    assert.strictEqual(ed.recebidos[0], "ok", "edicao unica aplicada");
+    assert.ok(ed.recebidos[1].includes("aparece 2 vezes"), "trecho repetido recusado");
+    assert.ok(ed.recebidos[2].includes("nao encontrado"), "trecho ausente recusado");
+    assert.strictEqual(ed.recebidos[3], "e.txt:1: a = 9", "buscar acha a linha editada");
+    assert.strictEqual(await fsp.readFile(path.join(base, "e.txt"), "utf8"), "a = 9\r\nb = 2\r\nb = 2\r\n", "CRLF preservado");
     // CA-4 + escrita valida: ciclo completo devolve tool_result "ok" e registra o arquivo
     const w = fake([{ blocos: [{ type: "tool_use", id: "c", name: "escrever_arquivo", input: { caminho: "novo.txt", conteudo: "conteudo valido\n" } }], stop: "tool_use" }, fim]);
     const r = await agente(base, "f", { tarefa: "t", arquivos_alvo: ["novo.txt"], descricao: "d" }, nada, 1, [], w.fn as any);

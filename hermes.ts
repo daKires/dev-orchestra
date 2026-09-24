@@ -198,8 +198,12 @@ export const FERRAMENTAS: Ferramenta[] = [
     input_schema: { type: "object", properties: { caminho: { type: "string" } }, required: ["caminho"] } },
   { name: "listar", description: "Lista arquivos/pastas de um diretorio do projeto (relativo). Use '.' pra raiz.",
     input_schema: { type: "object", properties: { caminho: { type: "string" } }, required: ["caminho"] } },
-  { name: "escrever_arquivo", description: "Escreve/substitui o conteudo COMPLETO e final de um arquivo (sem cercas markdown).",
+  { name: "buscar", description: "Busca um regex (ou texto) nos arquivos do projeto e devolve 'arquivo:linha: texto'. caminho opcional restringe a uma pasta.",
+    input_schema: { type: "object", properties: { padrao: { type: "string" }, caminho: { type: "string" } }, required: ["padrao"] } },
+  { name: "escrever_arquivo", description: "Escreve/substitui o conteudo COMPLETO e final de um arquivo (sem cercas markdown). Use pra arquivo NOVO; pra mudar arquivo existente prefira editar_arquivo.",
     input_schema: { type: "object", properties: { caminho: { type: "string" }, conteudo: { type: "string" } }, required: ["caminho", "conteudo"] } },
+  { name: "editar_arquivo", description: "Troca UM trecho de um arquivo existente: 'antigo' tem que aparecer exatamente uma vez (copie do ler_arquivo, com indentacao; inclua contexto se repetir).",
+    input_schema: { type: "object", properties: { caminho: { type: "string" }, antigo: { type: "string" }, novo: { type: "string" } }, required: ["caminho", "antigo", "novo"] } },
   { name: "rodar_comando", description: "Roda um comando de verificacao permitido (build/teste/typecheck) na raiz do projeto.",
     input_schema: { type: "object", properties: { comando: { type: "string" } }, required: ["comando"] } },
 ];
@@ -231,13 +235,55 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
         return itens.map((e) => (e.isDirectory() ? e.name + "/" : e.name)).join("\n") || "(vazio)";
       } catch { tool(caminho, false, "nao existe"); return "ERRO: diretorio nao existe"; }
     }
-    if (nome === "escrever_arquivo") {
+    if (nome === "buscar") {
+      const padrao = String(input?.padrao ?? "");
+      const caminho = String(input?.caminho ?? ".");
+      const dir = dentro(base, caminho);
+      if (!dir) { tool(caminho, false, "fora do projeto"); return "ERRO: caminho fora do projeto"; }
+      let re: RegExp;
+      try { re = new RegExp(padrao, "i"); } catch { re = new RegExp(padrao.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"); }
+      let arquivos: string[];
+      try { arquivos = (await fs.readdir(dir, { recursive: true })) as string[]; }
+      catch { tool(caminho, false, "nao existe"); return "ERRO: diretorio nao existe"; }
+      const achados: string[] = [];
+      for (const f of arquivos) {
+        const rel = path.relative(base, path.join(dir, f)).replace(/\\/g, "/");
+        if (/(^|\/)(node_modules|\.git|dist|build)(\/|$)/.test(rel)) continue;
+        let c: string;
+        try { const st = await fs.stat(path.join(dir, f)); if (!st.isFile() || st.size > 1e6) continue; c = await fs.readFile(path.join(dir, f), "utf8"); }
+        catch { continue; }
+        const linhas = c.split("\n");
+        for (let i = 0; i < linhas.length && achados.length < 100; i++) {
+          if (re.test(linhas[i])) achados.push(`${rel}:${i + 1}: ${linhas[i].trim().slice(0, 200)}`);
+        }
+        if (achados.length >= 100) { achados.push("(cortado em 100 resultados; refine o padrao)"); break; }
+      }
+      tool(padrao, true);
+      return achados.join("\n") || "(nenhum resultado)";
+    }
+    if (nome === "escrever_arquivo" || nome === "editar_arquivo") {
       const rel = String(input?.caminho ?? "");
       const alvo = dentro(base, rel);
       if (!alvo) { tool(rel, false, "fora do projeto"); return "ERRO: caminho fora do projeto"; }
-      const conteudo = String(input?.conteudo ?? "");
       let atual = "";
       try { atual = await fs.readFile(alvo, "utf8"); } catch {}
+      let conteudo: string;
+      if (nome === "editar_arquivo") {
+        if (!atual) { tool(rel, false, "nao existe"); return "ERRO: arquivo nao existe (use escrever_arquivo pra criar)"; }
+        // arquivo CRLF: o modelo costuma mandar so \n, entao casa o final de linha do arquivo
+        const eol = (s: string) => (atual.includes("\r\n") ? s.replace(/\r?\n/g, "\r\n") : s);
+        const antigo = eol(String(input?.antigo ?? ""));
+        input = { ...input, novo: eol(String(input?.novo ?? "")) };
+        const n = antigo ? atual.split(antigo).length - 1 : 0;
+        if (n !== 1) {
+          tool(rel, false, n ? `trecho aparece ${n}x` : "trecho nao encontrado");
+          return n ? `ERRO: 'antigo' aparece ${n} vezes; inclua mais contexto pra ficar unico`
+                   : "ERRO: 'antigo' nao encontrado; releia o arquivo e copie o trecho exato";
+        }
+        conteudo = atual.replace(antigo, () => String(input?.novo ?? ""));
+      } else {
+        conteudo = String(input?.conteudo ?? "");
+      }
       // Trava: teste que JA existe e' imutavel (criar teste novo continua permitido). Antes do guard destrutivo.
       if (ehTeste(rel) && atual) {
         ctx.tocouNoTeste++;
@@ -290,8 +336,8 @@ export async function agente(
 }> {
   const sys =
     "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
-    "Fluxo: leia os arquivos relevantes (ler_arquivo/listar), edite com escrever_arquivo passando SEMPRE o " +
-    "conteudo COMPLETO e final do arquivo (sem cercas ```), e havendo comando de verificacao permitido rode " +
+    "Fluxo: ache o que importa (buscar/listar/ler_arquivo); mude arquivo existente com editar_arquivo (trecho " +
+    "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); havendo comando de verificacao permitido rode " +
     "com rodar_comando e conserte os erros ate passar. Ao EDITAR arquivo existente, preserve toda a estrutura; " +
     "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls).";
   const user =
