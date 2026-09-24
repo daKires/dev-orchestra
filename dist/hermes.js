@@ -1,6 +1,6 @@
 // O swarm Hermes: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
-import { mensagem as mensagemReal, texto } from "./deepseek.js";
+import { mensagem as mensagemReal, texto, CanceladoError } from "./deepseek.js";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
@@ -355,13 +355,18 @@ export async function execFerramenta(ctx, nome, input) {
                 tool(cmd, false, "nao permitido");
                 return `ERRO: comando nao permitido. Allowlist: ${ctx.cmds.join(" | ") || "(vazia)"}`;
             }
+            emit({ t: "comando", slice: sliceIdx, cmd, status: "rodando" }); // UI mostra "rodando <cmd> ha Ns"
             try {
-                const { stdout, stderr } = await pshell(cmd, { cwd: base, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024 });
+                const { stdout, stderr } = await pshell(cmd, { cwd: base, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024, signal: ctx.signal });
                 ctx.comandos.push(cmd);
+                ctx.ultimaVerificacaoOk = true;
                 tool(cmd, true);
                 return `exit 0\n${String(stdout + stderr).slice(-4000)}`;
             }
             catch (e) {
+                if (ctx.signal?.aborted)
+                    throw new CanceladoError();
+                ctx.ultimaVerificacaoOk = false;
                 ctx.comandos.push(cmd + " (exit " + (e?.code ?? "?") + ")");
                 const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
                 // executavel inexistente e' falha de ambiente, nao conta como iteracao ate verde
@@ -377,6 +382,8 @@ export async function execFerramenta(ctx, nome, input) {
         return `ERRO: ferramenta desconhecida: ${nome}`;
     }
     catch (e) {
+        if (e instanceof CanceladoError)
+            throw e;
         tool(nome, false, String(e?.message ?? e));
         return "ERRO: " + (e?.message ?? e);
     }
@@ -384,7 +391,8 @@ export async function execFerramenta(ctx, nome, input) {
 // UM agente: loop multi-turn tool_use<->tool_result ate end_turn ou o teto de turnos.
 // msgFn injetavel pro selftest (client fake, sem rede). sliceIdx identifica o card/feed no dashboard
 // (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa). cmds e' a allowlist resolvida.
-export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal) {
+// Erro de API/turno vira slice falha COM os tokens ja gastos; cancelamento (CanceladoError) sobe.
+export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal, signal) {
     const sys = "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
         "Fluxo: ache o que importa (buscar/listar/ler_arquivo); mude arquivo existente com editar_arquivo (trecho " +
         "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); havendo comando de verificacao permitido rode " +
@@ -396,47 +404,66 @@ export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = men
     const ctx = {
         base, escritos: new Set(), comandos: [], cmds, emit, sliceIdx,
         falhasCmd: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
+        ultimaVerificacaoOk: null, signal,
+    };
+    const fim = (ok, motivo, semMudancas = false) => ({
+        escritos: [...ctx.escritos], comandos: ctx.comandos, ok, motivo, semMudancas,
+        iteracoes: ctx.falhasCmd, passouDePrimeira: ok && ctx.falhasCmd === 0,
+        tocouNoTeste: ctx.tocouNoTeste, falhasAmbiente: ctx.falhasAmbiente, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
+    });
+    const opts = {
+        signal,
+        onProgresso: (tokens) => emit({ t: "gerando", slice: sliceIdx, tokens }),
+        onTentativa: (n, motivo) => emit({ t: "log", texto: `[T${sliceIdx}] ${motivo} -> tentativa ${n}` }),
     };
     const messages = [{ role: "user", content: user }];
-    for (let turno = 0; turno < MAX_TURNS; turno++) {
-        const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS);
-        if (usage) {
-            ctx.tokensIn += Number(usage.in ?? 0);
-            ctx.tokensOut += Number(usage.out ?? 0);
+    try {
+        for (let turno = 0; turno < MAX_TURNS; turno++) {
+            if (signal?.aborted)
+                throw new CanceladoError();
+            const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS, opts);
+            if (usage) {
+                ctx.tokensIn += Number(usage.in ?? 0);
+                ctx.tokensOut += Number(usage.out ?? 0);
+            }
+            messages.push({ role: "assistant", content: blocos });
+            const usos = blocos.filter((b) => b?.type === "tool_use");
+            if (stop !== "tool_use" || usos.length === 0) {
+                if (ctx.escritos.size)
+                    return fim(true, "");
+                // nada escrito: so conta como ok se a ultima verificacao rodada passou (trabalho ja feito antes)
+                if (ctx.ultimaVerificacaoOk)
+                    return fim(true, "", true);
+                return fim(false, "nenhum arquivo escrito");
+            }
+            const resultados = [];
+            for (const u of usos) {
+                const out = await execFerramenta(ctx, u.name, u.input);
+                resultados.push({ type: "tool_result", tool_use_id: u.id, content: out });
+            }
+            messages.push({ role: "user", content: resultados });
         }
-        messages.push({ role: "assistant", content: blocos });
-        const usos = blocos.filter((b) => b?.type === "tool_use");
-        if (stop !== "tool_use" || usos.length === 0) {
-            const escritos = [...ctx.escritos];
-            const ok = escritos.length > 0;
-            return {
-                escritos, comandos: ctx.comandos, ok, motivo: escritos.length ? "" : "nenhum arquivo escrito",
-                iteracoes: ctx.falhasCmd, passouDePrimeira: ok && ctx.falhasCmd === 0,
-                tocouNoTeste: ctx.tocouNoTeste, falhasAmbiente: ctx.falhasAmbiente, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
-            };
-        }
-        const resultados = [];
-        for (const u of usos) {
-            const out = await execFerramenta(ctx, u.name, u.input);
-            resultados.push({ type: "tool_result", tool_use_id: u.id, content: out });
-        }
-        messages.push({ role: "user", content: resultados });
+        return fim(false, `teto de ${MAX_TURNS} turnos atingido`);
     }
-    return {
-        escritos: [...ctx.escritos], comandos: ctx.comandos, ok: false, motivo: `teto de ${MAX_TURNS} turnos atingido`,
-        iteracoes: ctx.falhasCmd, passouDePrimeira: false,
-        tocouNoTeste: ctx.tocouNoTeste, falhasAmbiente: ctx.falhasAmbiente, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
-    };
+    catch (e) {
+        if (e instanceof CanceladoError || signal?.aborted)
+            throw new CanceladoError();
+        return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
+    }
 }
-// Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida (CA-U3),
-// depois "rodando"/"ok"/"incompleta" conforme cada uma processa, e por fim uma "metrica" por slice.
-export async function construir(cwd, feature, plano, emit, cmds) {
+// Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida, depois
+// "rodando"/"ok"/"incompleta" conforme cada uma processa, e uma "metrica" por slice. PARA na primeira
+// slice que falhar (as seguintes costumam depender dela) ou no cancelamento: o resto vira "pulada".
+export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn = mensagemReal) {
     const base = path.resolve(cwd);
     const escritos = [];
     const rejeitados = [];
     const resultados = [];
-    // "metrica" ainda nao esta no union Evento (vem do slice de ui.ts); cast mantem o build verde.
     const emitMetrica = (m) => emit(m);
+    const pular = (de, motivo) => {
+        for (let i = de; i < plano.length; i++)
+            emit({ t: "slice", idx: i + 1, total: plano.length, tarefa: plano[i].tarefa, status: "pulada", motivo });
+    };
     for (let idx = 0; idx < plano.length; idx++) {
         emit({ t: "slice", idx: idx + 1, total: plano.length, tarefa: plano[idx].tarefa, status: "fila" });
     }
@@ -447,24 +474,13 @@ export async function construir(cwd, feature, plano, emit, cmds) {
         emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "rodando" });
         let r;
         try {
-            r = await agente(base, feature, t, emit, sliceIdx, cmds);
+            r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal);
         }
-        catch (e) {
-            const motivo = `erro: ${String(e?.message ?? e).slice(0, 80)}`;
-            rejeitados.push(`${t.tarefa} (${motivo})`);
-            const res = {
-                tarefa: t.tarefa, ok: false, escritos: [], comandos: [], motivo,
-                iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0,
-            };
-            resultados.push(res);
-            const ms = Date.now() - inicio;
-            emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo, ms });
-            emitMetrica({
-                t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
-                tocouNoTeste: res.tocouNoTeste, falhasAmbiente: res.falhasAmbiente, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
-                custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
-            });
-            continue;
+        catch {
+            // ponytail: tokens da slice cancelada nao entram na metrica; cancelar e' raro
+            emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo: "cancelado", ms: Date.now() - inicio });
+            pular(idx + 1, "run cancelada");
+            return { escritos, rejeitados, resultados, cancelado: true };
         }
         escritos.push(...r.escritos);
         if (!r.ok)
@@ -479,14 +495,19 @@ export async function construir(cwd, feature, plano, emit, cmds) {
         emit({
             t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa,
             status: r.ok ? "ok" : "incompleta", escritos: r.escritos, comandos: r.comandos, motivo: r.motivo, ms,
+            semMudancas: r.semMudancas || undefined,
         });
         emitMetrica({
             t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
             tocouNoTeste: res.tocouNoTeste, falhasAmbiente: res.falhasAmbiente, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
             custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
         });
+        if (!r.ok) {
+            pular(idx + 1, `slice ${sliceIdx} falhou`);
+            break;
+        }
     }
-    return { escritos, rejeitados, resultados };
+    return { escritos, rejeitados, resultados, cancelado: false };
 }
 export async function diffStaged(cwd) {
     await git(cwd, ["add", "-A"]);
@@ -494,11 +515,11 @@ export async function diffStaged(cwd) {
 }
 // Gate deterministico: roda os comandos resolvidos por-projeto em serie contra o cwd; qualquer exit != 0
 // falha e para ali (fail-closed). cmds/tentativa injetaveis pro selftest e pro loop de reparo.
-export async function gate(cwd, emit, cmds = [], tentativa = 0) {
+export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
     for (const cmd of cmds) {
         emit({ t: "gate", cmd, status: "rodando", tentativa: tentativa || undefined });
         try {
-            await pshell(cmd, { cwd, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024 });
+            await pshell(cmd, { cwd, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024, signal });
             emit({ t: "gate", cmd, status: "ok", tentativa: tentativa || undefined });
         }
         catch (e) {
