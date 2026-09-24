@@ -82,7 +82,7 @@ export function linhaDe(ev) {
         }
         case "diff": return "";
         case "painel": return "";
-        case "metrica": return `[T${ev.slice}] metrica: ${ev.iteracoes} iter, ${ev.passouDePrimeira ? "1a" : "reparo"}, teste:${ev.tocouNoTeste}, ${ev.tokensIn}+${ev.tokensOut} tok, $ ${ev.custoUSD.toFixed(4)}`;
+        case "metrica": return `[T${ev.slice}] metrica: ${ev.iteracoes} iter, ${ev.passouDePrimeira ? "1a" : "reparo"}, teste:${ev.tocouNoTeste}, amb:${ev.falhasAmbiente ?? 0}, ${ev.tokensIn}+${ev.tokensOut} tok, $ ${ev.custoUSD.toFixed(4)}`;
         case "log": return ev.texto;
     }
 }
@@ -132,7 +132,7 @@ const HTML = `<!doctype html>
   section { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; min-height:120px; }
   section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#8b949e; margin:0 0 10px; }
   /* KPIs (agregado) full-width no topo do detalhe */
-  #metricas-agg { grid-column:1/-1; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+  #metricas-agg { grid-column:1/-1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
   .kpi { background:#161b22; border:1px solid #30363d; border-left:3px solid #58a6ff; border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:8px; }
   .kpi .klabel { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8b949e; }
   .kpi .kval { font-size:30px; font-weight:700; line-height:1; color:#e6edf3; }
@@ -448,7 +448,7 @@ function addMetrica(ev) {
   metricas.push(ev);
   var root = document.getElementById('metricas');
   var linha = '[T' + ev.slice + '] ' + ev.iteracoes + ' iter, ' + (ev.passouDePrimeira ? '1a' : 'reparo')
-    + ', teste:' + ev.tocouNoTeste + ', ' + ev.tokensIn + '+' + ev.tokensOut + ' tok, $ ' + ev.custoUSD.toFixed(4)
+    + ', teste:' + ev.tocouNoTeste + ', amb:' + (ev.falhasAmbiente || 0) + ', ' + ev.tokensIn + '+' + ev.tokensOut + ' tok, $ ' + ev.custoUSD.toFixed(4)
     + (ev.ms != null ? ', ' + ev.ms + 'ms' : '');
   root.appendChild(el('div', 'row', linha));
   atualizarAgregadoMetricas();
@@ -459,13 +459,14 @@ function kpiTile(label, valor, cor) {
 function atualizarAgregadoMetricas() {
   var agg = document.getElementById('metricas-agg');
   var n = metricas.length;
-  var primeira = 0, somaIter = 0, tocou = 0, custo = 0;
+  var primeira = 0, somaIter = 0, tocou = 0, custo = 0, amb = 0;
   for (var i = 0; i < n; i++) {
     var m = metricas[i];
     if (m.passouDePrimeira) primeira++;
     somaIter += m.iteracoes;
     if (m.tocouNoTeste > 0) tocou++;
     custo += m.custoUSD;
+    amb += m.falhasAmbiente || 0;
   }
   var vPrimeira, vIter, vTeste, vCusto, corTeste;
   if (!n) {
@@ -480,6 +481,7 @@ function atualizarAgregadoMetricas() {
   agg.innerHTML = kpiTile('Passou de 1ª', vPrimeira, 'verde')
     + kpiTile('Média iterações', vIter, 'azul')
     + kpiTile('Tocou no teste', vTeste, corTeste)
+    + kpiTile('Falha de ambiente', n ? amb : '—', !n ? 'neutro' : amb > 0 ? 'vermelho' : 'verde')
     + kpiTile('Custo total', vCusto, 'azul');
 }
 function addGate(ev) {

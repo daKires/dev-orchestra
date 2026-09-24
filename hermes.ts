@@ -67,6 +67,20 @@ export async function resolverComandos(
   return resolverDeScripts(scripts, override, envCmds, envGate);
 }
 
+// O executavel (1o token, aceita "com espacos") existe? Caminho -> fs.access; nome solto -> where/which. Nunca lanca.
+export async function existeExecutavel(cmd: string, cwd: string): Promise<boolean> {
+  const m = cmd.trim().match(/^"([^"]+)"|^(\S+)/);
+  const exe = m?.[1] ?? m?.[2] ?? "";
+  if (!exe) return false;
+  if (/[\\/]/.test(exe)) return fs.access(path.resolve(cwd, exe)).then(() => true, () => false);
+  return pexec(process.platform === "win32" ? "where" : "which", [exe], { windowsHide: true }).then(() => true, () => false);
+}
+
+// Saida de comando que falhou por executavel inexistente (ambiente), nao por erro de codigo. Pura.
+export function ehFalhaAmbiente(saida: string): boolean {
+  return /reconhecido|not recognized|command not found|ENOENT/i.test(saida);
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await pexec("git", args, { cwd, windowsHide: true });
   return stdout;
@@ -169,7 +183,7 @@ export function custoUSD(tin: number, tout: number, when: Date = new Date()): nu
 // mesmo antes do union Evento ganhar a variante "metrica" (quando ganhar, continua valido).
 type EventoMetrica = {
   t: "metrica"; slice: number; iteracoes: number; passouDePrimeira: boolean;
-  tocouNoTeste: number; tokensIn: number; tokensOut: number; custoUSD: number; ms: number;
+  tocouNoTeste: number; falhasAmbiente: number; tokensIn: number; tokensOut: number; custoUSD: number; ms: number;
 };
 
 // Resolve um caminho relativo garantindo que fica DENTRO do projeto; senao null.
@@ -192,7 +206,7 @@ export const FERRAMENTAS: Ferramenta[] = [
 
 export type CtxAgente = {
   base: string; escritos: Set<string>; comandos: string[]; cmds: string[]; emit: Emitir; sliceIdx: number;
-  falhasCmd: number; tokensIn: number; tokensOut: number; tocouNoTeste: number;
+  falhasCmd: number; falhasAmbiente: number; tokensIn: number; tokensOut: number; tocouNoTeste: number;
 };
 
 // Executa UMA ferramenta e devolve o texto de resultado que volta pro agente (nunca lanca).
@@ -250,8 +264,9 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
         return `exit 0\n${String(stdout + stderr).slice(-4000)}`;
       } catch (e: any) {
         ctx.comandos.push(cmd + " (exit " + (e?.code ?? "?") + ")");
-        ctx.falhasCmd++; // conta a falha pra metrica (iteracoes ate verde)
         const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
+        // executavel inexistente e' falha de ambiente, nao conta como iteracao ate verde
+        if (ehFalhaAmbiente(saida)) ctx.falhasAmbiente++; else ctx.falhasCmd++;
         tool(cmd, false, "exit " + (e?.code ?? "?"));
         return `exit ${e?.code ?? "?"}\n${saida}`;
       }
@@ -271,7 +286,7 @@ export async function agente(
   base: string, feature: string, t: Tarefa, emit: Emitir, sliceIdx: number, cmds: string[], msgFn: MensagemFn = mensagemReal,
 ): Promise<{
   escritos: string[]; comandos: string[]; ok: boolean; motivo: string;
-  iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; tokensIn: number; tokensOut: number;
+  iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente: number; tokensIn: number; tokensOut: number;
 }> {
   const sys =
     "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
@@ -285,7 +300,7 @@ export async function agente(
     (cmds.length ? `Comandos de verificacao permitidos: ${cmds.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
   const ctx: CtxAgente = {
     base, escritos: new Set(), comandos: [], cmds, emit, sliceIdx,
-    falhasCmd: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
+    falhasCmd: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
   };
   const messages: Msg[] = [{ role: "user", content: user }];
   for (let turno = 0; turno < MAX_TURNS; turno++) {
@@ -299,7 +314,7 @@ export async function agente(
       return {
         escritos, comandos: ctx.comandos, ok, motivo: escritos.length ? "" : "nenhum arquivo escrito",
         iteracoes: ctx.falhasCmd, passouDePrimeira: ok && ctx.falhasCmd === 0,
-        tocouNoTeste: ctx.tocouNoTeste, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
+        tocouNoTeste: ctx.tocouNoTeste, falhasAmbiente: ctx.falhasAmbiente, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
       };
     }
     const resultados = [];
@@ -312,13 +327,13 @@ export async function agente(
   return {
     escritos: [...ctx.escritos], comandos: ctx.comandos, ok: false, motivo: `teto de ${MAX_TURNS} turnos atingido`,
     iteracoes: ctx.falhasCmd, passouDePrimeira: false,
-    tocouNoTeste: ctx.tocouNoTeste, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
+    tocouNoTeste: ctx.tocouNoTeste, falhasAmbiente: ctx.falhasAmbiente, tokensIn: ctx.tokensIn, tokensOut: ctx.tokensOut,
   };
 }
 
 export type Resultado = {
   tarefa: string; ok: boolean; escritos: string[]; comandos: string[]; motivo: string;
-  iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; tokensIn: number; tokensOut: number;
+  iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente: number; tokensIn: number; tokensOut: number;
 };
 
 // Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida (CA-U3),
@@ -346,14 +361,14 @@ export async function construir(cwd: string, feature: string, plano: Tarefa[], e
       rejeitados.push(`${t.tarefa} (${motivo})`);
       const res: Resultado = {
         tarefa: t.tarefa, ok: false, escritos: [], comandos: [], motivo,
-        iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, tokensIn: 0, tokensOut: 0,
+        iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0,
       };
       resultados.push(res);
       const ms = Date.now() - inicio;
       emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo, ms });
       emitMetrica({
         t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
-        tocouNoTeste: res.tocouNoTeste, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
+        tocouNoTeste: res.tocouNoTeste, falhasAmbiente: res.falhasAmbiente, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
         custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
       });
       continue;
@@ -362,7 +377,7 @@ export async function construir(cwd: string, feature: string, plano: Tarefa[], e
     if (!r.ok) rejeitados.push(`${t.tarefa} (${r.motivo})`);
     const res: Resultado = {
       tarefa: t.tarefa, ok: r.ok, escritos: r.escritos, comandos: r.comandos, motivo: r.motivo,
-      iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira, tocouNoTeste: r.tocouNoTeste,
+      iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira, tocouNoTeste: r.tocouNoTeste, falhasAmbiente: r.falhasAmbiente,
       tokensIn: r.tokensIn, tokensOut: r.tokensOut,
     };
     resultados.push(res);
@@ -373,7 +388,7 @@ export async function construir(cwd: string, feature: string, plano: Tarefa[], e
     });
     emitMetrica({
       t: "metrica", slice: sliceIdx, iteracoes: res.iteracoes, passouDePrimeira: res.passouDePrimeira,
-      tocouNoTeste: res.tocouNoTeste, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
+      tocouNoTeste: res.tocouNoTeste, falhasAmbiente: res.falhasAmbiente, tokensIn: res.tokensIn, tokensOut: res.tokensOut,
       custoUSD: custoUSD(res.tokensIn, res.tokensOut), ms,
     });
   }
@@ -405,11 +420,13 @@ export async function gate(
 }
 
 export async function revisar(cwd: string, feature: string, diff: string, emit: Emitir): Promise<{ ok: boolean; ajustes: string }> {
+  // diff cortado = veredito sobre o que o modelo nao viu; melhor nao opinar
+  if (diff.length > 12000) return { ok: true, ajustes: `diff grande (${diff.length} chars), revisao fica com o Claude` };
   emit({ t: "fase", nome: "revisor", info: "conferindo..." });
   const sys =
     "Voce e um REVISOR. Recebe a feature e um diff. Responda APENAS JSON " +
     `{"ok": boolean, "ajustes": "texto curto"}. ok=true se o diff implementa a feature de forma coerente e nao quebra arquivos.`;
-  const user = `Feature: ${feature}\n\nDiff:\n${diff.slice(0, 12000)}`;
+  const user = `Feature: ${feature}\n\nDiff:\n${diff}`;
   try {
     const out = await texto(sys, user);
     const m = out.match(/\{[\s\S]*\}/); // extrai o objeto JSON mesmo que venha cercado de texto
