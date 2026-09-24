@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync } from "node:fs";
-import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, resolverComandos, podeReparar, custoUSD, ehTeste, } from "./hermes.js";
+import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, resolverComandos, podeReparar, custoUSD, ehTeste, existeExecutavel, ehFalhaAmbiente, } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns } from "./ui.js";
 import { escolherProvedor } from "./deepseek.js";
 const WIDTH = 64;
@@ -75,7 +75,19 @@ async function rodar(cwd, feature, plano, override) {
     try {
         const base = path.resolve(cwd);
         // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
-        const { cmds, gate: gateCmds, origem } = await resolverComandos(cwd, override);
+        const { cmds: cmdsBrutos, gate: gateCmds, origem } = await resolverComandos(cwd, override);
+        // Checagem previa (antes de baseline/agentes, custo $0): gate com executavel inexistente aborta a
+        // run inteira (senao terminaria em GATE-FAILED); allowlist so perde o comando e avisa.
+        for (const c of gateCmds)
+            if (!(await existeExecutavel(c, cwd)))
+                throw new Error("comando do gate nao existe: " + c);
+        const cmds = [];
+        for (const c of cmdsBrutos) {
+            if (await existeExecutavel(c, cwd))
+                cmds.push(c);
+            else
+                emit({ t: "fase", nome: "comandos", info: "removido (nao existe): " + c });
+        }
         emit({ t: "fase", nome: "comandos", info: origem + (cmds.length ? " (" + cmds.length + " cmd)" : " (sem comandos)") });
         const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
         const { rejeitados, resultados, escritos } = await construir(cwd, feature, plano, emit, cmds);
@@ -94,7 +106,7 @@ async function rodar(cwd, feature, plano, override) {
             // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
             emit({
                 t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
-                tocouNoTeste: r.tocouNoTeste, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
+                tocouNoTeste: r.tocouNoTeste, falhasAmbiente: r.falhasAmbiente, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
                 custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
             });
             g = await gate(cwd, emit, gateCmds, tentativa);
@@ -180,6 +192,13 @@ if (process.argv.includes("--selftest")) {
     const quartaPico = new Date(Date.UTC(2024, 0, 3, 2, 0, 0)); // quarta-feira, 02:00 UTC (peak)
     const domingoOff = new Date(Date.UTC(2024, 0, 7, 12, 0, 0)); // domingo, 12:00 UTC (off-peak)
     assert.ok(custoUSD(1e6, 1e6, quartaPico) > custoUSD(1e6, 1e6, domingoOff), "peak > off-peak");
+    // checagem previa de executavel + classificacao de falha de ambiente (CA-4/5/6)
+    assert.strictEqual(await existeExecutavel(`"${process.execPath}" -e 1`, process.cwd()), true, "node existe");
+    assert.strictEqual(await existeExecutavel("nao-existe-xyz src", process.cwd()), false, "nome solto inexistente");
+    assert.strictEqual(await existeExecutavel("C:/nao/existe.exe src", process.cwd()), false, "caminho inexistente");
+    assert.strictEqual(ehFalhaAmbiente("'selene' nao e reconhecido como um comando interno"), true);
+    assert.strictEqual(ehFalhaAmbiente("bash: lune: command not found"), true);
+    assert.strictEqual(ehFalhaAmbiente("tests/run.luau:12: assertion failed"), false);
     // escolherProvedor: nativa/OpenRouter/nenhuma (CA-1, CA-2, CA-4 -- pura, sem mexer em env em runtime)
     assert.strictEqual(escolherProvedor("dk", undefined).useAuthToken, false); // so' nativa
     assert.strictEqual(escolherProvedor(undefined, "or").useAuthToken, true); // so' OpenRouter
@@ -244,6 +263,11 @@ if (process.argv.includes("--selftest")) {
         const c = fake([{ blocos: [{ type: "tool_use", id: "b", name: "rodar_comando", input: { comando: "rm -rf /" } }], stop: "tool_use" }, fim]);
         await agente(base, "f", alvo, nada, 1, [], c.fn);
         assert.ok(c.recebidos.some((r) => r.includes("nao permitido")), "allowlist");
+        // executavel inexistente conta como falha de ambiente, nao como iteracao
+        const amb = fake([{ blocos: [{ type: "tool_use", id: "e", name: "rodar_comando", input: { comando: "nao-existe-xyz" } }], stop: "tool_use" }, fim]);
+        const ra = await agente(base, "f", alvo, nada, 1, ["nao-existe-xyz"], amb.fn);
+        assert.strictEqual(ra.falhasAmbiente, 1, "falha de ambiente contada");
+        assert.strictEqual(ra.iteracoes, 0, "ambiente nao conta iteracao");
         // CA-4 + escrita valida: ciclo completo devolve tool_result "ok" e registra o arquivo
         const w = fake([{ blocos: [{ type: "tool_use", id: "c", name: "escrever_arquivo", input: { caminho: "novo.txt", conteudo: "conteudo valido\n" } }], stop: "tool_use" }, fim]);
         const r = await agente(base, "f", { tarefa: "t", arquivos_alvo: ["novo.txt"], descricao: "d" }, nada, 1, [], w.fn);
