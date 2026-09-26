@@ -2,14 +2,20 @@
 // nativa, OpenRouter (authToken/Bearer) como alternativa -- ambas suportadas direto pelo SDK, sem
 // client wrapper. Streaming + timer ocioso + retry do mesmo turno (comTentativas) -> resposta longa
 // nao estoura timeout e conexao que cai nao derruba a slice.
+// OpenCode Go (assinatura) tem prioridade sobre as duas: la' o DeepSeek so' fala o formato OpenAI,
+// entao esse provedor usa fetch + conversao de openai.ts em vez do SDK.
 import Anthropic from "@anthropic-ai/sdk";
+import { randomUUID } from "node:crypto";
+import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 
-// Pura: decide o provedor a partir de quais chaves existem. DeepSeek nativa tem prioridade
-// (default de menor-surpresa quando as duas estao definidas). Extraida assim (em vez de inline em
-// obter()) pra dar pra testar no --selftest sem precisar mexer em env var em runtime.
-export function escolherProvedor(deepseekKey?: string, openrouterKey?: string) {
+// Pura: decide o provedor a partir de quais chaves existem. Ordem: OpenCode Go > DeepSeek nativa >
+// OpenRouter. Extraida assim (em vez de inline em obter()) pra dar pra testar no --selftest sem
+// precisar mexer em env var em runtime.
+export function escolherProvedor(deepseekKey?: string, openrouterKey?: string, goKey?: string) {
+  if (goKey) return { kind: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "deepseek-v4.1-flash", useAuthToken: true };
   const viaOpenRouter = !deepseekKey && !!openrouterKey;
   return {
+    kind: "anthropic",
     baseURL: viaOpenRouter ? "https://openrouter.ai/api" : "https://api.deepseek.com/anthropic",
     model: viaOpenRouter ? "deepseek/deepseek-v4.1-flash" : "deepseek-flash",
     useAuthToken: viaOpenRouter,
@@ -18,7 +24,8 @@ export function escolherProvedor(deepseekKey?: string, openrouterKey?: string) {
 
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
-const PROVEDOR = escolherProvedor(DEEPSEEK_KEY, OPENROUTER_KEY);
+const GO_KEY = process.env.OPENCODE_GO_API_KEY?.trim() || undefined;
+const PROVEDOR = escolherProvedor(DEEPSEEK_KEY, OPENROUTER_KEY, GO_KEY);
 
 export const MODEL = process.env.HERMES_MODEL || PROVEDOR.model;
 const BASE_URL = process.env.HERMES_BASE_URL || PROVEDOR.baseURL;
@@ -48,6 +55,7 @@ export class CanceladoError extends Error {
 
 // Erro transitorio (rede caiu, 429, 5xx) vale re-tentar; erro de request (400/401...) nao.
 export function retentavel(e: any): boolean {
+  if (e?.naoRetentar) return false; // teto de uso do OpenCode Go: re-tentar so' gasta tempo
   const st = Number(e?.status);
   if (st === 429 || st >= 500) return true;
   if (e instanceof Anthropic.APIConnectionError) return true;
@@ -113,6 +121,7 @@ function obter(): Anthropic {
 // Uma chamada Messages API por STREAMING (retry fica com comTentativas, por isso maxRetries: 0).
 // Cada evento do stream prova que a conexao esta viva; onProgresso reporta ~tokens a cada 2s.
 export const mensagem: MensagemFn = async (system, messages, tools, opts = {}) => {
+  if (PROVEDOR.kind === "openai") return mensagemOpenAI(system, messages, tools, opts);
   const resp = await comTentativas(async (sinal, vivo) => {
     let chars = 0;
     let ultimo = 0;
@@ -136,6 +145,53 @@ export const mensagem: MensagemFn = async (system, messages, tools, opts = {}) =
   };
   return { blocos: resp.content as any[], stop: String(resp.stop_reason ?? ""), usage };
 };
+
+// Erro HTTP do Go: 402, ou 429 falando de uso/cota/assinatura = teto de 5h/semana/mes -> nao re-tenta.
+// 429 comum (rate limit) e 5xx seguem re-tentaveis via status.
+export function erroHttp(status: number, corpo: string): Error & { status: number; naoRetentar?: boolean } {
+  const teto = status === 402 || (status === 429 && /usage|quota|subscription|monthly|weekly|5.?h/i.test(corpo));
+  const msg = teto ? `OpenCode Go: limite de uso atingido (5h/semana/mes): ${corpo.slice(0, 160)}` : `HTTP ${status}: ${corpo.slice(0, 200)}`;
+  return Object.assign(new Error(msg), { status, naoRetentar: teto || undefined });
+}
+
+// x-opencode-session estavel por conversa: o agente reusa o MESMO array messages em todos os turnos.
+const sessoes = new WeakMap<object, string>();
+
+// Provedor OpenAI-compatible (OpenCode Go): mesmo contrato de mensagem(), streaming SSE via fetch.
+async function mensagemOpenAI(system: string, messages: Msg[], tools: Ferramenta[], opts: OpcoesMsg): Promise<Resposta> {
+  if (!sessoes.has(messages)) sessoes.set(messages, randomUUID());
+  const corpo = paraOpenAI(system, messages, tools);
+  return comTentativas(async (sinal, vivo) => {
+    const resp = await fetch(BASE_URL + "/chat/completions", {
+      method: "POST",
+      signal: sinal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${GO_KEY}`,
+        "user-agent": "hermes-bridge/3.0",
+        "x-opencode-session": sessoes.get(messages)!,
+      },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: MAX_TOKENS, stream: true, stream_options: { include_usage: true },
+        messages: corpo.messages, ...(corpo.tools.length ? { tools: corpo.tools } : {}),
+      }),
+    });
+    if (!resp.ok || !resp.body) throw erroHttp(resp.status, await resp.text().catch(() => ""));
+    const est = novoEstado();
+    const dec = new TextDecoder();
+    let buf = "";
+    let chars = 0;
+    let ultimo = 0;
+    for await (const pedaco of resp.body as any) {
+      vivo();
+      buf = consumirSSE(buf + dec.decode(pedaco, { stream: true }), est, (n) => { chars += n; });
+      const agora = Date.now();
+      if (opts.onProgresso && agora - ultimo >= 2000) { ultimo = agora; opts.onProgresso(Math.round(chars / 4)); }
+    }
+    consumirSSE(buf + "\n", est);
+    return finalizar(est);
+  }, { signal: opts.signal, onTentativa: opts.onTentativa });
+}
 
 // Chamada simples sem ferramentas: devolve o texto concatenado (usado pelo revisor).
 export async function texto(system: string, user: string): Promise<string> {

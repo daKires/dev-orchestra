@@ -8,7 +8,8 @@ import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate, resolverComandos, podeReparar, custoUSD, ehTeste, existeExecutavel, ehFalhaAmbiente, } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel } from "./ui.js";
-import { escolherProvedor, comTentativas, CanceladoError } from "./deepseek.js";
+import { escolherProvedor, comTentativas, CanceladoError, retentavel, erroHttp } from "./deepseek.js";
+import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 const WIDTH = 64;
 const SEP = "+" + "-".repeat(WIDTH - 2) + "+";
 // Arquivo de log ao vivo (retrocompat; o dashboard web e' a UI principal agora). orchestra define HERMES_LOG.
@@ -237,6 +238,64 @@ if (process.argv.includes("--selftest")) {
     assert.strictEqual(escolherProvedor(undefined, "or").model, "deepseek/deepseek-v4.1-flash");
     assert.strictEqual(escolherProvedor("dk", "or").useAuthToken, false); // as duas: nativa vence
     assert.strictEqual(escolherProvedor(undefined, undefined).useAuthToken, false); // nenhuma: cai no erro de obter()
+    // OpenCode Go: vence as outras chaves e usa o formato OpenAI com DeepSeek V4.1 Flash
+    assert.strictEqual(escolherProvedor("dk", "or", "go").kind, "openai");
+    assert.strictEqual(escolherProvedor(undefined, undefined, "go").baseURL, "https://opencode.ai/zen/go/v1");
+    assert.strictEqual(escolherProvedor(undefined, undefined, "go").model, "deepseek-v4.1-flash");
+    assert.strictEqual(escolherProvedor("dk", "or").kind, "anthropic"); // sem chave Go: igual a hoje
+    // ida Anthropic -> OpenAI: system, tool_use -> tool_calls, thinking -> reasoning_content, tool_result -> role tool
+    (() => {
+        const { messages: om, tools: ot } = paraOpenAI("sys", [
+            { role: "user", content: "faz" },
+            { role: "assistant", content: [
+                    { type: "thinking", thinking: "penso" }, { type: "text", text: "vou ler" },
+                    { type: "tool_use", id: "c1", name: "listar", input: { caminho: "." } },
+                ] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a.ts" }] },
+        ], [{ name: "listar", description: "lista", input_schema: { type: "object" } }]);
+        assert.deepStrictEqual(om[0], { role: "system", content: "sys" });
+        assert.deepStrictEqual(om[1], { role: "user", content: "faz" });
+        assert.strictEqual(om[2].content, "vou ler");
+        assert.strictEqual(om[2].reasoning_content, "penso");
+        assert.deepStrictEqual(om[2].tool_calls[0], { id: "c1", type: "function", function: { name: "listar", arguments: '{"caminho":"."}' } });
+        assert.deepStrictEqual(om[3], { role: "tool", tool_call_id: "c1", content: "a.ts" });
+        assert.deepStrictEqual(ot[0], { type: "function", function: { name: "listar", description: "lista", parameters: { type: "object" } } });
+    })();
+    // volta OpenAI -> Anthropic: tool_call fatiado em 3 pedacos (e um chunk SSE cortado ao meio), raciocinio, usage
+    (() => {
+        const est = novoEstado();
+        const sse = (o) => "data: " + JSON.stringify(o) + "\n\n";
+        const meio = sse({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'inho":' } }] } }] });
+        let resto = consumirSSE(sse({ choices: [{ delta: { reasoning_content: "hmm" } }] }) +
+            sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "t9", function: { name: "ler_arquivo", arguments: '{"cam' } }] } }] }) +
+            meio.slice(0, 30), est);
+        resto = consumirSSE(resto + meio.slice(30) +
+            sse({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"a.ts"}' } }] }, finish_reason: "tool_calls" }] }) +
+            sse({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } }) + "data: [DONE]\n\n", est);
+        assert.strictEqual(resto, "");
+        const r = finalizar(est);
+        assert.strictEqual(r.stop, "tool_use");
+        assert.deepStrictEqual(r.blocos, [
+            { type: "thinking", thinking: "hmm" },
+            { type: "tool_use", id: "t9", name: "ler_arquivo", input: { caminho: "a.ts" } },
+        ]);
+        assert.deepStrictEqual(r.usage, { in: 7, out: 3 });
+        const txt = novoEstado();
+        consumirSSE(sse({ choices: [{ delta: { content: "pronto" }, finish_reason: "stop" }] }), txt);
+        assert.deepStrictEqual(finalizar(txt), { blocos: [{ type: "text", text: "pronto" }], stop: "end_turn", usage: { in: 0, out: 0 } });
+        // argumentos com JSON quebrado viram input {} (a ferramenta reclama; a slice nao cai)
+        const ruim = novoEstado();
+        consumirSSE(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "x", function: { name: "listar", arguments: "{quebrado" } }] }, finish_reason: "tool_calls" }] }), ruim);
+        assert.deepStrictEqual(finalizar(ruim).blocos[0].input, {});
+        assert.throws(() => consumirSSE(sse({ error: { message: "boom" } }), novoEstado()), /boom/);
+    })();
+    // teto de uso do Go nao re-tenta; rate limit comum e 5xx re-tentam
+    assert.strictEqual(retentavel(erroHttp(402, "insufficient balance")), false);
+    assert.match(erroHttp(402, "x").message, /limite de uso/);
+    assert.strictEqual(retentavel(erroHttp(429, "monthly usage limit reached")), false);
+    assert.strictEqual(retentavel(erroHttp(429, "rate limit, slow down")), true);
+    assert.strictEqual(retentavel(erroHttp(503, "busy")), true);
+    assert.strictEqual(retentavel(erroHttp(400, "bad request")), false);
     // linhaDe(): cada tipo de evento produz uma string (nao abre servidor)
     const amostras = [
         { t: "run", feature: "f", cwd: "c", total: 1 },
