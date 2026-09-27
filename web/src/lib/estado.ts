@@ -49,8 +49,13 @@ function copiar(r: Run): Run {
   };
 }
 
+// Worktree do Claude Code (<proj>/.claude/worktrees/<nome>) conta como o proprio projeto.
+function raiz(cwd: string): string {
+  return cwd.replace(/[\\/]+$/, "").replace(/[\\/]\.claude[\\/]worktrees[\\/][^\\/]+$/i, "");
+}
+
 export function projetoDe(cwd: string): string {
-  return cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || cwd;
+  return raiz(cwd).split(/[\\/]/).pop() || cwd;
 }
 
 const FEED_MAX = 2000;
@@ -186,7 +191,7 @@ export function kpis(r: Run) {
 export function porProjeto(e: Estado): { cwd: string; projeto: string; runs: Run[] }[] {
   const g = new Map<string, Run[]>();
   for (const r of Object.values(e.runs)) {
-    const k = (r.cwd || "(sem pasta)").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); // D:\x == d:/x
+    const k = raiz(r.cwd || "(sem pasta)").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); // D:\x == d:/x
     if (!g.has(k)) g.set(k, []);
     g.get(k)!.push(r);
   }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aplicar, alerta, kpis, porProjeto, progresso, statusVisivel, parseDiff, vazio, type Msg } from "./estado.ts";
+import { aplicar, alerta, kpis, porProjeto, projetoDe, progresso, statusVisivel, parseDiff, vazio, type Msg } from "./estado.ts";
 
 const T0 = 1_000_000;
 const run = (id: string, cwd: string, ts = T0): Msg => ({ swarm: id, ev: { t: "run", feature: "f-" + id, cwd, total: 2, ts, plano: [
@@ -73,4 +73,12 @@ test("parseDiff numera linhas antigas e novas", () => {
   assert.deepEqual(l.filter((x) => x.tipo !== "meta").map((x) => [x.tipo, x.velha, x.nova]), [
     ["hunk", undefined, undefined], ["ctx", 1, 1], ["rem", 2, undefined], ["add", undefined, 2], ["ctx", 3, 3],
   ]);
+});
+
+test("worktree do Claude Code vira o nome do projeto e agrupa com ele", () => {
+  assert.equal(projetoDe("D:\\p\\Roblox\\.claude\\worktrees\\f2-902b41\\"), "Roblox");
+  const e = aplicar(vazio, [run("a", "D:\\p\\Roblox", T0), run("b", "D:/p/Roblox/.claude/worktrees/wt-1", T0 + 10)]);
+  const g = porProjeto(e);
+  assert.deepEqual(g.map((x) => x.projeto), ["Roblox"]);
+  assert.deepEqual(g[0].runs.map((x) => x.id), ["b", "a"]);
 });
