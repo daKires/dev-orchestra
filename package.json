@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && npm --prefix web test"
+    "test": "npm run build && node dist/index.js --selftest && node --test dist/runs.test.js && npm --prefix web test",
+    "test:runs": "tsc && node --test dist/runs.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
