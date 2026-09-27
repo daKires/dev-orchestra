@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
-import { Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/Sidebar";
 import { EditorArea, PLANO } from "@/components/EditorArea";
 import { BottomPanel } from "@/components/BottomPanel";
+import { ChatPanel } from "@/components/ChatPanel";
 import { StatusBar } from "@/components/StatusBar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
+import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
-import { porProjeto, rodando } from "@/lib/estado";
+import { chatsDoProjeto, porProjeto, rodando } from "@/lib/estado";
 
 export default function App() {
   const { estado, conectado } = useRuns();
@@ -19,10 +22,13 @@ export default function App() {
   const [fechados, setFechados] = useLocal<string[]>("fechados", []);
   const [sliceSel, setSliceSel] = useState<number | null>(null);
   const [abasPorRun, setAbasPorRun] = useState<Record<string, { abas: string[]; ativa: string }>>({});
+  const [chatSel, setChatSel] = useState<string | null>(null);
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
+  const [nova, setNova] = useState(false);
   const lateral = usePanelRef();
   const inferior = usePanelRef();
+  const chatRef = usePanelRef();
 
   // Sem run escolhida (ou a escolhida sumiu na poda): abre a que esta rodando, senao a mais recente.
   const r = runId ? estado.runs[runId] ?? null : null;
@@ -40,6 +46,26 @@ export default function App() {
     setAbas({ abas: resto, ativa: abas.ativa === a ? resto[resto.length - 1] ?? PLANO : abas.ativa });
   };
   const irSlice = (i: number | null) => { setSliceSel(i); if (i != null) setAbas({ ...abas, ativa: PLANO }); };
+
+  // Chats (planejadores) do projeto da run; um chatSel valido reduz a lista a ele, senao mostra todos.
+  const chatsProjeto = useMemo(() => chatsDoProjeto(estado.planejadores, r?.cwd ?? ""), [estado.planejadores, r?.cwd]);
+  const chats = useMemo(() => {
+    if (!chatSel) return chatsProjeto;
+    const c = chatsProjeto.find((x) => x.slug === chatSel);
+    return c ? [c] : chatsProjeto;
+  }, [chatSel, chatsProjeto]);
+
+  // Trocar de run limpa a selecao de chat (os chats sao do projeto da run).
+  useEffect(() => { setChatSel(null); }, [r?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Nova feature concluida: seleciona o chat dela (uma vez) assim que ele aparece na lista.
+  const nfUrl = estado.novaFeature?.status === "ok" ? estado.novaFeature.url : undefined;
+  const nfFeita = useRef<string | null>(null);
+  useEffect(() => {
+    if (!nfUrl || nfFeita.current === nfUrl) return;
+    const p = estado.planejadores.find((x) => x.url === nfUrl);
+    if (p) { nfFeita.current = nfUrl; setChatSel(p.slug); }
+  }, [nfUrl, estado.planejadores]);
 
   // Atalhos de editor: Ctrl+K/Ctrl+P paleta, Ctrl+B barra lateral, Ctrl+J painel inferior.
   useEffect(() => {
@@ -74,6 +100,13 @@ export default function App() {
             <span className="truncate">{r ? `${r.projeto} › ${r.feature}` : "Ir para run, slice ou arquivo"}</span>
             <kbd className="ml-auto rounded border px-1 font-mono text-[10px]">Ctrl K</kbd>
           </button>
+          {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
+          <Button
+            size="sm" variant="outline" className="ml-auto h-6.5 gap-1.5 px-2.5 text-xs"
+            title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
+          >
+            <Plus className="size-3.5" />Nova feature
+          </Button>
         </header>
 
         <div className="min-h-0 flex-1">
@@ -110,6 +143,14 @@ export default function App() {
                 </div>
               )}
             </ResizablePanel>
+            {chats.length > 0 && (
+              <>
+                <ResizableHandle />
+                <ResizablePanel id="chat" panelRef={chatRef} defaultSize="34" minSize={240} collapsible collapsedSize={0}>
+                  <ChatPanel chats={chats} ativo={chatSel ?? chats[0].slug} onAtivo={setChatSel} />
+                </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         </div>
 
@@ -121,6 +162,7 @@ export default function App() {
         onRun={(id) => { setRunId(id); setSliceSel(null); }} onSlice={irSlice} onArquivo={abrirArquivo}
       />
       <CancelDialog r={r} aberto={cancelar} onAberto={setCancelar} />
+      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} />
     </TooltipProvider>
   );
 }

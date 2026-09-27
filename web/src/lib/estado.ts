@@ -1,6 +1,6 @@
 // Estado da UI derivado SO dos eventos do bridge (SSE /events). Reducer puro: toda regra de exibicao
 // (status, progresso, KPIs, alerta de "sem resposta") mora aqui e e' testada em estado.test.ts.
-import type { Evento, SlicePlano } from "../../../ui.ts";
+import type { Evento, NovaFeature, Planejador, SlicePlano } from "../../../ui.ts";
 
 export type StatusSlice = "fila" | "rodando" | "ok" | "incompleta" | "pulada";
 export type Metrica = Extract<Evento, { t: "metrica" }>;
@@ -25,14 +25,18 @@ export type Run = {
   diffs: Record<string, string>; ordemDiffs: string[];
   metricas: Metrica[]; painel: string[]; atividade: Atividade;
 };
-export type Estado = { runs: Record<string, Run> };
-export type Msg = { swarm: string; ev?: Evento; drop?: boolean };
+export type Estado = { runs: Record<string, Run>; planejadores: Planejador[]; novaFeature: NovaFeature | null };
+// Duas familias de mensagens do hub: eventos de uma run ({swarm, ev}) e mensagens globais do hub
+// ({planejadores} substitui a lista de chats; {novaFeature} guarda o andamento do ultimo pedido).
+export type Msg =
+  | { swarm: string; ev?: Evento; drop?: boolean }
+  | { planejadores?: Planejador[]; novaFeature?: NovaFeature };
 
 export const OCIOSO_MS = 60_000;         // alerta "sem resposta" (mesmo teto do timer ocioso do bridge)
 export const CMD_TIMEOUT_MS = 120_000;   // comando alem disso = travado
 export const INTERROMPIDA_MS = 10 * 60_000; // sem evento nem painel por 10 min = processo morreu
 
-export const vazio: Estado = { runs: {} };
+export const vazio: Estado = { runs: {}, planejadores: [], novaFeature: null };
 
 function nova(id: string): Run {
   return {
@@ -133,13 +137,18 @@ function mutar(r: Run, ev: Evento): void {
 export function aplicar(e: Estado, msgs: Msg[]): Estado {
   const runs = { ...e.runs };
   const tocadas = new Set<string>();
+  let planejadores = e.planejadores;
+  let novaFeature = e.novaFeature;
   for (const m of msgs) {
+    if ("planejadores" in m && m.planejadores) planejadores = m.planejadores; // substitui a lista inteira
+    if ("novaFeature" in m && m.novaFeature) novaFeature = m.novaFeature;     // guarda a ultima
+    if (!("swarm" in m)) continue;
     if (m.drop) { delete runs[m.swarm]; tocadas.delete(m.swarm); continue; }
     if (!m.ev) continue;
     if (!tocadas.has(m.swarm)) { runs[m.swarm] = runs[m.swarm] ? copiar(runs[m.swarm]) : nova(m.swarm); tocadas.add(m.swarm); }
     mutar(runs[m.swarm], m.ev);
   }
-  return { runs };
+  return { runs, planejadores, novaFeature };
 }
 
 // ---- derivados ----
@@ -199,6 +208,41 @@ export function porProjeto(e: Estado): { cwd: string; projeto: string; runs: Run
     .map(([, runs]) => runs.sort((a, b) => b.inicioTs - a.inicioTs))
     .map((runs) => ({ cwd: runs[0].cwd, projeto: runs[0].projeto || projetoDe(runs[0].cwd), runs }))
     .sort((a, b) => b.runs[0].inicioTs - a.runs[0].inicioTs);
+}
+
+// Chave canonica da RAIZ de um caminho: worktree -> raiz do projeto (regra raiz()), tudo minusculo,
+// separadores uniformes ('/') e sem barra final, pra comparar "D:\x" com "d:/x" e afins.
+function chaveRaiz(p: string): string {
+  return raiz(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+// Chats (planejadores) do projeto da run: mesma RAIZ do cwd da run — a run na raiz do projeto ou em
+// qualquer worktree dele ve os chats daquele projeto. Mais recente primeiro (ordem das abas).
+export function chatsDoProjeto(planejadores: Planejador[], cwdRun: string): Planejador[] {
+  const alvo = chaveRaiz(cwdRun);
+  return planejadores.filter((p) => chaveRaiz(p.raiz) === alvo).sort((a, b) => b.ts - a.ts);
+}
+
+// Projetos conhecidos (datalist da "Nova feature") = raizes dos registros de planejadores + raizes
+// das runs (mesma regra raiz(): worktree conta como o projeto). O dedupe e' case-insensitive pela
+// chave canonica, mas PRESERVA a primeira forma vista (o caminho aparece legivel no formulario);
+// a ordenacao tambem e' case-insensitive.
+export function projetosConhecidos(e: Estado, planejadores: Planejador[]): string[] {
+  const porChave = new Map<string, string>(); // chave canonica -> primeira forma vista
+  const juntar = (caminho: string) => {
+    const forma = raiz(caminho);
+    if (!forma) return;
+    const k = chaveRaiz(forma);
+    if (!porChave.has(k)) porChave.set(k, forma);
+  };
+  for (const p of planejadores) juntar(p.raiz);
+  for (const r of Object.values(e.runs)) if (r.cwd) juntar(r.cwd);
+  return [...porChave.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, forma]) => forma);
+}
+
+// Formulario da "Nova feature": projeto (da lista ou colado) e feature, sem espacos nas bordas.
+export function podeCriar(projeto: string, feature: string): boolean {
+  return projeto.trim() !== "" && feature.trim() !== "";
 }
 
 // Linguagem do Shiki pela extensao do arquivo do diff; null = sem highlight (so cores +/-).
