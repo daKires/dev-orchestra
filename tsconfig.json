@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "runs.ts", "runs.test.ts"]
+  "include": ["index.ts", "runs.ts", "runs.test.ts", "hub.test.ts", "ui-nova-feature.test.ts"]
 }
