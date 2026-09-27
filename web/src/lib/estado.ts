@@ -223,6 +223,18 @@ export function chatsDoProjeto(planejadores: Planejador[], cwdRun: string): Plan
   return planejadores.filter((p) => chaveRaiz(p.raiz) === alvo).sort((a, b) => b.ts - a.ts);
 }
 
+// Chats visiveis no painel da direita, dada a lista GLOBAL de planejadores, os chats do projeto da run
+// (chatsDoProjeto) e o selecionado. A lista NUNCA filtra pelo selecionado: clicar numa aba nao pode
+// sumir com as outras. Sem sel (ou sel invalido, que nao existe em planejadores) devolve doProjeto;
+// sel que ja' esta em doProjeto devolve doProjeto INTEIRO; sel valido fora de doProjeto (ex.: nova
+// feature recem-criada, ainda sem run no projeto) entra como extra NA FRENTE.
+export function chatsVisiveis(planejadores: Planejador[], doProjeto: Planejador[], sel: string | null): Planejador[] {
+  if (!sel) return doProjeto;
+  if (doProjeto.some((p) => p.slug === sel)) return doProjeto;
+  const extra = planejadores.find((p) => p.slug === sel);
+  return extra ? [extra, ...doProjeto] : doProjeto;
+}
+
 // Projetos conhecidos (datalist da "Nova feature") = raizes dos registros de planejadores + raizes
 // das runs (mesma regra raiz(): worktree conta como o projeto). O dedupe e' case-insensitive pela
 // chave canonica, mas PRESERVA a primeira forma vista (o caminho aparece legivel no formulario);
