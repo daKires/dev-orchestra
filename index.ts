@@ -12,6 +12,7 @@ import {
   type Tarefa, type Override,
 } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, type Evento } from "./ui.js";
+import { iniciar, esperar } from "./runs.js";
 import { escolherProvedor, comTentativas, CanceladoError, retentavel, erroHttp } from "./deepseek.js";
 import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 
@@ -51,7 +52,7 @@ function frame(opts: { titulo: string; cwd: string; linhas: string[]; status: st
 // Roda o swarm: baseline -> agentes (serial) -> GATE (+reparo) -> revisor -> commit local.
 // Todo evento vai pro dashboard web (SSE) E deriva uma linha pro stderr/arquivo (retrocompat). Nunca lanca.
 // Allowlist/gate vem do package.json do ALVO (override do planner vence; fallback pro env legado).
-async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, sinalChat?: AbortSignal): Promise<string> {
+async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, onLinha?: (l: string) => void): Promise<string> {
   try { writeFileSync(LOG_FILE, ""); } catch {} // trunca: cada run comeca limpa
   const vivo: string[] = [];
   const header = ["", SEP, row("HERMES SWARM // " + feature), row("CWD: " + cwd), SEP].join("\n") + "\n";
@@ -62,6 +63,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     const l = linhaDe(ev);
     if (l) {
       vivo.push(l);
+      onLinha?.(l);
       const linha = pintar(l, row("> " + l)) + "\n";
       process.stderr.write(linha);
       toFile(linha);
@@ -70,11 +72,11 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
   const { cmds: cmdsBrutos, gate: gateCmds, origem } = await resolverComandos(cwd, override);
   emit({ t: "run", feature, cwd, total: plano.length, plano, cmds: cmdsBrutos, gate: gateCmds });
-  // Cancelamento: tool cancelada no chat OU botao da UI (arquivo <run>.cancel, visto por poll de 1s).
+  // Cancelamento: SO pelo botao da UI (arquivo <run>.cancel, visto por poll de 1s).
   const porArquivo = new AbortController();
   const cancelFile = arquivoCancel(runAtual());
   const poll = setInterval(() => { if (existsSync(cancelFile)) porArquivo.abort(); }, 1000);
-  const signal = sinalChat ? AbortSignal.any([sinalChat, porArquivo.signal]) : porArquivo.signal;
+  const signal = porArquivo.signal;
   try {
     const base = path.resolve(cwd);
     // Checagem previa (antes de baseline/agentes, custo $0): gate com executavel inexistente aborta a
@@ -494,10 +496,11 @@ server.registerTool(
   {
     title: "Executar Orchestra (Hermes swarm)",
     description:
-      "Implementa uma feature num diretorio via swarm DeepSeek. O Claude planeja em SLICES e passa o plano; " +
+      "Implementa uma feature num diretorio via swarm DeepSeek (ASSINCRONA). O planejador monta SLICES e passa o plano; " +
       "cada slice roda em serie como um agente DeepSeek (le/edita arquivos e roda comandos de verificacao " +
       "permitidos), depois um GATE deterministico (typecheck/testes) e so entao revisor + commit local. " +
       "A allowlist e o gate sao resolvidos do package.json do alvo (override opcional em cada um). " +
+      "Esta tool dispara a run em background e volta NA HORA com o runId; acompanhe com status_orchestra. " +
       "Progresso ao vivo no dashboard web (ver stderr pra URL).",
     inputSchema: {
       cwd: z.string().describe("Pasta do projeto onde implementar"),
@@ -520,9 +523,50 @@ server.registerTool(
         .describe("Override opcional da allowlist/gate (senao resolve do package.json do alvo)"),
     },
   },
-  async ({ cwd, feature, plano, override }, extra) => ({
-    content: [{ type: "text", text: await rodar(cwd, feature, plano as Tarefa[], override as Override | undefined, extra.signal) }],
-  }),
+  async ({ cwd, feature, plano, override }) => {
+    try {
+      const runId = iniciar((progresso) => rodar(cwd, feature, plano as Tarefa[], override as Override | undefined, progresso));
+      return {
+        content: [{
+          type: "text",
+          text:
+            `RUN INICIADA: ${runId}\n` +
+            `chame status_orchestra com runId=${runId} ate vir o painel final (cancelar: botao do dashboard)`,
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  "status_orchestra",
+  {
+    title: "Status Orchestra (Hermes swarm)",
+    description:
+      "Consulta o andamento de uma run assincrona iniciada por executar_orchestra. " +
+      "Aguarda ate ~45s: se a run terminar, devolve o painel final; senao devolve as ultimas linhas e " +
+      "pede pra chamar de novo.",
+    inputSchema: {
+      runId: z.string().describe("runId devolvido por executar_orchestra"),
+    },
+  },
+  async ({ runId }) => {
+    try {
+      const r = await esperar(runId, 45000);
+      if ("fim" in r) return { content: [{ type: "text", text: r.fim }] };
+      const linhas = r.rodando.length ? r.rodando.join("\n") : "(sem saida ainda)";
+      return {
+        content: [{
+          type: "text",
+          text: `RODANDO ${runId}\n${linhas}\nchame status_orchestra de novo`,
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
+    }
+  },
 );
 
 await server.connect(new StdioServerTransport());
