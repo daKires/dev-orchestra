@@ -13,7 +13,7 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
 import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
-import { chatsDoProjeto, porProjeto, rodando } from "@/lib/estado";
+import { chatsDoProjeto, chatsVisiveis, porProjeto, rodando } from "@/lib/estado";
 
 export default function App() {
   const { estado, conectado } = useRuns();
@@ -47,13 +47,12 @@ export default function App() {
   };
   const irSlice = (i: number | null) => { setSliceSel(i); if (i != null) setAbas({ ...abas, ativa: PLANO }); };
 
-  // Chats (planejadores) do projeto da run; um chatSel valido reduz a lista a ele, senao mostra todos.
+  // Chats (planejadores) do projeto da run + o selecionado (pode vir de fora do projeto: nova feature).
   const chatsProjeto = useMemo(() => chatsDoProjeto(estado.planejadores, r?.cwd ?? ""), [estado.planejadores, r?.cwd]);
-  const chats = useMemo(() => {
-    if (!chatSel) return chatsProjeto;
-    const c = chatsProjeto.find((x) => x.slug === chatSel);
-    return c ? [c] : chatsProjeto;
-  }, [chatSel, chatsProjeto]);
+  const chats = useMemo(
+    () => chatsVisiveis(estado.planejadores, chatsProjeto, chatSel),
+    [estado.planejadores, chatsProjeto, chatSel],
+  );
 
   // Trocar de run limpa a selecao de chat (os chats sao do projeto da run).
   useEffect(() => { setChatSel(null); }, [r?.id]); // eslint-disable-line react-hooks/exhaustive-deps

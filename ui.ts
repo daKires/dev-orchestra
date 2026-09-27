@@ -55,8 +55,10 @@ export type Evento = { ts?: number } & (
 export type Emitir = (ev: Evento) => void;
 
 // Run corrente deste processo: cada evento "run" abre um arquivo NOVO (nunca trunca o anterior).
+// O sufixo sequencial garante ids distintos mesmo se duas runs abrirem no MESMO milissegundo.
 let runId = "";
 let runFile = "";
+let seq = 0;
 export function runAtual(): string { return runId; }
 export function arquivoCancel(id: string): string { return path.join(RUNS_DIR, id + ".cancel"); }
 
@@ -65,7 +67,7 @@ export function emitir(ev: Evento): void {
   try {
     if (ev.ts == null) ev.ts = Date.now();
     if (ev.t === "run" || !runFile) {
-      runId = SWARM_ID + "-" + Date.now().toString(36);
+      runId = SWARM_ID + "-" + Date.now().toString(36) + "-" + (seq++).toString(36);
       runFile = path.join(RUNS_DIR, runId + ".jsonl");
     }
     fs.appendFileSync(runFile, JSON.stringify(ev) + "\n");
