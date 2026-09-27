@@ -8,8 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { execSync, spawn } from "node:child_process";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
+// Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
+export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
 const SWARM_ID = randomUUID().slice(0, 8); // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000; // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
@@ -65,6 +68,121 @@ export function lerRuns(dir) {
     }
     return m;
 }
+// ---- registros de planejadores (orchestra-go.ps1) ----
+// Valida/estrutura um registro cru; null se faltar campo obrigatorio (JSON incompleto e' descartado).
+function planejadorDe(j) {
+    if (!j || typeof j !== "object")
+        return null;
+    for (const k of ["slug", "projeto", "raiz", "cwd", "feature", "url", "base"])
+        if (typeof j[k] !== "string" || !j[k])
+            return null;
+    if (typeof j.pid !== "number" || !j.pid)
+        return null;
+    if (typeof j.ts !== "number")
+        return null;
+    return {
+        slug: j.slug, projeto: j.projeto, raiz: j.raiz, cwd: j.cwd,
+        feature: j.feature, url: j.url, base: j.base, pid: j.pid, ts: j.ts,
+    };
+}
+// Le a pasta de registros. Tolerante: JSON corrompido/sem campos obrigatorios e' ignorado; pasta
+// inexistente vira []. Sincrona (usada no replay do SSE e no rescan do intervalo).
+export function lerPlanejadores(dir) {
+    const out = [];
+    let files = [];
+    try {
+        files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    }
+    catch {
+        return out;
+    }
+    for (const f of files) {
+        try {
+            const p = planejadorDe(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")));
+            if (p)
+                out.push(p);
+        }
+        catch { }
+    }
+    return out;
+}
+// Worktree que o registro descreve (mesma regra do orchestra-go.ps1: <raiz>/.claude/worktrees/<slug>).
+function worktreeDe(p) {
+    return path.join(p.raiz, ".claude", "worktrees", p.slug);
+}
+// process.kill(pid, 0): sem erro = vivo; EPERM (processo de outro usuario) tambem conta como vivo.
+function vivoReal(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (e) {
+        return e?.code === "EPERM";
+    }
+}
+// tasklist com filtro de PID: imagem do processo contem 'opencode'? Falha do tasklist -> false (conservador).
+function ehOpencodeReal(pid) {
+    return new Promise((ok) => {
+        try {
+            const saida = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: "utf8", timeout: 4000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+            ok(/opencode/i.test(saida));
+        }
+        catch {
+            ok(false);
+        }
+    });
+}
+const depsReais = {
+    existeCwd: (cwd) => { try {
+        return fs.existsSync(cwd);
+    }
+    catch {
+        return true;
+    } },
+    vivo: vivoReal,
+    ehOpencode: ehOpencodeReal,
+    matar: (pid) => { try {
+        process.kill(pid);
+    }
+    catch { } },
+    remover: (arq) => { try {
+        fs.unlinkSync(arq);
+    }
+    catch { } },
+};
+// Limpa registros de planejadores que nao servem mais:
+//   pid morto -> so' remove o JSON (nao ha o que matar);
+//   worktree sumiu + pid vivo + opencode -> mata o orfao e remove;
+//   worktree sumiu + pid vivo + NAO opencode -> pid reutilizado: so' remove (nunca mata alheio);
+//   worktree existe + pid vivo -> mantem.
+export async function limparPlanejadores(dir, deps = depsReais) {
+    let arquivos = [];
+    try {
+        arquivos = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    }
+    catch {
+        return;
+    }
+    for (const f of arquivos) {
+        const arq = path.join(dir, f);
+        let p = null;
+        try {
+            p = planejadorDe(JSON.parse(fs.readFileSync(arq, "utf8")));
+        }
+        catch { }
+        if (!p)
+            continue;
+        if (!deps.vivo(p.pid)) {
+            deps.remover(arq);
+            continue;
+        }
+        if (deps.existeCwd(worktreeDe(p)))
+            continue;
+        if (await deps.ehOpencode(p.pid))
+            deps.matar(p.pid);
+        deps.remover(arq);
+    }
+}
 // Deriva a linha de texto crua (stderr + HERMES_LOG) de um evento, preservando o log ao vivo de sempre.
 export function linhaDe(ev) {
     switch (ev.t) {
@@ -102,6 +220,13 @@ const vistos = new Map(); // arquivo -> "size:mtime" (so rele o que mudou)
 let servidor = null;
 let intervalo = null;
 let watcher = null;
+let limpeza = null; // poda os registros de planejadores orfaos
+let reassumir = null; // quem ficou sem porta tenta de novo
+let planejadores = []; // ultima lista empurrada via SSE
+let planejadoresAssinatura = ""; // muda -> avisa os clientes
+let onCeder = null; // chamado no fim do ceder() (modo --ui encerra o processo)
+let executarNovaFeature = executarNovaFeatureReal;
+let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
 function sse(c, dado) {
     try {
         c.res.write(`data: ${JSON.stringify(dado)}\n\n`);
@@ -117,9 +242,22 @@ function enviar(c) {
         c.offsets.set(run, evs.length);
     }
 }
+// Rele os registros de planejadores; se a lista mudou, empurra pra quem esta conectado. Chamada no
+// rescan (intervalo + fs.watch); o replay do novo cliente usa `planejadores` direto.
+function atualizarPlanejadores() {
+    const lista = lerPlanejadores(PLANEJADORES_DIR);
+    const assinatura = JSON.stringify(lista);
+    if (assinatura === planejadoresAssinatura)
+        return;
+    planejadoresAssinatura = assinatura;
+    planejadores = lista;
+    for (const c of clientes)
+        sse(c, { planejadores: lista });
+}
 // Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
 // (o fs.watch no Windows coalesce/perde eventos — o intervalo e' a rede de seguranca).
 function rescan() {
+    atualizarPlanejadores();
     let files = [];
     try {
         files = fs.readdirSync(RUNS_DIR).filter((f) => f.endsWith(".jsonl"));
@@ -220,7 +358,63 @@ function servirEstatico(url, res) {
 function acaoValida(req) {
     return req.method === "POST" && req.headers["x-hermes"] === "1";
 }
-// Libera a porta (pedido de um processo com UI mais nova).
+// Valida o corpo de um pedido de criacao de feature (projeto + feature, sem espacos nas bordas).
+export function validarNovaFeature(body) {
+    if (!body || typeof body !== "object")
+        return null;
+    const j = body;
+    const projeto = typeof j.projeto === "string" ? j.projeto.trim() : "";
+    const feature = typeof j.feature === "string" ? j.feature.trim() : "";
+    if (!projeto || !feature)
+        return null;
+    return { projeto, feature };
+}
+function broadcast(dado) { for (const c of clientes)
+    sse(c, dado); }
+// Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
+const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
+const LIMITE_BODY = 64 * 1024; // 64KB: um POST /nova-feature cabe folgado; acima disso e' abuso -> 400
+// Executor real: roda orchestra-go.ps1 via pwsh e interpreta a ULTIMA linha do stdout como o JSON do
+// registro (que carrega a url do chat). pwsh ausente (ENOENT) ou exit != 0 -> rejeita com o stderr.
+function executarNovaFeatureReal(projeto, feature) {
+    return new Promise((ok, falha) => {
+        const script = path.join(RAIZ_BRIDGE, "orchestra-go.ps1");
+        let p;
+        try {
+            p = spawn("pwsh", ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature], { windowsHide: true });
+        }
+        catch (e) {
+            falha(new Error(String(e?.message ?? e)));
+            return;
+        }
+        let saida = "";
+        let err = "";
+        p.stdout?.on("data", (d) => { saida += d.toString(); });
+        p.stderr?.on("data", (d) => { err += d.toString(); });
+        p.on("error", (e) => falha(new Error(e?.code === "ENOENT" ? "pwsh nao encontrado no PATH" : String(e?.message ?? e))));
+        p.on("close", (code) => {
+            if (code !== 0) {
+                falha(new Error(err.trim() || `orchestra-go.ps1 saiu com codigo ${code}`));
+                return;
+            }
+            const linha = saida.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+            let j = null;
+            try {
+                j = JSON.parse(linha);
+            }
+            catch {
+                falha(new Error("saida do orchestra-go.ps1 nao e' JSON: " + linha));
+                return;
+            }
+            if (typeof j?.url !== "string" || !j.url) {
+                falha(new Error("saida do orchestra-go.ps1 sem url"));
+                return;
+            }
+            ok({ url: j.url });
+        });
+    });
+}
+// Libera a porta (pedido de um processo com UI mais nova). No modo --ui, onCeder encerra o processo.
 function ceder() {
     for (const c of clientes) {
         try {
@@ -233,6 +427,10 @@ function ceder() {
         clearInterval(intervalo);
         intervalo = null;
     }
+    if (limpeza) {
+        clearInterval(limpeza);
+        limpeza = null;
+    }
     if (watcher) {
         try {
             watcher.close();
@@ -242,6 +440,7 @@ function ceder() {
     }
     servidor?.close();
     servidor = null;
+    onCeder?.();
 }
 function criarServidor() {
     return http.createServer((req, res) => {
@@ -252,6 +451,7 @@ function criarServidor() {
             const c = { res, offsets: new Map() };
             clientes.add(c);
             enviar(c); // replay do estado atual (todas as runs) pra quem acabou de conectar
+            sse(c, { planejadores }); // registros de planejadores (chat embutido) antes do {pronto}
             sse(c, { pronto: true }); // fim do replay: a UI so aplica depois disso (sem estado pela metade)
             req.on("close", () => clientes.delete(c));
             return;
@@ -289,6 +489,55 @@ function criarServidor() {
             setTimeout(ceder, 50);
             return;
         }
+        if (url === "/nova-feature") {
+            if (!acaoValida(req)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            let corpo = "";
+            let cortou = false;
+            req.on("data", (d) => {
+                if (cortou)
+                    return;
+                corpo += d.toString();
+                if (Buffer.byteLength(corpo) > LIMITE_BODY) {
+                    cortou = true;
+                    res.writeHead(400);
+                    res.end();
+                }
+            });
+            req.on("end", () => {
+                if (cortou)
+                    return;
+                let j = null;
+                try {
+                    j = JSON.parse(corpo);
+                }
+                catch { }
+                const v = validarNovaFeature(j);
+                if (!v) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
+                if (novaFeatureEmAndamento) {
+                    res.writeHead(409);
+                    res.end();
+                    return;
+                }
+                novaFeatureEmAndamento = true;
+                const exec = executarNovaFeature;
+                res.writeHead(202);
+                res.end(); // dispara em background; o andamento vai por SSE
+                broadcast({ novaFeature: { status: "rodando", projeto: v.projeto, feature: v.feature } });
+                exec(v.projeto, v.feature)
+                    .then(({ url: u }) => broadcast({ novaFeature: { status: "ok", projeto: v.projeto, feature: v.feature, url: u } }))
+                    .catch((e) => broadcast({ novaFeature: { status: "erro", projeto: v.projeto, feature: v.feature, erro: String(e?.message ?? e) } }))
+                    .finally(() => { novaFeatureEmAndamento = false; });
+            });
+            return;
+        }
         servirEstatico(url, res);
     });
 }
@@ -320,6 +569,9 @@ function escutar() {
             process.stderr.write(`[hermes-bridge] dashboard: http://127.0.0.1:${PORT}\n`);
             podar();
             rescan();
+            void limparPlanejadores(PLANEJADORES_DIR); // uma vez no start
+            limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); }, 5000);
+            limpeza.unref();
             try {
                 watcher = fs.watch(RUNS_DIR, () => rescan());
             }
@@ -331,14 +583,48 @@ function escutar() {
         srv.listen(PORT, "127.0.0.1");
     });
 }
-// Sobe o dashboard uma vez, no connect do MCP. Porta ocupada = outro processo ja hospeda (e le nosso
-// arquivo), a nao ser que a nossa UI seja mais nova. Nunca derruba a run.
-export async function iniciarUI() {
+export async function iniciarUI(opts = {}) {
     if (servidor)
         return;
+    onCeder = opts.onCeder ?? null;
+    executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
     if (!(await escutar()))
         await tentarAssumir();
     // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
-    setInterval(() => { if (!servidor)
-        void escutar(); }, 10_000).unref();
+    if (!reassumir)
+        reassumir = setInterval(() => { if (!servidor)
+            void escutar(); }, 10_000);
+    reassumir.unref();
+}
+// Encerra o servidor/watcher e limpa TODOS os intervalos (rescan, reassumir, limpeza). Usado nos testes.
+export function pararUI() {
+    if (intervalo) {
+        clearInterval(intervalo);
+        intervalo = null;
+    }
+    if (reassumir) {
+        clearInterval(reassumir);
+        reassumir = null;
+    }
+    if (limpeza) {
+        clearInterval(limpeza);
+        limpeza = null;
+    }
+    if (watcher) {
+        try {
+            watcher.close();
+        }
+        catch { }
+        watcher = null;
+    }
+    for (const c of clientes) {
+        try {
+            c.res.end();
+        }
+        catch { }
+    }
+    clientes.clear();
+    servidor?.close();
+    servidor = null;
+    onCeder = null;
 }

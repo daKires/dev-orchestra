@@ -569,6 +569,11 @@ server.registerTool(
   },
 );
 
-await server.connect(new StdioServerTransport());
-void iniciarUI();
-process.stderr.write("[hermes-bridge] listening (stdio)\n");
+if (process.argv.includes("--ui")) {
+  // Modo dashboard-only: NAO conecta o MCP stdio. Ceder a porta pra uma UI mais nova encerra o processo.
+  await iniciarUI({ onCeder: () => process.exit(0) });
+} else {
+  await server.connect(new StdioServerTransport());
+  void iniciarUI();
+  process.stderr.write("[hermes-bridge] listening (stdio)\n");
+}
