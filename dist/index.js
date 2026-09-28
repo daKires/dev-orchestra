@@ -511,6 +511,11 @@ if (process.argv.includes("--selftest")) {
     console.log("selftest ok");
     process.exit(0);
 }
+// ATENCAO (nao usar `node --test dist/`): no Node 22, passar a PASTA pro test runner faz ele executar
+// TODO arquivo da pasta — este modulo incluso. Ao ser carregado assim, o topo deste arquivo sobe o MCP
+// stdio e o processo fica BLOCKADO no stdin pra sempre, travando a suite inteira (dist/web, o bundle do
+// dashboard, tem o mesmo risco). Por isso o `npm test` lista os arquivos de teste EXPLICITAMENTE
+// (ver package.json); arquivos passados a mao sao sempre executados, mesmo fora dos padroes *.test.js.
 const server = new McpServer({ name: "hermes-bridge", version: "3.0.0" });
 server.registerTool("executar_orchestra", {
     title: "Executar Orchestra (Hermes swarm)",
@@ -578,6 +583,12 @@ server.registerTool("status_orchestra", {
         return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
     }
 });
-await server.connect(new StdioServerTransport());
-void iniciarUI();
-process.stderr.write("[hermes-bridge] listening (stdio)\n");
+if (process.argv.includes("--ui")) {
+    // Modo dashboard-only: NAO conecta o MCP stdio. Ceder a porta pra uma UI mais nova encerra o processo.
+    await iniciarUI({ onCeder: () => process.exit(0) });
+}
+else {
+    await server.connect(new StdioServerTransport());
+    void iniciarUI();
+    process.stderr.write("[hermes-bridge] listening (stdio)\n");
+}

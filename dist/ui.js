@@ -8,8 +8,16 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { execSync, spawn } from "node:child_process";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
+// Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
+export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
+// Pasta onde os anexos de POST /nova-feature sao gravados (uma subpasta por pedido). Injetavel por env.
+export const ANEXOS_DIR = process.env.HERMES_ANEXOS_DIR || path.join(os.tmpdir(), "hermes", "anexos");
+// POST /nova-feature carrega anexos em base64 (inflam ~33%): teto proprio bem maior que o padrao de 64KB.
+// Injetavel em iniciarUI (opcao limiteBodyNovaFeature) pra testar sem trafegar centenas de MB.
+export const LIMITE_BODY_NOVA_FEATURE = 350 * 1024 * 1024; // 350MB
 const SWARM_ID = randomUUID().slice(0, 8); // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000; // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
@@ -18,8 +26,10 @@ try {
 }
 catch { }
 // Run corrente deste processo: cada evento "run" abre um arquivo NOVO (nunca trunca o anterior).
+// O sufixo sequencial garante ids distintos mesmo se duas runs abrirem no MESMO milissegundo.
 let runId = "";
 let runFile = "";
+let seq = 0;
 export function runAtual() { return runId; }
 export function arquivoCancel(id) { return path.join(RUNS_DIR, id + ".cancel"); }
 // Unica porta de saida deste processo: grava o evento no JSONL da run corrente. Best-effort.
@@ -28,7 +38,7 @@ export function emitir(ev) {
         if (ev.ts == null)
             ev.ts = Date.now();
         if (ev.t === "run" || !runFile) {
-            runId = SWARM_ID + "-" + Date.now().toString(36);
+            runId = SWARM_ID + "-" + Date.now().toString(36) + "-" + (seq++).toString(36);
             runFile = path.join(RUNS_DIR, runId + ".jsonl");
         }
         fs.appendFileSync(runFile, JSON.stringify(ev) + "\n");
@@ -64,6 +74,121 @@ export function lerRuns(dir) {
         catch { }
     }
     return m;
+}
+// ---- registros de planejadores (orchestra-go.ps1) ----
+// Valida/estrutura um registro cru; null se faltar campo obrigatorio (JSON incompleto e' descartado).
+function planejadorDe(j) {
+    if (!j || typeof j !== "object")
+        return null;
+    for (const k of ["slug", "projeto", "raiz", "cwd", "feature", "url", "base"])
+        if (typeof j[k] !== "string" || !j[k])
+            return null;
+    if (typeof j.pid !== "number" || !j.pid)
+        return null;
+    if (typeof j.ts !== "number")
+        return null;
+    return {
+        slug: j.slug, projeto: j.projeto, raiz: j.raiz, cwd: j.cwd,
+        feature: j.feature, url: j.url, base: j.base, pid: j.pid, ts: j.ts,
+    };
+}
+// Le a pasta de registros. Tolerante: JSON corrompido/sem campos obrigatorios e' ignorado; pasta
+// inexistente vira []. Sincrona (usada no replay do SSE e no rescan do intervalo).
+export function lerPlanejadores(dir) {
+    const out = [];
+    let files = [];
+    try {
+        files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    }
+    catch {
+        return out;
+    }
+    for (const f of files) {
+        try {
+            const p = planejadorDe(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")));
+            if (p)
+                out.push(p);
+        }
+        catch { }
+    }
+    return out;
+}
+// Worktree que o registro descreve (mesma regra do orchestra-go.ps1: <raiz>/.claude/worktrees/<slug>).
+function worktreeDe(p) {
+    return path.join(p.raiz, ".claude", "worktrees", p.slug);
+}
+// process.kill(pid, 0): sem erro = vivo; EPERM (processo de outro usuario) tambem conta como vivo.
+function vivoReal(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (e) {
+        return e?.code === "EPERM";
+    }
+}
+// tasklist com filtro de PID: imagem do processo contem 'opencode'? Falha do tasklist -> false (conservador).
+function ehOpencodeReal(pid) {
+    return new Promise((ok) => {
+        try {
+            const saida = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: "utf8", timeout: 4000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+            ok(/opencode/i.test(saida));
+        }
+        catch {
+            ok(false);
+        }
+    });
+}
+const depsReais = {
+    existeCwd: (cwd) => { try {
+        return fs.existsSync(cwd);
+    }
+    catch {
+        return true;
+    } },
+    vivo: vivoReal,
+    ehOpencode: ehOpencodeReal,
+    matar: (pid) => { try {
+        process.kill(pid);
+    }
+    catch { } },
+    remover: (arq) => { try {
+        fs.unlinkSync(arq);
+    }
+    catch { } },
+};
+// Limpa registros de planejadores que nao servem mais:
+//   pid morto -> so' remove o JSON (nao ha o que matar);
+//   worktree sumiu + pid vivo + opencode -> mata o orfao e remove;
+//   worktree sumiu + pid vivo + NAO opencode -> pid reutilizado: so' remove (nunca mata alheio);
+//   worktree existe + pid vivo -> mantem.
+export async function limparPlanejadores(dir, deps = depsReais) {
+    let arquivos = [];
+    try {
+        arquivos = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    }
+    catch {
+        return;
+    }
+    for (const f of arquivos) {
+        const arq = path.join(dir, f);
+        let p = null;
+        try {
+            p = planejadorDe(JSON.parse(fs.readFileSync(arq, "utf8")));
+        }
+        catch { }
+        if (!p)
+            continue;
+        if (!deps.vivo(p.pid)) {
+            deps.remover(arq);
+            continue;
+        }
+        if (deps.existeCwd(worktreeDe(p)))
+            continue;
+        if (await deps.ehOpencode(p.pid))
+            deps.matar(p.pid);
+        deps.remover(arq);
+    }
 }
 // Deriva a linha de texto crua (stderr + HERMES_LOG) de um evento, preservando o log ao vivo de sempre.
 export function linhaDe(ev) {
@@ -102,6 +227,14 @@ const vistos = new Map(); // arquivo -> "size:mtime" (so rele o que mudou)
 let servidor = null;
 let intervalo = null;
 let watcher = null;
+let limpeza = null; // poda os registros de planejadores orfaos
+let reassumir = null; // quem ficou sem porta tenta de novo
+let planejadores = []; // ultima lista empurrada via SSE
+let planejadoresAssinatura = ""; // muda -> avisa os clientes
+let onCeder = null; // chamado no fim do ceder() (modo --ui encerra o processo)
+let executarNovaFeature = executarNovaFeatureReal;
+let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
+let limiteBodyNovaFeature = LIMITE_BODY_NOVA_FEATURE; // teto proprio da rota (injetavel em iniciarUI)
 function sse(c, dado) {
     try {
         c.res.write(`data: ${JSON.stringify(dado)}\n\n`);
@@ -117,9 +250,22 @@ function enviar(c) {
         c.offsets.set(run, evs.length);
     }
 }
+// Rele os registros de planejadores; se a lista mudou, empurra pra quem esta conectado. Chamada no
+// rescan (intervalo + fs.watch); o replay do novo cliente usa `planejadores` direto.
+function atualizarPlanejadores() {
+    const lista = lerPlanejadores(PLANEJADORES_DIR);
+    const assinatura = JSON.stringify(lista);
+    if (assinatura === planejadoresAssinatura)
+        return;
+    planejadoresAssinatura = assinatura;
+    planejadores = lista;
+    for (const c of clientes)
+        sse(c, { planejadores: lista });
+}
 // Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
 // (o fs.watch no Windows coalesce/perde eventos — o intervalo e' a rede de seguranca).
 function rescan() {
+    atualizarPlanejadores();
     let files = [];
     try {
         files = fs.readdirSync(RUNS_DIR).filter((f) => f.endsWith(".jsonl"));
@@ -220,7 +366,141 @@ function servirEstatico(url, res) {
 function acaoValida(req) {
     return req.method === "POST" && req.headers["x-hermes"] === "1";
 }
-// Libera a porta (pedido de um processo com UI mais nova).
+// Extensoes aceitas em anexos: apenas IMAGEM e DOCUMENTO (video/audio/executavel ficam de fora).
+const EXTENSOES_PERMITIDAS = new Set([
+    // imagens
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tif", "tiff", "avif", "heic", "heif",
+    // documentos
+    "pdf", "txt", "md", "markdown", "csv", "tsv", "json", "xml", "yaml", "yml", "log",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "epub",
+]);
+export const MAX_ANEXOS = 10;
+export const MAX_ANEXO_BYTES = 25 * 1024 * 1024; // 25MB DECODIFICADOS por anexo
+// Sanitiza o nome do anexo pelo basename (Windows e POSIX): traversal "..\\..\\x.png" vira "x.png".
+// Nome que some na sanacao (vazio, "." ou "..") -> null (pedido inteiro rejeitado).
+function sanearNomeAnexo(nome) {
+    const base = nome.replace(/\\/g, "/").split("/").pop() ?? "";
+    const limpo = base.trim();
+    if (!limpo || limpo === "." || limpo === "..")
+        return null;
+    return limpo;
+}
+// Base64 estrito: alfabeto valido, comprimento multiplo de 4 e padding correto (Buffer.from e' permissivo).
+function b64Valido(s) {
+    if (!s || s.length % 4 !== 0)
+        return false;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s))
+        return false;
+    return true;
+}
+// Valida um anexo cru -> { nome saneado, tipo, dadosB64 } ou null (extensao proibida/ b64 ruim / grande / tipo errado).
+function validarAnexo(a) {
+    if (!a || typeof a !== "object")
+        return null;
+    const o = a;
+    if (typeof o.nome !== "string" || typeof o.dadosB64 !== "string")
+        return null;
+    const nome = sanearNomeAnexo(o.nome);
+    if (!nome)
+        return null;
+    const ext = path.extname(nome).slice(1).toLowerCase();
+    if (!ext || !EXTENSOES_PERMITIDAS.has(ext))
+        return null;
+    if (!b64Valido(o.dadosB64))
+        return null;
+    if (Buffer.byteLength(o.dadosB64, "base64") > MAX_ANEXO_BYTES)
+        return null;
+    return { nome, tipo: typeof o.tipo === "string" ? o.tipo : "", dadosB64: o.dadosB64 };
+}
+// Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
+// EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
+// branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
+export function validarNovaFeature(body) {
+    if (!body || typeof body !== "object")
+        return null;
+    const j = body;
+    const projeto = typeof j.projeto === "string" ? j.projeto.trim() : "";
+    const feature = typeof j.feature === "string" ? j.feature.trim() : "";
+    if (!projeto || !feature)
+        return null;
+    const out = { projeto, feature };
+    if (j.descricao !== undefined) {
+        if (typeof j.descricao !== "string")
+            return null; // tipo errado -> null
+        const d = j.descricao.trim();
+        if (d)
+            out.descricao = d; // em branco some do resultado
+    }
+    if (j.anexos !== undefined) {
+        if (!Array.isArray(j.anexos))
+            return null; // nao-array -> null
+        if (j.anexos.length > MAX_ANEXOS)
+            return null;
+        const anexos = [];
+        for (const a of j.anexos) {
+            const v = validarAnexo(a);
+            if (!v)
+                return null; // qualquer anexo invalido derruba o pedido
+            anexos.push(v);
+        }
+        if (anexos.length)
+            out.anexos = anexos; // lista vazia some
+    }
+    return out;
+}
+function broadcast(dado) { for (const c of clientes)
+    sse(c, dado); }
+// Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
+const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
+const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
+// Executor real: roda orchestra-go.ps1 via pwsh e interpreta a ULTIMA linha do stdout como o JSON do
+// registro (que carrega a url do chat). pwsh ausente (ENOENT) ou exit != 0 -> rejeita com o stderr.
+// Descricao/anexos do pedido viram -Descricao/-AnexosDir (so' quando existem).
+function executarNovaFeatureReal(projeto, feature, extras) {
+    return new Promise((ok, falha) => {
+        const script = path.join(RAIZ_BRIDGE, "orchestra-go.ps1");
+        // Args base de sempre; -Descricao/-AnexosDir SO' quando existirem (sem eles a chamada fica como hoje).
+        const args = ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature];
+        if (extras?.descricao)
+            args.push("-Descricao", extras.descricao);
+        if (extras?.anexosDir)
+            args.push("-AnexosDir", extras.anexosDir);
+        let p;
+        try {
+            p = spawn("pwsh", args, { windowsHide: true, env: process.env });
+        }
+        catch (e) {
+            falha(new Error(String(e?.message ?? e)));
+            return;
+        }
+        let saida = "";
+        let err = "";
+        p.stdout?.on("data", (d) => { saida += d.toString(); });
+        p.stderr?.on("data", (d) => { err += d.toString(); });
+        p.on("error", (e) => falha(new Error(e?.code === "ENOENT" ? "pwsh nao encontrado no PATH" : String(e?.message ?? e))));
+        p.on("close", (code) => {
+            if (code !== 0) {
+                falha(new Error(err.trim() || `orchestra-go.ps1 saiu com codigo ${code}`));
+                return;
+            }
+            const linha = saida.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+            let j = null;
+            try {
+                j = JSON.parse(linha);
+            }
+            catch {
+                falha(new Error("saida do orchestra-go.ps1 nao e' JSON: " + linha));
+                return;
+            }
+            if (typeof j?.url !== "string" || !j.url) {
+                falha(new Error("saida do orchestra-go.ps1 sem url"));
+                return;
+            }
+            ok({ url: j.url });
+        });
+    });
+}
+// Libera a porta (pedido de um processo com UI mais nova). No modo --ui, onCeder encerra o processo.
 function ceder() {
     for (const c of clientes) {
         try {
@@ -233,6 +513,10 @@ function ceder() {
         clearInterval(intervalo);
         intervalo = null;
     }
+    if (limpeza) {
+        clearInterval(limpeza);
+        limpeza = null;
+    }
     if (watcher) {
         try {
             watcher.close();
@@ -242,6 +526,7 @@ function ceder() {
     }
     servidor?.close();
     servidor = null;
+    onCeder?.();
 }
 function criarServidor() {
     return http.createServer((req, res) => {
@@ -252,6 +537,7 @@ function criarServidor() {
             const c = { res, offsets: new Map() };
             clientes.add(c);
             enviar(c); // replay do estado atual (todas as runs) pra quem acabou de conectar
+            sse(c, { planejadores }); // registros de planejadores (chat embutido) antes do {pronto}
             sse(c, { pronto: true }); // fim do replay: a UI so aplica depois disso (sem estado pela metade)
             req.on("close", () => clientes.delete(c));
             return;
@@ -289,6 +575,72 @@ function criarServidor() {
             setTimeout(ceder, 50);
             return;
         }
+        if (url === "/nova-feature") {
+            if (!acaoValida(req)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            let corpo = "";
+            let cortou = false;
+            req.on("data", (d) => {
+                if (cortou)
+                    return;
+                corpo += d.toString();
+                if (Buffer.byteLength(corpo) > limiteBodyNovaFeature) {
+                    cortou = true;
+                    res.writeHead(400);
+                    res.end();
+                }
+            });
+            req.on("end", () => {
+                if (cortou)
+                    return;
+                let j = null;
+                try {
+                    j = JSON.parse(corpo);
+                }
+                catch { }
+                const v = validarNovaFeature(j);
+                if (!v) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
+                if (novaFeatureEmAndamento) {
+                    res.writeHead(409);
+                    res.end();
+                    return;
+                }
+                novaFeatureEmAndamento = true;
+                const exec = executarNovaFeature;
+                // Extras SO' quando o pedido tem descricao e/ou anexos (compat: sem campos novos, sem extras).
+                let extras;
+                if (v.descricao || v.anexos?.length) {
+                    extras = {};
+                    if (v.descricao)
+                        extras.descricao = v.descricao;
+                    if (v.anexos?.length) {
+                        const dir = path.join(ANEXOS_DIR, randomUUID()); // pasta UNICA por pedido
+                        try {
+                            fs.mkdirSync(dir, { recursive: true });
+                            for (const a of v.anexos)
+                                fs.writeFileSync(path.join(dir, a.nome), Buffer.from(a.dadosB64, "base64"));
+                            extras.anexosDir = dir;
+                        }
+                        catch { }
+                    }
+                }
+                res.writeHead(202);
+                res.end(); // dispara em background; o andamento vai por SSE
+                broadcast({ novaFeature: { status: "rodando", projeto: v.projeto, feature: v.feature } });
+                exec(v.projeto, v.feature, extras)
+                    .then(({ url: u }) => broadcast({ novaFeature: { status: "ok", projeto: v.projeto, feature: v.feature, url: u } }))
+                    .catch((e) => broadcast({ novaFeature: { status: "erro", projeto: v.projeto, feature: v.feature, erro: String(e?.message ?? e) } }))
+                    .finally(() => { novaFeatureEmAndamento = false; });
+            });
+            return;
+        }
         servirEstatico(url, res);
     });
 }
@@ -320,6 +672,9 @@ function escutar() {
             process.stderr.write(`[hermes-bridge] dashboard: http://127.0.0.1:${PORT}\n`);
             podar();
             rescan();
+            void limparPlanejadores(PLANEJADORES_DIR); // uma vez no start
+            limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); }, 5000);
+            limpeza.unref();
             try {
                 watcher = fs.watch(RUNS_DIR, () => rescan());
             }
@@ -331,14 +686,49 @@ function escutar() {
         srv.listen(PORT, "127.0.0.1");
     });
 }
-// Sobe o dashboard uma vez, no connect do MCP. Porta ocupada = outro processo ja hospeda (e le nosso
-// arquivo), a nao ser que a nossa UI seja mais nova. Nunca derruba a run.
-export async function iniciarUI() {
+export async function iniciarUI(opts = {}) {
     if (servidor)
         return;
+    onCeder = opts.onCeder ?? null;
+    executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
+    limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
     if (!(await escutar()))
         await tentarAssumir();
     // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
-    setInterval(() => { if (!servidor)
-        void escutar(); }, 10_000).unref();
+    if (!reassumir)
+        reassumir = setInterval(() => { if (!servidor)
+            void escutar(); }, 10_000);
+    reassumir.unref();
+}
+// Encerra o servidor/watcher e limpa TODOS os intervalos (rescan, reassumir, limpeza). Usado nos testes.
+export function pararUI() {
+    if (intervalo) {
+        clearInterval(intervalo);
+        intervalo = null;
+    }
+    if (reassumir) {
+        clearInterval(reassumir);
+        reassumir = null;
+    }
+    if (limpeza) {
+        clearInterval(limpeza);
+        limpeza = null;
+    }
+    if (watcher) {
+        try {
+            watcher.close();
+        }
+        catch { }
+        watcher = null;
+    }
+    for (const c of clientes) {
+        try {
+            c.res.end();
+        }
+        catch { }
+    }
+    clientes.clear();
+    servidor?.close();
+    servidor = null;
+    onCeder = null;
 }
