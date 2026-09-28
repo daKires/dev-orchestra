@@ -1,28 +1,49 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Loader2, Plus, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { podeCriar, projetosConhecidos, type Estado } from "@/lib/estado";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  ANEXO_ACCEPT, ANEXO_MAX, corpoNovaFeature, nomeSeguroAnexo, podeCriar, problemaAnexo,
+  projetosConhecidos, tamanhoLegivel, type Anexo, type Estado,
+} from "@/lib/estado";
 import { cn } from "@/lib/utils";
 
 type Props = { estado: Estado; aberto: boolean; onAberto: (v: boolean) => void };
 
-// Dialog "Nova feature": projeto (da lista de projetos conhecidos ou caminho colado) + feature ->
+// Le um File como base64 puro (sem o prefixo "data:...;base64,"), que e' o que o hub espera em dadosB64.
+function base64De(arquivo: File): Promise<string> {
+  return new Promise((ok, falha) => {
+    const fr = new FileReader();
+    fr.onerror = () => falha(fr.error ?? new Error("falha ao ler " + arquivo.name));
+    fr.onload = () => ok(String(fr.result ?? "").replace(/^data:[^,]*,/, ""));
+    fr.readAsDataURL(arquivo);
+  });
+}
+
+// Dialog "Nova feature": projeto (da lista de projetos conhecidos ou caminho colado) + feature +
+// descricao OPCIONAL (multi-linha) + anexos OPCIONAIS (imagem/documento: ate' 10, 25MB cada) ->
 // POST /nova-feature (header X-Hermes:1). O hub responde 202 e roda orchestra-go.ps1 em background,
 // mandando o andamento pelo SSE ({novaFeature}); em 'ok' o dialog fecha e o App abre o chat do
 // planejador novo no painel da direita (regra do App); em 'erro' a mensagem do hub aparece aqui.
 // Regras do hub: 409 = ja existe uma criacao em andamento (uma por vez), 400 = pedido recusado.
+// Sem descricao e sem anexos o corpo sai EXATAMENTE { projeto, feature } (compatibilidade).
 export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
   const [projeto, setProjeto] = useState("");
   const [feature, setFeature] = useState("");
+  const [descricao, setDescricao] = useState("");
+  const [anexos, setAnexos] = useState<Anexo[]>([]);
+  const [errosAnexo, setErrosAnexo] = useState<string[]>([]);
+  const [arrastando, setArrastando] = useState(false);
   const [msg, setMsg] = useState("");
   const [erro, setErro] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [criando, setCriando] = useState(false); // 202 aceito: esperando o desfecho pelo SSE
   const pedido = useRef<{ projeto: string; feature: string } | null>(null);
+  const seletorAnexos = useRef<HTMLInputElement>(null);
   const projetos = useMemo(() => projetosConhecidos(estado, estado.planejadores), [estado]);
   const nf = estado.novaFeature;
   const pode = podeCriar(projeto, feature) && !enviando && !criando;
@@ -31,7 +52,8 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
   useEffect(() => {
     if (aberto) return;
     pedido.current = null;
-    setProjeto(""); setFeature(""); setMsg(""); setErro(false); setEnviando(false); setCriando(false);
+    setProjeto(""); setFeature(""); setDescricao(""); setAnexos([]); setErrosAnexo([]); setArrastando(false);
+    setMsg(""); setErro(false); setEnviando(false); setCriando(false);
   }, [aberto]);
 
   // Acompanha o andamento pelo SSE: so' reage ao NOSSO pedido (projeto/feature ecoados pelo hub),
@@ -47,10 +69,51 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
     setMsg(nf.erro || "Não deu pra criar a feature.");
   }, [aberto, nf, onAberto]);
 
+  // Fila de anexos: cada arquivo passa por problemaAnexo (contando os ja' aceitos). Recusado vira
+  // mensagem PT-BR ao lado do campo; aceito entra como chip (nome saneado + tamanho) e ja' e' lido
+  // em base64, pra o chip e o payload usarem a mesma fonte.
+  const adicionar = async (lista: File[]) => {
+    if (!lista.length) return;
+    const aceitos: Anexo[] = [];
+    const recusados: string[] = [];
+    let n = anexos.length;
+    for (const f of lista) {
+      const nome = nomeSeguroAnexo(f.name);
+      const problema = problemaAnexo({ nome, tamanho: f.size }, n);
+      if (problema) { recusados.push(`${nome || f.name}: ${problema}`); continue; }
+      try {
+        aceitos.push({ nome, tamanho: f.size, tipo: f.type || "application/octet-stream", dadosB64: await base64De(f) });
+        n++;
+      } catch {
+        recusados.push(`${nome || f.name}: não deu pra ler o arquivo.`);
+      }
+    }
+    if (aceitos.length) setAnexos((a) => [...a, ...aceitos]);
+    setErrosAnexo(recusados);
+  };
+
+  const removerAnexo = (idx: number) => {
+    setAnexos((a) => a.filter((_, i) => i !== idx));
+    setErrosAnexo([]);
+  };
+
+  // Arrastar-e-soltar sobre a area do dialog: mesma regra do clique (input file multiple).
+  const sobre = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    if (!arrastando) setArrastando(true);
+  };
+
+  const soltar = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    setArrastando(false);
+    void adicionar([...(e.dataTransfer?.files ?? [])]);
+  };
+
   const criar = async () => {
     if (!pode) return;
-    const corpo = { projeto: projeto.trim(), feature: feature.trim() };
-    pedido.current = corpo;
+    const corpo = corpoNovaFeature(projeto, feature, descricao, anexos);
+    pedido.current = { projeto: corpo.projeto, feature: corpo.feature };
     setEnviando(true); setErro(false); setMsg("");
     try {
       const res = await fetch("/nova-feature", {
@@ -82,12 +145,18 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
 
   return (
     <Dialog open={aberto} onOpenChange={onAberto}>
-      <DialogContent>
+      <DialogContent
+        className={cn("sm:max-w-lg", arrastando && "ring-2 ring-ring")}
+        onDragEnter={sobre}
+        onDragOver={sobre}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setArrastando(false); }}
+        onDrop={soltar}
+      >
         <DialogHeader>
           <DialogTitle>Nova feature</DialogTitle>
           <DialogDescription>
             Cria o worktree e sobe o planejador (orchestra-go.ps1) do projeto escolhido. O chat abre no
-            painel da direita assim que o worktree ficar pronto.
+            painel da direita assim que o worktree ficar pronto. Descrição e anexos são opcionais.
           </DialogDescription>
         </DialogHeader>
         <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void criar(); }}>
@@ -108,6 +177,64 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
               id="nova-feature" value={feature} autoComplete="off" spellCheck={false}
               placeholder="ex.: relatorio-mensal" onChange={(e) => setFeature(e.target.value)}
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="nova-descricao" className="text-xs font-medium">
+              Descrição <span className="font-normal text-muted-foreground">(opcional)</span>
+            </label>
+            <Textarea
+              id="nova-descricao" value={descricao} rows={4} spellCheck={false}
+              placeholder="Contexto, objetivo e o que precisa entrar nesta feature..."
+              onChange={(e) => setDescricao(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">Vai como contexto pro planejador; pode ficar em branco.</p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="nova-anexos" className="text-xs font-medium">
+                Anexos <span className="font-normal text-muted-foreground">({anexos.length}/{ANEXO_MAX}{" · opcional"})</span>
+              </label>
+              <Button
+                type="button" variant="outline" size="sm" disabled={criando || enviando}
+                onClick={() => seletorAnexos.current?.click()}
+              >
+                <Plus />Adicionar
+              </Button>
+            </div>
+            <input
+              id="nova-anexos" ref={seletorAnexos} type="file" multiple accept={ANEXO_ACCEPT} className="sr-only"
+              onChange={(e) => { const l = [...(e.target.files ?? [])]; e.target.value = ""; void adicionar(l); }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              {"10 anexos · 25MB cada · png/jpg/jpeg/gif/webp/pdf/txt/md/docx"} · arraste e solte aqui ou clique em Adicionar.
+            </p>
+            {anexos.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5">
+                {anexos.map((a, i) => (
+                  <li
+                    key={a.nome + ":" + i}
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 py-1 pr-1 pl-2 text-xs"
+                  >
+                    <span className="max-w-52 truncate" title={a.nome}>{a.nome}</span>
+                    <span className="text-muted-foreground">{tamanhoLegivel(a.tamanho)}</span>
+                    <button
+                      type="button" title={`Remover ${a.nome}`} aria-label={`Remover ${a.nome}`}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={() => removerAnexo(i)}
+                    >
+                      <XIcon className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {errosAnexo.length > 0 && (
+              <ul className="flex flex-col gap-1">
+                {errosAnexo.map((t, i) => (
+                  <li key={i} role="alert" className="text-[11px] text-err">{t}</li>
+                ))}
+              </ul>
+            )}
           </div>
         </form>
         {msg && <p role="status" className={cn("text-sm", erro ? "text-err" : "text-muted-foreground")}>{msg}</p>}
