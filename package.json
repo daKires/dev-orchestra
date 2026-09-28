@@ -7,8 +7,11 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && node --test dist/runs.test.js && npm --prefix web test",
-    "test:runs": "tsc && node --test dist/runs.test.js"
+    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js && npm --prefix web test",
+    "test:runs": "tsc && node --test dist/runs.test.js",
+    "test:hub": "tsc && node --test dist/hub.test.js",
+    "test:novafeature": "tsc && node --test dist/ui-nova-feature.test.js",
+    "test:anexos": "tsc && node --test dist/ui-nova-feature-anexos.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

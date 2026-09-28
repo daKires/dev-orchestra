@@ -1,6 +1,6 @@
 // Estado da UI derivado SO dos eventos do bridge (SSE /events). Reducer puro: toda regra de exibicao
 // (status, progresso, KPIs, alerta de "sem resposta") mora aqui e e' testada em estado.test.ts.
-import type { Evento, SlicePlano } from "../../../ui.ts";
+import type { Evento, NovaFeature, Planejador, SlicePlano } from "../../../ui.ts";
 
 export type StatusSlice = "fila" | "rodando" | "ok" | "incompleta" | "pulada";
 export type Metrica = Extract<Evento, { t: "metrica" }>;
@@ -25,14 +25,18 @@ export type Run = {
   diffs: Record<string, string>; ordemDiffs: string[];
   metricas: Metrica[]; painel: string[]; atividade: Atividade;
 };
-export type Estado = { runs: Record<string, Run> };
-export type Msg = { swarm: string; ev?: Evento; drop?: boolean };
+export type Estado = { runs: Record<string, Run>; planejadores: Planejador[]; novaFeature: NovaFeature | null };
+// Duas familias de mensagens do hub: eventos de uma run ({swarm, ev}) e mensagens globais do hub
+// ({planejadores} substitui a lista de chats; {novaFeature} guarda o andamento do ultimo pedido).
+export type Msg =
+  | { swarm: string; ev?: Evento; drop?: boolean }
+  | { planejadores?: Planejador[]; novaFeature?: NovaFeature };
 
 export const OCIOSO_MS = 60_000;         // alerta "sem resposta" (mesmo teto do timer ocioso do bridge)
 export const CMD_TIMEOUT_MS = 120_000;   // comando alem disso = travado
 export const INTERROMPIDA_MS = 10 * 60_000; // sem evento nem painel por 10 min = processo morreu
 
-export const vazio: Estado = { runs: {} };
+export const vazio: Estado = { runs: {}, planejadores: [], novaFeature: null };
 
 function nova(id: string): Run {
   return {
@@ -133,13 +137,18 @@ function mutar(r: Run, ev: Evento): void {
 export function aplicar(e: Estado, msgs: Msg[]): Estado {
   const runs = { ...e.runs };
   const tocadas = new Set<string>();
+  let planejadores = e.planejadores;
+  let novaFeature = e.novaFeature;
   for (const m of msgs) {
+    if ("planejadores" in m && m.planejadores) planejadores = m.planejadores; // substitui a lista inteira
+    if ("novaFeature" in m && m.novaFeature) novaFeature = m.novaFeature;     // guarda a ultima
+    if (!("swarm" in m)) continue;
     if (m.drop) { delete runs[m.swarm]; tocadas.delete(m.swarm); continue; }
     if (!m.ev) continue;
     if (!tocadas.has(m.swarm)) { runs[m.swarm] = runs[m.swarm] ? copiar(runs[m.swarm]) : nova(m.swarm); tocadas.add(m.swarm); }
     mutar(runs[m.swarm], m.ev);
   }
-  return { runs };
+  return { runs, planejadores, novaFeature };
 }
 
 // ---- derivados ----
@@ -199,6 +208,141 @@ export function porProjeto(e: Estado): { cwd: string; projeto: string; runs: Run
     .map(([, runs]) => runs.sort((a, b) => b.inicioTs - a.inicioTs))
     .map((runs) => ({ cwd: runs[0].cwd, projeto: runs[0].projeto || projetoDe(runs[0].cwd), runs }))
     .sort((a, b) => b.runs[0].inicioTs - a.runs[0].inicioTs);
+}
+
+// Chave canonica da RAIZ de um caminho: worktree -> raiz do projeto (regra raiz()), tudo minusculo,
+// separadores uniformes ('/') e sem barra final, pra comparar "D:\x" com "d:/x" e afins.
+function chaveRaiz(p: string): string {
+  return raiz(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+// Chats (planejadores) do projeto da run: mesma RAIZ do cwd da run — a run na raiz do projeto ou em
+// qualquer worktree dele ve os chats daquele projeto. Mais recente primeiro (ordem das abas).
+export function chatsDoProjeto(planejadores: Planejador[], cwdRun: string): Planejador[] {
+  const alvo = chaveRaiz(cwdRun);
+  return planejadores.filter((p) => chaveRaiz(p.raiz) === alvo).sort((a, b) => b.ts - a.ts);
+}
+
+// Chats visiveis no painel da direita, dada a lista GLOBAL de planejadores, os chats do projeto da run
+// (chatsDoProjeto) e o selecionado. A lista NUNCA filtra pelo selecionado: clicar numa aba nao pode
+// sumir com as outras. Sem sel (ou sel invalido, que nao existe em planejadores) devolve doProjeto;
+// sel que ja' esta em doProjeto devolve doProjeto INTEIRO; sel valido fora de doProjeto (ex.: nova
+// feature recem-criada, ainda sem run no projeto) entra como extra NA FRENTE.
+export function chatsVisiveis(planejadores: Planejador[], doProjeto: Planejador[], sel: string | null): Planejador[] {
+  if (!sel) return doProjeto;
+  if (doProjeto.some((p) => p.slug === sel)) return doProjeto;
+  const extra = planejadores.find((p) => p.slug === sel);
+  return extra ? [extra, ...doProjeto] : doProjeto;
+}
+
+// Fechar uma aba de chat so' ESCONDE o planejador (o chat segue rodando no fundo): remove os slugs
+// fechados da lista, preservando a ordem dos que ficam. Slug fechado que nao esta na lista nao muda
+// nada. E' o complemento de chatsEscondidos.
+export function filtrarFechados(lista: Planejador[], fechados: string[]): Planejador[] {
+  return lista.filter((p) => !fechados.includes(p.slug));
+}
+
+// Chats escondidos QUE estao nesta lista, na ordem dela — e' o conteudo do menu "reabrir". Fechado
+// de outro projeto (fora da lista) nao entra aqui.
+export function chatsEscondidos(lista: Planejador[], fechados: string[]): Planejador[] {
+  return lista.filter((p) => fechados.includes(p.slug));
+}
+
+// Selecao depois de fechar um chat: fechou a aba ATIVA -> passa pro ULTIMO dos restantes (null se nao
+// sobrou nenhum); fechou outra (ou um slug fora da lista) -> mantem a selecao atual.
+export function selecaoAposFechar(restantes: Planejador[], fechado: string, sel: string | null): string | null {
+  if (sel === fechado) return restantes.length ? restantes[restantes.length - 1].slug : null;
+  return sel;
+}
+
+// Modo de exibicao do painel de chat: 'normal' ha visiveis; 'so-menu' quando todos foram fechados
+// (fica so' a barra com o menu de reabrir); 'oculto' quando nao ha nenhum chat (o painel some).
+export function modoPainelChat(nVisiveis: number, nEscondidos: number): "normal" | "so-menu" | "oculto" {
+  if (nVisiveis > 0) return "normal";
+  return nEscondidos > 0 ? "so-menu" : "oculto";
+}
+
+// Projetos conhecidos (datalist da "Nova feature") = raizes dos registros de planejadores + raizes
+// das runs (mesma regra raiz(): worktree conta como o projeto). O dedupe e' case-insensitive pela
+// chave canonica, mas PRESERVA a primeira forma vista (o caminho aparece legivel no formulario);
+// a ordenacao tambem e' case-insensitive.
+export function projetosConhecidos(e: Estado, planejadores: Planejador[]): string[] {
+  const porChave = new Map<string, string>(); // chave canonica -> primeira forma vista
+  const juntar = (caminho: string) => {
+    const forma = raiz(caminho);
+    if (!forma) return;
+    const k = chaveRaiz(forma);
+    if (!porChave.has(k)) porChave.set(k, forma);
+  };
+  for (const p of planejadores) juntar(p.raiz);
+  for (const r of Object.values(e.runs)) if (r.cwd) juntar(r.cwd);
+  return [...porChave.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, forma]) => forma);
+}
+
+// Formulario da "Nova feature": projeto (da lista ou colado) e feature, sem espacos nas bordas.
+export function podeCriar(projeto: string, feature: string): boolean {
+  return projeto.trim() !== "" && feature.trim() !== "";
+}
+
+// ---- anexos da "Nova feature" (CA-5) ----
+// Imagem ou documento, ate' ANEXO_MAX por pedido e ANEXO_MAX_BYTES cada. Audio/video ficam de fora:
+// o planejador nao ouve/assiste. As regras sao puras pra o componente so' refletir o veredito.
+export const ANEXO_MAX = 10;
+export const ANEXO_MAX_BYTES = 25 * 1024 * 1024; // 25MB (exatos passam)
+export const ANEXO_EXTENSOES = ["png", "jpg", "jpeg", "gif", "webp", "pdf", "txt", "md", "docx"] as const;
+export const ANEXO_LIMITES_TEXTO = "10 anexos · 25MB cada · png/jpg/jpeg/gif/webp/pdf/txt/md/docx";
+export const ANEXO_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.docx";
+
+export type Anexo = { nome: string; tamanho: number; tipo: string; dadosB64: string };
+export type AnexoEnviado = { nome: string; tipo: string; dadosB64: string };
+export type CorpoNovaFeature = {
+  projeto: string; feature: string; descricao?: string; anexos?: AnexoEnviado[];
+};
+
+// Extensao (minuscula, sem ponto) da ULTIMA parte de um caminho; "" quando nao ha extensao.
+export function extensaoAnexo(nome: string): string {
+  const base = nomeSeguroAnexo(nome).toLowerCase();
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i + 1) : "";
+}
+
+// null = pode anexar; string = motivo da recusa em PT-BR (o dialog mostra no lugar da lista).
+// nAnexos = quantos anexos ja' estao na lista (o 10o passa, o 11o nao).
+export function problemaAnexo(arquivo: { nome: string; tamanho: number }, nAnexos: number): string | null {
+  if (nAnexos >= ANEXO_MAX) return `Limite de ${ANEXO_MAX} anexos por pedido — remova algum pra adicionar outro.`;
+  const ext = extensaoAnexo(arquivo.nome);
+  if (!(ANEXO_EXTENSOES as readonly string[]).includes(ext)) {
+    const qual = ext ? `extensão .${ext}` : "sem extensão";
+    return `Tipo de arquivo não aceito (${qual}). Aceitamos imagem ou documento: ${ANEXO_EXTENSOES.join("/")}.`;
+  }
+  if (arquivo.tamanho > ANEXO_MAX_BYTES) {
+    return `Arquivo grande demais: ${tamanhoLegivel(arquivo.tamanho)} (o tamanho máximo é ${tamanhoLegivel(ANEXO_MAX_BYTES)} por arquivo).`;
+  }
+  return null;
+}
+
+// So' o nome do arquivo (basename): descarta diretorios, separadores Windows/Unix, traversal e drives.
+export function nomeSeguroAnexo(caminho: string): string {
+  const partes = caminho.split(/[\\/]+/).filter((p) => p && p !== "." && p !== "..");
+  return partes.length ? partes[partes.length - 1] : "";
+}
+
+// Tamanho legivel pras chips de anexo ("12 KB", "1,5 MB").
+export function tamanhoLegivel(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "?";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`;
+}
+
+// Corpo do POST /nova-feature: descricao e anexos sao OPCIONAIS e somem quando vazios, pra o pedido
+// simples sair EXATAMENTE { projeto, feature } (compatibilidade com o hub antigo).
+export function corpoNovaFeature(projeto: string, feature: string, descricao = "", anexos: Anexo[] = []): CorpoNovaFeature {
+  const corpo: CorpoNovaFeature = { projeto: projeto.trim(), feature: feature.trim() };
+  const d = descricao.trim();
+  if (d) corpo.descricao = d;
+  if (anexos.length) corpo.anexos = anexos.map((a) => ({ nome: a.nome, tipo: a.tipo, dadosB64: a.dadosB64 }));
+  return corpo;
 }
 
 // Linguagem do Shiki pela extensao do arquivo do diff; null = sem highlight (so cores +/-).

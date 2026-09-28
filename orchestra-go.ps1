@@ -1,10 +1,13 @@
 # Inicia (ou reabre) uma feature do orchestra com o Kimi K3 (OpenCode Go) como planejador:
 # worktree <raiz>\.claude\worktrees\<slug> a partir da main -> deps + .env* -> `opencode serve` no worktree
-# -> sessao rodando /orchestra <feature> -> registro %TEMP%\hermes\planejadores\<projeto>--<slug>.json.
-# Imprime esse registro (JSON, 1 linha) no stdout. Usado pelo $PROFILE (orchestra-go) e pelo dashboard.
+# -> sessao rodando /orchestra <feature (+ descricao + caminhos dos anexos)> -> registro
+# %TEMP%\hermes\planejadores\<projeto>--<slug>.json. Imprime esse registro (JSON, 1 linha) no stdout.
+# Usado pelo $PROFILE (orchestra-go) e pelo dashboard (que passa -Descricao/-AnexosDir quando o pedido tem).
 param(
     [Parameter(Mandatory)][string]$Projeto,
-    [Parameter(Mandatory)][string]$Feature
+    [Parameter(Mandatory)][string]$Feature,
+    [string]$Descricao,
+    [string]$AnexosDir
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\orchestra-env.ps1"
@@ -26,6 +29,8 @@ function Vivo($r) {
 }
 
 if (-not (Test-Path $Projeto)) { Falha "pasta nao existe: $Projeto" }
+if ($Descricao) { $Descricao = $Descricao.Trim() }
+if ($AnexosDir -and -not (Test-Path $AnexosDir)) { $AnexosDir = $null }
 # Raiz = worktree PRINCIPAL (funciona mesmo chamando de dentro de outro worktree).
 $comum = & git -C $Projeto rev-parse --path-format=absolute --git-common-dir 2>$null
 if ($LASTEXITCODE -or -not $comum) { Falha "nao e' um repositorio git: $Projeto" }
@@ -70,6 +75,33 @@ if (-not (Test-Path $wt)) {
     }
 }
 
+# Anexos do pedido (quando houver): copiados pro worktree e fora do git status do planejador.
+$anexosCaminhos = @()
+if ($AnexosDir) {
+    $arquivosAnexo = @(Get-ChildItem $AnexosDir -File -Force -ErrorAction SilentlyContinue)
+    if ($arquivosAnexo.Count) {
+        $destAnexos = Join-Path $wt ".claude\anexos\$slug"
+        New-Item -ItemType Directory -Force $destAnexos | Out-Null
+        # '.claude/anexos/' fora do status da main, mesmo esquema do '.claude/worktrees/'
+        $exclude = Join-Path $comum 'info\exclude'
+        if (-not (Select-String -Path $exclude -SimpleMatch '.claude/anexos/' -Quiet -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Force (Split-Path $exclude) | Out-Null
+            Add-Content $exclude '.claude/anexos/'
+        }
+        foreach ($f in $arquivosAnexo) {
+            Copy-Item $f.FullName -Destination $destAnexos -Force
+            $anexosCaminhos += (Join-Path $destAnexos $f.Name)
+        }
+    }
+}
+
+# Texto disparado no /orchestra: a feature e' o titulo; descricao e caminhos dos anexos entram depois (quando houver).
+$texto = $Feature
+if ($Descricao) { $texto += "`n`n$Descricao" }
+if ($anexosCaminhos.Count) {
+    $texto += "`n`nAnexos enviados (leia os arquivos):`n" + (($anexosCaminhos | ForEach-Object { "- $_" }) -join "`n")
+}
+
 # Sobe o servidor do OpenCode no worktree (exe direto: o shim .ps1/.cmd nao sobrevive ao Start-Process hidden).
 $exe = Join-Path (Split-Path (Get-Command opencode.cmd).Source) 'node_modules\opencode-ai\bin\opencode.exe'
 if (-not (Test-Path $exe)) { Falha "opencode nao encontrado ($exe). Rode: npm i -g opencode-ai" }
@@ -90,7 +122,7 @@ if (-not $sessao) {
     $sessao = Invoke-RestMethod "$baseUrl/session?directory=$dir" -Method Post -ContentType 'application/json' -TimeoutSec 10 `
         -Body (@{ title = $Feature } | ConvertTo-Json -Compress)
     # POST /command so volta quando o Kimi termina o turno; a execucao segue no servidor mesmo desconectando.
-    $corpo = @{ command = 'orchestra'; arguments = $Feature; model = $MODELO } | ConvertTo-Json -Compress
+    $corpo = @{ command = 'orchestra'; arguments = $texto; model = $MODELO } | ConvertTo-Json -Compress
     try { Invoke-RestMethod "$baseUrl/session/$($sessao.id)/command?directory=$dir" -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 3 -Body ([Text.Encoding]::UTF8.GetBytes($corpo)) | Out-Null } catch {}
 }
 # URL da UI web numa sessao: /<base64url(pasta da sessao)>/session/<id> (mesma regra do app do OpenCode)
