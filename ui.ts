@@ -14,6 +14,11 @@ const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
 export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
+// Pasta onde os anexos de POST /nova-feature sao gravados (uma subpasta por pedido). Injetavel por env.
+export const ANEXOS_DIR = process.env.HERMES_ANEXOS_DIR || path.join(os.tmpdir(), "hermes", "anexos");
+// POST /nova-feature carrega anexos em base64 (inflam ~33%): teto proprio bem maior que o padrao de 64KB.
+// Injetavel em iniciarUI (opcao limiteBodyNovaFeature) pra testar sem trafegar centenas de MB.
+export const LIMITE_BODY_NOVA_FEATURE = 350 * 1024 * 1024; // 350MB
 const SWARM_ID = randomUUID().slice(0, 8);                        // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000;                             // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
@@ -36,6 +41,13 @@ export type NovaFeature = {
   url?: string;
   erro?: string;
 };
+
+// Anexo (imagem/documento) aceito em POST /nova-feature: nome ja saneado, tipo declarado e base64 valido.
+export type AnexoNovaFeature = { nome: string; tipo: string; dadosB64: string };
+// Extras repassados ao executor SO' quando o pedido traz descricao e/ou anexos (compat: ausentes quando nao ha).
+export type ExtrasNovaFeature = { descricao?: string; anexosDir?: string };
+// Resultado da validacao: sempre { projeto, feature }; descricao/anexos so' aparecem quando enviados.
+export type NovaFeatureValidada = { projeto: string; feature: string; descricao?: string; anexos?: AnexoNovaFeature[] };
 
 export type Evento = { ts?: number } & (
   | { t: "run"; feature: string; cwd: string; total: number; plano?: SlicePlano[]; cmds?: string[]; gate?: string[] }
@@ -218,8 +230,9 @@ let reassumir: NodeJS.Timeout | null = null; // quem ficou sem porta tenta de no
 let planejadores: Planejador[] = [];         // ultima lista empurrada via SSE
 let planejadoresAssinatura = "";             // muda -> avisa os clientes
 let onCeder: (() => void) | null = null;     // chamado no fim do ceder() (modo --ui encerra o processo)
-let executarNovaFeature: (projeto: string, feature: string) => Promise<{ url: string }> = executarNovaFeatureReal;
+let executarNovaFeature: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }> = executarNovaFeatureReal;
 let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
+let limiteBodyNovaFeature = LIMITE_BODY_NOVA_FEATURE; // teto proprio da rota (injetavel em iniciarUI)
 
 function sse(c: Cliente, dado: unknown): void {
   try { c.res.write(`data: ${JSON.stringify(dado)}\n\n`); } catch {}
@@ -315,30 +328,95 @@ function acaoValida(req: http.IncomingMessage): boolean {
   return req.method === "POST" && req.headers["x-hermes"] === "1";
 }
 
-// Valida o corpo de um pedido de criacao de feature (projeto + feature, sem espacos nas bordas).
-export function validarNovaFeature(body: unknown): { projeto: string; feature: string } | null {
+// Extensoes aceitas em anexos: apenas IMAGEM e DOCUMENTO (video/audio/executavel ficam de fora).
+const EXTENSOES_PERMITIDAS = new Set([
+  // imagens
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tif", "tiff", "avif", "heic", "heif",
+  // documentos
+  "pdf", "txt", "md", "markdown", "csv", "tsv", "json", "xml", "yaml", "yml", "log",
+  "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "epub",
+]);
+export const MAX_ANEXOS = 10;
+export const MAX_ANEXO_BYTES = 25 * 1024 * 1024; // 25MB DECODIFICADOS por anexo
+
+// Sanitiza o nome do anexo pelo basename (Windows e POSIX): traversal "..\\..\\x.png" vira "x.png".
+// Nome que some na sanacao (vazio, "." ou "..") -> null (pedido inteiro rejeitado).
+function sanearNomeAnexo(nome: string): string | null {
+  const base = nome.replace(/\\/g, "/").split("/").pop() ?? "";
+  const limpo = base.trim();
+  if (!limpo || limpo === "." || limpo === "..") return null;
+  return limpo;
+}
+
+// Base64 estrito: alfabeto valido, comprimento multiplo de 4 e padding correto (Buffer.from e' permissivo).
+function b64Valido(s: string): boolean {
+  if (!s || s.length % 4 !== 0) return false;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s)) return false;
+  return true;
+}
+
+// Valida um anexo cru -> { nome saneado, tipo, dadosB64 } ou null (extensao proibida/ b64 ruim / grande / tipo errado).
+function validarAnexo(a: unknown): AnexoNovaFeature | null {
+  if (!a || typeof a !== "object") return null;
+  const o = a as Record<string, unknown>;
+  if (typeof o.nome !== "string" || typeof o.dadosB64 !== "string") return null;
+  const nome = sanearNomeAnexo(o.nome);
+  if (!nome) return null;
+  const ext = path.extname(nome).slice(1).toLowerCase();
+  if (!ext || !EXTENSOES_PERMITIDAS.has(ext)) return null;
+  if (!b64Valido(o.dadosB64)) return null;
+  if (Buffer.byteLength(o.dadosB64, "base64") > MAX_ANEXO_BYTES) return null;
+  return { nome, tipo: typeof o.tipo === "string" ? o.tipo : "", dadosB64: o.dadosB64 };
+}
+
+// Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
+// EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
+// branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
+export function validarNovaFeature(body: unknown): NovaFeatureValidada | null {
   if (!body || typeof body !== "object") return null;
   const j = body as Record<string, unknown>;
   const projeto = typeof j.projeto === "string" ? j.projeto.trim() : "";
   const feature = typeof j.feature === "string" ? j.feature.trim() : "";
   if (!projeto || !feature) return null;
-  return { projeto, feature };
+  const out: NovaFeatureValidada = { projeto, feature };
+  if (j.descricao !== undefined) {
+    if (typeof j.descricao !== "string") return null; // tipo errado -> null
+    const d = j.descricao.trim();
+    if (d) out.descricao = d; // em branco some do resultado
+  }
+  if (j.anexos !== undefined) {
+    if (!Array.isArray(j.anexos)) return null; // nao-array -> null
+    if (j.anexos.length > MAX_ANEXOS) return null;
+    const anexos: AnexoNovaFeature[] = [];
+    for (const a of j.anexos) {
+      const v = validarAnexo(a);
+      if (!v) return null; // qualquer anexo invalido derruba o pedido
+      anexos.push(v);
+    }
+    if (anexos.length) out.anexos = anexos; // lista vazia some
+  }
+  return out;
 }
 
 function broadcast(dado: unknown): void { for (const c of clientes) sse(c, dado); }
 
 // Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
 const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
-const LIMITE_BODY = 64 * 1024; // 64KB: um POST /nova-feature cabe folgado; acima disso e' abuso -> 400
+const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
 
 // Executor real: roda orchestra-go.ps1 via pwsh e interpreta a ULTIMA linha do stdout como o JSON do
 // registro (que carrega a url do chat). pwsh ausente (ENOENT) ou exit != 0 -> rejeita com o stderr.
-function executarNovaFeatureReal(projeto: string, feature: string): Promise<{ url: string }> {
+// Descricao/anexos do pedido viram -Descricao/-AnexosDir (so' quando existem).
+function executarNovaFeatureReal(projeto: string, feature: string, extras?: ExtrasNovaFeature): Promise<{ url: string }> {
   return new Promise((ok, falha) => {
     const script = path.join(RAIZ_BRIDGE, "orchestra-go.ps1");
+    // Args base de sempre; -Descricao/-AnexosDir SO' quando existirem (sem eles a chamada fica como hoje).
+    const args = ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature];
+    if (extras?.descricao) args.push("-Descricao", extras.descricao);
+    if (extras?.anexosDir) args.push("-AnexosDir", extras.anexosDir);
     let p: ReturnType<typeof spawn>;
     try {
-      p = spawn("pwsh", ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature], { windowsHide: true });
+      p = spawn("pwsh", args, { windowsHide: true, env: process.env });
     } catch (e: any) { falha(new Error(String(e?.message ?? e))); return; }
     let saida = "";
     let err = "";
@@ -408,7 +486,7 @@ function criarServidor(): http.Server {
       req.on("data", (d: Buffer) => {
         if (cortou) return;
         corpo += d.toString();
-        if (Buffer.byteLength(corpo) > LIMITE_BODY) { cortou = true; res.writeHead(400); res.end(); }
+        if (Buffer.byteLength(corpo) > limiteBodyNovaFeature) { cortou = true; res.writeHead(400); res.end(); }
       });
       req.on("end", () => {
         if (cortou) return;
@@ -419,9 +497,23 @@ function criarServidor(): http.Server {
         if (novaFeatureEmAndamento) { res.writeHead(409); res.end(); return; }
         novaFeatureEmAndamento = true;
         const exec = executarNovaFeature;
+        // Extras SO' quando o pedido tem descricao e/ou anexos (compat: sem campos novos, sem extras).
+        let extras: ExtrasNovaFeature | undefined;
+        if (v.descricao || v.anexos?.length) {
+          extras = {};
+          if (v.descricao) extras.descricao = v.descricao;
+          if (v.anexos?.length) {
+            const dir = path.join(ANEXOS_DIR, randomUUID()); // pasta UNICA por pedido
+            try {
+              fs.mkdirSync(dir, { recursive: true });
+              for (const a of v.anexos) fs.writeFileSync(path.join(dir, a.nome), Buffer.from(a.dadosB64, "base64"));
+              extras.anexosDir = dir;
+            } catch {}
+          }
+        }
         res.writeHead(202); res.end(); // dispara em background; o andamento vai por SSE
         broadcast({ novaFeature: { status: "rodando", projeto: v.projeto, feature: v.feature } } satisfies { novaFeature: NovaFeature });
-        exec(v.projeto, v.feature)
+        exec(v.projeto, v.feature, extras)
           .then(({ url: u }) => broadcast({ novaFeature: { status: "ok", projeto: v.projeto, feature: v.feature, url: u } satisfies NovaFeature }))
           .catch((e: any) => broadcast({ novaFeature: { status: "erro", projeto: v.projeto, feature: v.feature, erro: String(e?.message ?? e) } satisfies NovaFeature }))
           .finally(() => { novaFeatureEmAndamento = false; });
@@ -473,13 +565,15 @@ function escutar(): Promise<boolean> {
 // No modo --ui (dashboard-only), onCeder encerra o processo ao ceder a porta pra uma UI mais nova.
 export type OpcoesUI = {
   onCeder?: () => void;
-  executarNovaFeature?: (projeto: string, feature: string) => Promise<{ url: string }>;
+  executarNovaFeature?: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }>;
+  limiteBodyNovaFeature?: number; // teto proprio do corpo de /nova-feature (default 350MB)
 };
 
 export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   if (servidor) return;
   onCeder = opts.onCeder ?? null;
   executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
+  limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
   if (!(await escutar())) await tentarAssumir();
   // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
   if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar(); }, 10_000);

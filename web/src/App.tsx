@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
-import { Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,13 +13,16 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
 import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
-import { chatsDoProjeto, chatsVisiveis, porProjeto, rodando } from "@/lib/estado";
+import {
+  chatsDoProjeto, chatsEscondidos, chatsVisiveis, filtrarFechados, modoPainelChat, porProjeto, rodando, selecaoAposFechar,
+} from "@/lib/estado";
 
 export default function App() {
   const { estado, conectado } = useRuns();
   const agora = useAgora();
   const [runId, setRunId] = useLocal<string | null>("run", null);
   const [fechados, setFechados] = useLocal<string[]>("fechados", []);
+  const [chatsFechados, setChatsFechados] = useLocal<string[]>("chats-fechados", []);
   const [sliceSel, setSliceSel] = useState<number | null>(null);
   const [abasPorRun, setAbasPorRun] = useState<Record<string, { abas: string[]; ativa: string }>>({});
   const [chatSel, setChatSel] = useState<string | null>(null);
@@ -49,10 +52,27 @@ export default function App() {
 
   // Chats (planejadores) do projeto da run + o selecionado (pode vir de fora do projeto: nova feature).
   const chatsProjeto = useMemo(() => chatsDoProjeto(estado.planejadores, r?.cwd ?? ""), [estado.planejadores, r?.cwd]);
-  const chats = useMemo(
+  const chatsBase = useMemo(
     () => chatsVisiveis(estado.planejadores, chatsProjeto, chatSel),
     [estado.planejadores, chatsProjeto, chatSel],
   );
+  // Abas de chat visiveis = visiveis do projeto (com o extra selecionado) MENOS os fechados. Fechar so'
+  // esconde (o planejador segue rodando); os fechados destes chats sao o conteudo do menu "reabrir".
+  const chats = useMemo(() => filtrarFechados(chatsBase, chatsFechados), [chatsBase, chatsFechados]);
+  const chatsOcultos = useMemo(() => chatsEscondidos(chatsBase, chatsFechados), [chatsBase, chatsFechados]);
+  const modoChat = modoPainelChat(chats.length, chatsOcultos.length);
+
+  // Fechar uma aba: esconde o slug e, se era a ativa, passa a selecao pro ultimo visivel restante.
+  const fecharChat = (slug: string) => {
+    setChatSel(selecaoAposFechar(chats.filter((c) => c.slug !== slug), slug, chatSel));
+    if (!chatsFechados.includes(slug)) setChatsFechados([...chatsFechados, slug]);
+  };
+
+  // Reabrir pelo menu: tira o slug dos fechados (volta a ser aba) e ja' o seleciona.
+  const reabrirChat = (slug: string) => {
+    setChatsFechados(chatsFechados.filter((s) => s !== slug));
+    setChatSel(slug);
+  };
 
   // Trocar de run limpa a selecao de chat (os chats sao do projeto da run).
   useEffect(() => { setChatSel(null); }, [r?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -80,25 +100,15 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lateral, inferior]);
 
-  useEffect(() => { document.title = r ? `${r.feature} · Hermes` : "Hermes Orchestra"; }, [r?.feature]); // eslint-disable-line react-hooks/exhaustive-deps
-
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col">
-        {/* barra de titulo com o "command center" */}
-        <header className="relative flex h-10 shrink-0 items-center border-b bg-sidebar px-3">
+        {/* barra de titulo da aplicacao (a paleta fica em Ctrl+K/Ctrl+P e no botao da StatusBar) */}
+        <header className="flex h-10 shrink-0 items-center border-b bg-sidebar px-3">
           <span className="flex items-center gap-2 text-[13px] font-semibold tracking-tight">
             <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">H</span>
             Hermes <span className="font-normal text-muted-foreground">Orchestra</span>
           </span>
-          <button
-            onClick={() => setPaleta(true)}
-            className="absolute left-1/2 flex h-6.5 w-[min(34rem,46vw)] -translate-x-1/2 items-center gap-2 rounded-md border bg-background/60 px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
-          >
-            <Search className="size-3.5" />
-            <span className="truncate">{r ? `${r.projeto} › ${r.feature}` : "Ir para run, slice ou arquivo"}</span>
-            <kbd className="ml-auto rounded border px-1 font-mono text-[10px]">Ctrl K</kbd>
-          </button>
           {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
           <Button
             size="sm" variant="outline" className="ml-auto h-6.5 gap-1.5 px-2.5 text-xs"
@@ -142,11 +152,14 @@ export default function App() {
                 </div>
               )}
             </ResizablePanel>
-            {chats.length > 0 && (
+            {modoChat !== "oculto" && (
               <>
                 <ResizableHandle />
                 <ResizablePanel id="chat" panelRef={chatRef} defaultSize="34" minSize={240} collapsible collapsedSize={0}>
-                  <ChatPanel chats={chats} ativo={chatSel ?? chats[0].slug} onAtivo={setChatSel} />
+                  <ChatPanel
+                    chats={chats} escondidos={chatsOcultos} ativo={chatSel ?? chats[0]?.slug ?? ""}
+                    onAtivo={setChatSel} onFechar={fecharChat} onReabrir={reabrirChat}
+                  />
                 </ResizablePanel>
               </>
             )}
