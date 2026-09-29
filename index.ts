@@ -575,8 +575,10 @@ server.registerTool(
 );
 
 if (process.argv.includes("--ui")) {
-  // Modo dashboard-only: NAO conecta o MCP stdio. Ceder a porta pra uma UI mais nova encerra o processo.
-  await iniciarUI({ onCeder: () => process.exit(0) });
+  // Modo dashboard-only: NAO conecta o MCP stdio. Ceder a porta encerra o processo.
+  // sempreAssumir: abrir o app SEMPRE derruba o node --ui anterior (mesmo com dist igual) e passa a
+  // servir a porta com o codigo mais atualizado — evita o dashboard caindo/desatualizado no looping.
+  await iniciarUI({ onCeder: () => process.exit(0), sempreAssumir: true });
 } else {
   await server.connect(new StdioServerTransport());
   void iniciarUI();
