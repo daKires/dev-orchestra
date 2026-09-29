@@ -1,4 +1,4 @@
-# Inicia (ou reabre) uma feature do orchestra com o Kimi K3 (OpenCode Go) como planejador:
+# Inicia (ou reabre) uma feature do orchestra com o GLM 5.2 (OpenCode Go) como planejador:
 # worktree <raiz>\.claude\worktrees\<slug> a partir da main -> deps + .env* -> `opencode serve` no worktree
 # -> sessao rodando /orchestra <feature (+ descricao + caminhos dos anexos)> -> registro
 # %TEMP%\hermes\planejadores\<projeto>--<slug>.json. Imprime esse registro (JSON, 1 linha) no stdout.
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\orchestra-env.ps1"
 if (-not $OrchestraEnvOk) { exit 1 }
-$MODELO = 'opencode-go/kimi-k3'
+$MODELO = 'opencode-go/glm-5.2'
 
 function Falha([string]$msg) { [Console]::Error.WriteLine("orchestra-go: $msg"); exit 1 }
 function Rodar-Git([string[]]$a) { $o = & git -C $script:raiz @a 2>&1; if ($LASTEXITCODE) { Falha "git $($a -join ' ') falhou: $o" }; $o }
@@ -121,7 +121,7 @@ $sessao = @(Invoke-RestMethod "$baseUrl/session?directory=$dir&limit=1" -Timeout
 if (-not $sessao) {
     $sessao = Invoke-RestMethod "$baseUrl/session?directory=$dir" -Method Post -ContentType 'application/json' -TimeoutSec 10 `
         -Body (@{ title = $Feature } | ConvertTo-Json -Compress)
-    # POST /command so volta quando o Kimi termina o turno; a execucao segue no servidor mesmo desconectando.
+    # POST /command so volta quando o GLM termina o turno; a execucao segue no servidor mesmo desconectando.
     $corpo = @{ command = 'orchestra'; arguments = $texto; model = $MODELO } | ConvertTo-Json -Compress
     try { Invoke-RestMethod "$baseUrl/session/$($sessao.id)/command?directory=$dir" -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 3 -Body ([Text.Encoding]::UTF8.GetBytes($corpo)) | Out-Null } catch {}
 }
