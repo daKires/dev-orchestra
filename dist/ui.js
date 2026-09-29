@@ -232,6 +232,7 @@ let reassumir = null; // quem ficou sem porta tenta de novo
 let planejadores = []; // ultima lista empurrada via SSE
 let planejadoresAssinatura = ""; // muda -> avisa os clientes
 let onCeder = null; // chamado no fim do ceder() (modo --ui encerra o processo)
+let sempreAssumir = false; // modo --ui: assume a porta de QUALQUER hub Hermes (sem comparar versao)
 let executarNovaFeature = executarNovaFeatureReal;
 let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
 let limiteBodyNovaFeature = LIMITE_BODY_NOVA_FEATURE; // teto proprio da rota (injetavel em iniciarUI)
@@ -644,20 +645,30 @@ function criarServidor() {
         servirEstatico(url, res);
     });
 }
-// Em EADDRINUSE: se o hub atual tem UI mais velha (e fala /versao), pede pra ele ceder e assume.
-// Hub de versao antiga (sem /versao) nao entende o pedido -> esta sessao so escreve seu JSONL.
+// Em EADDRINUSE: se a porta fala /versao (e' um hub Hermes), pede pra ele ceder e assume a porta.
+// Com sempreAssumir (modo --ui, o app de verdade) o pedido e' INCONDICIONAL: abrir o app derruba o node
+// do dashboard anterior e o novo passa a servir o dist mais atualizado, mesmo com versoes empatadas
+// (mesmo dist) ou o hub "mais novo". Sem sempreAssumir (modo stdio) mantem a regra antiga: so' assume se
+// a nossa UI for MAIS NOVA. Processo ALHEIO na porta (nao responde /versao / hub quebrado) nunca e' tocado.
 async function tentarAssumir() {
     try {
         const r = await fetch(`http://127.0.0.1:${PORT}/versao`, { signal: AbortSignal.timeout(1500) });
-        const j = await r.json();
-        if (!(typeof j?.versao === "number" && j.versao < versaoUI()))
-            return;
+        let j = null;
+        try {
+            j = await r.json();
+        }
+        catch { } // corpo nao-JSON (processo alheio) -> j fica null
+        const ehHub = r.ok && typeof j?.versao === "number";
+        if (!ehHub)
+            return; // nao e' o Hermes: nunca interferir
+        if (!sempreAssumir && !(j.versao < versaoUI()))
+            return; // stdio: so' cede pra uma UI mais nova
         await fetch(`http://127.0.0.1:${PORT}/ceder`, { method: "POST", headers: { "X-Hermes": "1" }, signal: AbortSignal.timeout(1500) });
     }
     catch {
         return;
     }
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
         await new Promise((ok) => setTimeout(ok, 500));
         if (await escutar())
             return;
@@ -690,6 +701,7 @@ export async function iniciarUI(opts = {}) {
     if (servidor)
         return;
     onCeder = opts.onCeder ?? null;
+    sempreAssumir = opts.sempreAssumir ?? false;
     executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
     limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
     if (!(await escutar()))
@@ -731,4 +743,5 @@ export function pararUI() {
     servidor?.close();
     servidor = null;
     onCeder = null;
+    sempreAssumir = false;
 }
