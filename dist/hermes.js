@@ -56,21 +56,108 @@ export async function resolverComandos(cwd, override) {
     }
     const envCmds = (process.env.HERMES_CMDS || "").split(",").map((s) => s.trim()).filter(Boolean);
     const envGate = (process.env.HERMES_GATE || "").split(",").map((s) => s.trim()).filter(Boolean);
-    return resolverDeScripts(scripts, override, envCmds, envGate);
+    return { ...resolverDeScripts(scripts, override, envCmds, envGate), scripts: scripts ?? {} };
 }
-// O executavel (1o token, aceita "com espacos") existe? Caminho -> fs.access; nome solto -> where/which. Nunca lanca.
-export async function existeExecutavel(cmd, cwd) {
-    const m = cmd.trim().match(/^"([^"]+)"|^(\S+)/);
-    const exe = m?.[1] ?? m?.[2] ?? "";
-    if (!exe)
-        return false;
-    if (/[\\/]/.test(exe))
-        return fs.access(path.resolve(cwd, exe)).then(() => true, () => false);
-    return pexec(process.platform === "win32" ? "where" : "which", [exe], { windowsHide: true }).then(() => true, () => false);
-}
-// Saida de comando que falhou por executavel inexistente (ambiente), nao por erro de codigo. Pura.
+// Saida de comando que falhou por AMBIENTE (executavel, node/binding, pacote, servico), nao por codigo. Pura.
+// Import relativo ausente ('./x') NAO e' ambiente: e' o esperado de um teste da spec antes da implementacao.
 export function ehFalhaAmbiente(saida) {
-    return /reconhecido|not recognized|command not found|ENOENT/i.test(saida);
+    return /reconhecido|not recognized|command not found|ENOENT|Cannot find native binding|Unsupported engine|requires Node|Command "[^"]+" not found|Cannot find (module|package) ['"][^.'"]|ECONNREFUSED|Can't reach database server/i.test(saida);
+}
+// Comando que a allowlist/gate NAO aceita (motivo) ou null. `exec` do pnpm/npm imprime 'Command "x" not
+// found' ate com teste falhando (falso positivo de ambiente); migrate/seed/... muda estado fora do git, que
+// o REVERTER nao desfaz. Olha o texto e o corpo do script chamado; args depois de ' -- ' (arquivos) ficam de fora.
+// ponytail: so os scripts do package.json da raiz; `--filter pkg` nao le o package.json do pacote.
+export function recusaComando(cmd, scripts = {}) {
+    const cabeca = cmd.split(" -- ")[0];
+    if (/\b(pnpm|npm|yarn)(\.cmd)?\b.*\sexec\b/i.test(cabeca))
+        return "usa `exec` (imprime 'Command not found' ate com teste falhando); use o script ou o bin direto";
+    const efeito = /\b(migrate|db[:\s]push|seed|db[:\s]reset|migrate[:\s]reset|drop)\b/i;
+    for (const alvo of [cabeca, ...cabeca.split(/\s+/).map((t) => scripts[t]).filter(Boolean)]) {
+        const m = alvo.split(" -- ")[0].match(efeito);
+        if (m)
+            return `efeito fora do git (${m[1]}): o planejador aplica depois da revisao, nao o swarm`;
+    }
+    return null;
+}
+// Roda um comando no shell do bridge (o mesmo dos agentes e do gate). Nunca lanca, exceto cancelamento.
+export async function rodarShell(cmd, cwd, signal, timeout = CMD_TIMEOUT) {
+    try {
+        const { stdout, stderr } = await pshell(cmd, { cwd, windowsHide: true, timeout, maxBuffer: 10 * 1024 * 1024, signal });
+        return { code: 0, saida: String(stdout + stderr).slice(-4000), timeout: false };
+    }
+    catch (e) {
+        if (signal?.aborted)
+            throw new CanceladoError();
+        const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
+        return { code: e?.code ?? "?", saida, timeout: !!e?.killed };
+    }
+}
+// Roda allowlist + gate NA BASELINE pelo shell do bridge, antes de gastar 1 token. Falha de teste/typecheck
+// e' esperada (spec sem implementacao); ambiente (padrao/timeout) ou comando recusado = nao ok.
+export async function preflight(cwd, cmds, gateCmds, scripts, signal, timeout = CMD_TIMEOUT) {
+    const unicos = [...new Set([...cmds, ...gateCmds])];
+    const itens = [];
+    for (const cmd of unicos) {
+        const motivo = recusaComando(cmd, scripts);
+        if (motivo)
+            itens.push({ cmd, classe: "recusado", motivo, saida: "", ms: 0 });
+    }
+    if (itens.length)
+        return { ok: false, itens }; // recusa nao executa nada (migrate nao pode rodar nem aqui)
+    for (const cmd of unicos) {
+        const t0 = Date.now();
+        const r = await rodarShell(cmd, cwd, signal, timeout);
+        const ms = Date.now() - t0;
+        const classe = r.code === 0 ? "ok" : r.timeout || ehFalhaAmbiente(r.saida) ? "ambiente" : "esperada";
+        itens.push({ cmd, classe, motivo: r.timeout ? `timeout (${timeout}ms)` : r.code === 0 ? undefined : "exit " + r.code, saida: r.saida, ms });
+    }
+    return { ok: itens.every((i) => i.classe === "ok" || i.classe === "esperada"), itens };
+}
+// Texto da tabela do doctor/painel. Saida so pra quem nao passou (cauda curta).
+export function textoPreflight(itens) {
+    const rot = { ok: "[ok]       ", esperada: "[esperada] ", ambiente: "[AMBIENTE] ", recusado: "[RECUSADO] " };
+    return itens.map((i) => {
+        let l = `${rot[i.classe]} ${i.cmd}  ${(i.ms / 1000).toFixed(1)}s${i.motivo ? "  " + i.motivo : ""}`;
+        if (i.classe !== "ok" && i.saida)
+            l += "\n" + i.saida.trim().slice(-1500).split("\n").map((s) => "      | " + s).join("\n");
+        return l;
+    }).join("\n");
+}
+// Falha de ambiente no meio da run: sobe ate o construir/rodar, que param tudo (ENV-FAILED).
+export class AmbienteError extends Error {
+    cmd;
+    saida;
+    tokensIn = 0;
+    tokensOut = 0;
+    constructor(cmd, saida) {
+        super("falha de ambiente: " + cmd);
+        this.cmd = cmd;
+        this.saida = saida;
+    }
+}
+// Guarda de escrita (motivo ou null): o agente nao "conserta" ambiente criando shim, mexendo em
+// node_modules, gerado/ignorado ou migration. Caminho listado em arquivos_alvo passa (exceto node_modules). Pura.
+export function escritaProibida(rel, alvos, ignorado, exes) {
+    const p = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (/(^|\/)node_modules\//i.test(p))
+        return "node_modules nao se edita";
+    if (alvos.some((a) => a.replace(/\\/g, "/").replace(/^\.\//, "") === p))
+        return null;
+    const nome = p.split("/").pop() || p;
+    if (/\.(cmd|bat|ps1|exe)$/i.test(nome) || (!nome.includes(".") && exes.has(nome.toLowerCase())))
+        return "parece shim de executavel; falha de ambiente nao se conserta pelo codigo";
+    if (/(^|\/)migrations\//i.test(p))
+        return "migration e' do planejador, nao do swarm";
+    if (ignorado)
+        return "arquivo ignorado pelo git (gerado/build)";
+    return null;
+}
+// Nome do executavel (1o token, sem pasta e sem extensao) de cada comando: alimenta a guarda de shim.
+export function exesDe(cmds) {
+    return new Set(cmds.map((c) => {
+        const m = c.trim().match(/^"([^"]+)"|^(\S+)/);
+        return (m?.[1] ?? m?.[2] ?? "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "").toLowerCase();
+    }).filter(Boolean));
 }
 async function git(cwd, args) {
     const { stdout } = await pexec("git", args, { cwd, windowsHide: true });
@@ -336,6 +423,12 @@ export async function execFerramenta(ctx, nome, input) {
                 tool(rel, false, "arquivo de teste (imutavel)");
                 return "RECUSADO (teste imutavel): altere o codigo, nao o teste";
             }
+            const ignorado = await gitOk(base, ["check-ignore", "-q", "--", rel]);
+            const proibido = escritaProibida(rel, ctx.alvos, ignorado, ctx.exes);
+            if (proibido) {
+                tool(rel, false, proibido);
+                return `RECUSADO (fora do que o swarm pode escrever): ${proibido}`;
+            }
             const motivo = atual ? destrutivo(rel, atual, conteudo) : (conteudo.trim() ? null : "saida vazia");
             if (motivo) {
                 tool(rel, false, motivo);
@@ -356,33 +449,26 @@ export async function execFerramenta(ctx, nome, input) {
                 return `ERRO: comando nao permitido. Allowlist: ${ctx.cmds.join(" | ") || "(vazia)"}`;
             }
             emit({ t: "comando", slice: sliceIdx, cmd, status: "rodando" }); // UI mostra "rodando <cmd> ha Ns"
-            try {
-                const { stdout, stderr } = await pshell(cmd, { cwd: base, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024, signal: ctx.signal });
-                ctx.comandos.push(cmd);
-                ctx.ultimaVerificacaoOk = true;
-                tool(cmd, true);
-                return `exit 0\n${String(stdout + stderr).slice(-4000)}`;
+            const { code, saida } = await rodarShell(cmd, base, ctx.signal);
+            const ok = code === 0;
+            ctx.comandos.push(ok ? cmd : cmd + " (exit " + code + ")");
+            ctx.ultimaVerificacaoOk = ok;
+            emit({ t: "tool", slice: sliceIdx, nome, alvo: cmd, ok, resumo: ok ? undefined : "exit " + code, saida });
+            if (ok)
+                return `exit 0\n${saida}`;
+            // ambiente nao se conserta editando codigo: para a run (ENV-FAILED) em vez de deixar o agente improvisar
+            if (ehFalhaAmbiente(saida)) {
+                ctx.falhasAmbiente++;
+                throw new AmbienteError(cmd, saida);
             }
-            catch (e) {
-                if (ctx.signal?.aborted)
-                    throw new CanceladoError();
-                ctx.ultimaVerificacaoOk = false;
-                ctx.comandos.push(cmd + " (exit " + (e?.code ?? "?") + ")");
-                const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
-                // executavel inexistente e' falha de ambiente, nao conta como iteracao ate verde
-                if (ehFalhaAmbiente(saida))
-                    ctx.falhasAmbiente++;
-                else
-                    ctx.falhasCmd++;
-                tool(cmd, false, "exit " + (e?.code ?? "?"));
-                return `exit ${e?.code ?? "?"}\n${saida}`;
-            }
+            ctx.falhasCmd++;
+            return `exit ${code}\n${saida}`;
         }
         tool(nome, false, "ferramenta desconhecida");
         return `ERRO: ferramenta desconhecida: ${nome}`;
     }
     catch (e) {
-        if (e instanceof CanceladoError)
+        if (e instanceof CanceladoError || e instanceof AmbienteError)
             throw e;
         tool(nome, false, String(e?.message ?? e));
         return "ERRO: " + (e?.message ?? e);
@@ -403,6 +489,7 @@ export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = men
         (cmds.length ? `Comandos de verificacao permitidos: ${cmds.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
     const ctx = {
         base, escritos: new Set(), comandos: [], cmds, emit, sliceIdx,
+        alvos: t.arquivos_alvo, exes: exesDe(cmds),
         falhasCmd: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0, tocouNoTeste: 0,
         ultimaVerificacaoOk: null, signal,
     };
@@ -448,6 +535,11 @@ export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = men
     catch (e) {
         if (e instanceof CanceladoError || signal?.aborted)
             throw new CanceladoError();
+        if (e instanceof AmbienteError) {
+            e.tokensIn = ctx.tokensIn;
+            e.tokensOut = ctx.tokensOut;
+            throw e;
+        } // custo da slice nao some
         return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
     }
 }
@@ -476,7 +568,17 @@ export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn =
         try {
             r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal);
         }
-        catch {
+        catch (e) {
+            if (e instanceof AmbienteError) {
+                const ms = Date.now() - inicio;
+                emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo: "falha de ambiente: " + e.cmd, ms });
+                emitMetrica({
+                    t: "metrica", slice: sliceIdx, iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, falhasAmbiente: 1,
+                    tokensIn: e.tokensIn, tokensOut: e.tokensOut, custoUSD: custoUSD(e.tokensIn, e.tokensOut), ms,
+                });
+                pular(idx + 1, "falha de ambiente");
+                return { escritos, rejeitados: [...rejeitados, `${t.tarefa} (falha de ambiente: ${e.cmd})`], resultados, cancelado: false, ambiente: e };
+            }
             // ponytail: tokens da slice cancelada nao entram na metrica; cancelar e' raro
             emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "incompleta", motivo: "cancelado", ms: Date.now() - inicio });
             pular(idx + 1, "run cancelada");
@@ -518,17 +620,16 @@ export async function diffStaged(cwd) {
 export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
     for (const cmd of cmds) {
         emit({ t: "gate", cmd, status: "rodando", tentativa: tentativa || undefined });
-        try {
-            await pshell(cmd, { cwd, windowsHide: true, timeout: CMD_TIMEOUT, maxBuffer: 10 * 1024 * 1024, signal });
-            emit({ t: "gate", cmd, status: "ok", tentativa: tentativa || undefined });
+        // ponytail: cancelamento no gate vira falha comum (como antes); o rodar ja checa signal.aborted
+        const r = await rodarShell(cmd, cwd, signal).catch(() => ({ code: "cancelado", saida: "cancelado", timeout: false }));
+        if (r.code === 0) {
+            emit({ t: "gate", cmd, status: "ok", tentativa: tentativa || undefined, saida: r.saida });
+            continue;
         }
-        catch (e) {
-            const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
-            emit({ t: "gate", cmd, status: "falha", tentativa: tentativa || undefined, saida });
-            return { ok: false, cmd, saida, rodou: true };
-        }
+        emit({ t: "gate", cmd, status: "falha", tentativa: tentativa || undefined, saida: r.saida });
+        return { ok: false, cmd, saida: r.saida, rodou: true, ambiente: ehFalhaAmbiente(r.saida) };
     }
-    return { ok: true, cmd: "", saida: "", rodou: cmds.length > 0 };
+    return { ok: true, cmd: "", saida: "", rodou: cmds.length > 0, ambiente: false };
 }
 export async function revisar(cwd, feature, diff, emit) {
     // diff cortado = veredito sobre o que o modelo nao viu; melhor nao opinar
