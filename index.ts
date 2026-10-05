@@ -8,7 +8,7 @@ import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import {
   baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate,
-  resolverComandos, REPAIR_TRIES, podeReparar, custoUSD, ehTeste, existeExecutavel, ehFalhaAmbiente,
+  resolverComandos, REPAIR_TRIES, podeReparar, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
   type Tarefa, type Override,
 } from "./hermes.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, type Evento } from "./ui.js";
@@ -70,8 +70,8 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     }
   };
   // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
-  const { cmds: cmdsBrutos, gate: gateCmds, origem } = await resolverComandos(cwd, override);
-  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds: cmdsBrutos, gate: gateCmds });
+  const { cmds, gate: gateCmds, origem, scripts } = await resolverComandos(cwd, override);
+  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds, gate: gateCmds });
   // Cancelamento: SO pelo botao da UI (arquivo <run>.cancel, visto por poll de 1s).
   const porArquivo = new AbortController();
   const cancelFile = arquivoCancel(runAtual());
@@ -79,25 +79,33 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   const signal = porArquivo.signal;
   try {
     const base = path.resolve(cwd);
-    // Checagem previa (antes de baseline/agentes, custo $0): gate com executavel inexistente aborta a
-    // run inteira (senao terminaria em GATE-FAILED); allowlist so perde o comando e avisa.
-    for (const c of gateCmds) if (!(await existeExecutavel(c, cwd))) throw new Error("comando do gate nao existe: " + c);
-    const cmds: string[] = [];
-    for (const c of cmdsBrutos) {
-      if (await existeExecutavel(c, cwd)) cmds.push(c);
-      else emit({ t: "fase", nome: "comandos", info: "removido (nao existe): " + c });
-    }
     emit({ t: "fase", nome: "comandos", info: origem + (cmds.length ? " (" + cmds.length + " cmd)" : " (sem comandos)") });
+    // PREFLIGHT (antes de baseline/agentes, custo $0): roda allowlist + gate pelo MESMO shell dos agentes.
+    // Ambiente quebrado ou comando recusado (exec, migrate...) = ENV-FAILED sem tocar no repo.
+    emit({ t: "fase", nome: "preflight", info: "rodando " + new Set([...cmds, ...gateCmds]).size + " cmd na baseline..." });
+    const pf = await preflight(cwd, cmds, gateCmds, scripts, signal);
+    const pfTexto = textoPreflight(pf.itens);
+    if (pfTexto) emit({ t: "log", texto: "PREFLIGHT\n" + pfTexto });
+    if (!pf.ok) {
+      const ruins = pf.itens.filter((i) => i.classe === "ambiente" || i.classe === "recusado");
+      const linhas = ruins.map((i) => (i.classe === "ambiente" ? "AMBIENTE: " : "RECUSADO: ") + i.cmd);
+      emit({ t: "painel", status: "ENV-FAILED", branch: "", linhas: [...linhas, ...pfTexto.split("\n")] });
+      const painel = frame({ titulo: "HERMES // AMBIENTE (custo $0)", cwd, linhas, status: "ENV-FAILED" }) +
+        "\n" + pfTexto + "\nNenhum agente rodou. Conserte o ambiente/comandos e rode doctor_orchestra de novo.";
+      toFile(painel + "\n");
+      return painel;
+    }
     const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
-    const { rejeitados, resultados, escritos, cancelado } = await construir(cwd, feature, plano, emit, cmds, signal);
+    const { rejeitados, resultados, escritos, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal);
     const parou = cancelado || rejeitados.length > 0; // slice falhou ou cancelou: sem gate, sem commit
 
     // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
-    let g = { ok: true, cmd: "", saida: "", rodou: false };
+    let g = { ok: true, cmd: "", saida: "", rodou: false, ambiente: false };
     if (!parou) {
       g = await gate(cwd, emit, gateCmds, 0, signal);
       let tentativa = 0;
-      while (!g.ok && !signal.aborted && podeReparar(tentativa)) {
+      // falha de ambiente no gate nao tem reparo: agente nao conserta ambiente (no incidente custou $0,66)
+      while (!g.ok && !g.ambiente && !signal.aborted && podeReparar(tentativa)) {
         tentativa++;
         const sliceIdx = plano.length + tentativa;
         const inicioReparo = Date.now();
@@ -112,7 +120,10 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
             },
             emit, sliceIdx, cmds, undefined, signal,
           );
-        } catch { break; } // cancelado durante o reparo
+        } catch (e) { // cancelado ou ambiente durante o reparo
+          if (e instanceof AmbienteError) g = { ...g, ok: false, ambiente: true, cmd: e.cmd, saida: e.saida };
+          break;
+        }
         // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
         emit({
           t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
@@ -125,8 +136,11 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
 
     let status: string;
     let rev: { ok: boolean; ajustes: string } | null = null;
+    const amb = ambiente ? { cmd: ambiente.cmd, saida: ambiente.saida } : g.ambiente ? { cmd: g.cmd, saida: g.saida } : null;
     if (cancelado || signal.aborted) {
       status = "CANCELED"; // para e mantem os arquivos no working tree; nada commitado
+    } else if (amb) {
+      status = "ENV-FAILED"; // ambiente quebrou no meio: para tudo, sem reparo/commit
     } else if (parou) {
       status = "NEEDS-REVIEW"; // slice falhou: resto pulado, sem gate/commit
     } else if (g.rodou && !g.ok) {
@@ -152,13 +166,14 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       if (!r.ok) linhas.push("     motivo: " + r.motivo);
     }
     if (g.rodou) linhas.push("GATE: " + (g.ok ? "OK" : "FALHOU (" + g.cmd + ")"));
+    if (amb) linhas.push("AMBIENTE: " + amb.cmd, ...amb.saida.trim().split("\n").slice(-6).map((s) => "  | " + s.trim()));
     linhas.push("branch " + branch);
     if (rev) linhas.push("REVISOR: " + (rev.ok ? "OK" : "ATENCAO"));
     if (baselineRef) linhas.push("REVERTER: git checkout " + baselineRef.slice(0, 8) + " -- .");
     const painel = frame({ titulo: "HERMES // " + branch, cwd, linhas, status });
     emit({ t: "painel", status, branch, baseline: baselineRef, linhas });
     toFile(painel + "\n");
-    return painel;
+    return amb ? painel + "\nSAIDA (" + amb.cmd + "):\n" + amb.saida.trim().slice(-1500) : painel; // o frame corta linha longa
   } catch (e: any) {
     emit({ t: "log", texto: "ERRO: " + (e?.message ?? e) });
     emit({ t: "painel", status: "FAILED", branch: "", linhas: vivo });
@@ -201,13 +216,48 @@ if (process.argv.includes("--selftest")) {
   const quartaPico = new Date(Date.UTC(2024, 0, 3, 2, 0, 0)); // quarta-feira, 02:00 UTC (peak)
   const domingoOff = new Date(Date.UTC(2024, 0, 7, 12, 0, 0)); // domingo, 12:00 UTC (off-peak)
   assert.ok(custoUSD(1e6, 1e6, quartaPico) > custoUSD(1e6, 1e6, domingoOff), "peak > off-peak");
-  // checagem previa de executavel + classificacao de falha de ambiente (CA-4/5/6)
-  assert.strictEqual(await existeExecutavel(`"${process.execPath}" -e 1`, process.cwd()), true, "node existe");
-  assert.strictEqual(await existeExecutavel("nao-existe-xyz src", process.cwd()), false, "nome solto inexistente");
-  assert.strictEqual(await existeExecutavel("C:/nao/existe.exe src", process.cwd()), false, "caminho inexistente");
-  assert.strictEqual(ehFalhaAmbiente("'selene' nao e reconhecido como um comando interno"), true);
+  // classificacao de falha de ambiente (incidente career-copilot 05/10: saida real com mojibake do cmd.exe)
+  assert.strictEqual(ehFalhaAmbiente("'pnpm' n\uFFFDo \uFFFD reconhecido como um comando interno\r\nou externo"), true);
   assert.strictEqual(ehFalhaAmbiente("bash: lune: command not found"), true);
+  assert.strictEqual(ehFalhaAmbiente("Error: Cannot find native binding. npm has a bug related to optional dependencies"), true);
+  assert.strictEqual(ehFalhaAmbiente('ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command "vitest" not found'), true);
+  assert.strictEqual(ehFalhaAmbiente("Error: Cannot find module '@rolldown/binding-win32-x64-msvc'"), true);
+  assert.strictEqual(ehFalhaAmbiente("Error: Cannot find module './profile.service'"), false, "import relativo = spec sem implementacao");
+  assert.strictEqual(ehFalhaAmbiente("connect ECONNREFUSED 127.0.0.1:5432"), true);
   assert.strictEqual(ehFalhaAmbiente("tests/run.luau:12: assertion failed"), false);
+  assert.strictEqual(ehFalhaAmbiente("TypeError: Cannot read properties of undefined (reading 'parse')"), false);
+  // recusaComando: exec e efeito fora do git (texto ou corpo do script); args depois de ' -- ' nao contam
+  const sc = { "db:migrate": "prisma migrate dev", setup: "pnpm i && prisma db push", "db:generate": "prisma generate", test: "vitest run" };
+  assert.match(recusaComando("pnpm --filter api exec vitest run", sc) ?? "", /exec/);
+  assert.match(recusaComando("node_modules\\.bin\\pnpm.CMD db:migrate", sc) ?? "", /migrate/);
+  assert.match(recusaComando("pnpm setup", sc) ?? "", /efeito/, "migrate escondido no corpo do script");
+  assert.strictEqual(recusaComando("pnpm db:generate", sc), null);
+  assert.strictEqual(recusaComando("pnpm test -- src/reset-password.spec.ts", sc), null, "arquivo de teste com 'reset' passa");
+  // escritaProibida: denylist + excecao por arquivos_alvo (nunca node_modules)
+  const ex = exesDe(["node_modules\\.bin\\pnpm.CMD typecheck", '"C:/x/lune.exe" run t']);
+  assert.ok(ex.has("pnpm") && ex.has("lune"));
+  assert.ok(escritaProibida("pnpm.cmd", [], false, ex));
+  assert.ok(escritaProibida("pnpm", [], false, ex));
+  assert.ok(escritaProibida("node_modules/.bin/pnpm.CMD", ["node_modules/.bin/pnpm.CMD"], false, ex), "node_modules sem excecao");
+  assert.ok(escritaProibida("packages/db/prisma/migrations/2026_init/migration.sql", [], false, ex));
+  assert.ok(escritaProibida("packages/db/src/generated/enums.ts", [], true, ex), "ignorado pelo git");
+  assert.strictEqual(escritaProibida("prisma/migrations/x.sql", ["prisma/migrations/x.sql"], false, ex), null, "listado em arquivos_alvo");
+  assert.strictEqual(escritaProibida("src/app.ts", [], false, ex), null);
+  assert.strictEqual(escritaProibida("Makefile", [], false, ex), null, "sem extensao mas nao e' exe de comando");
+  // preflight: ok / esperada / ambiente / timeout / recusado (offline via node -e)
+  await (async () => {
+    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-pf-"));
+    const n = `"${process.execPath}" -e`;
+    const pf = await preflight(cwd, [`${n} "process.exit(0)"`, `${n} "process.exit(1)"`], [`${n} "process.exit(0)"`, "nao-existe-xyz"], {});
+    assert.deepStrictEqual(pf.itens.map((i) => i.classe), ["ok", "esperada", "ambiente"], "dedupe + classes");
+    assert.strictEqual(pf.ok, false);
+    assert.strictEqual((await preflight(cwd, [`${n} "process.exit(1)"`], [], {})).ok, true, "falha de teste e' esperada");
+    const lento = await preflight(cwd, [`${n} "setTimeout(()=>{},5000)"`], [], {}, undefined, 300);
+    assert.strictEqual(lento.itens[0].classe, "ambiente", "timeout = ambiente");
+    const rec = await preflight(cwd, ["pnpm db:migrate"], [], { "db:migrate": "prisma migrate dev" });
+    assert.strictEqual(rec.itens[0].classe, "recusado");
+    assert.match(textoPreflight(pf.itens), /\[AMBIENTE\]\s+nao-existe-xyz/);
+  })();
   // escolherProvedor: nativa/OpenRouter/nenhuma (CA-1, CA-2, CA-4 -- pura, sem mexer em env em runtime)
   assert.strictEqual(escolherProvedor("dk", undefined).useAuthToken, false); // so' nativa
   assert.strictEqual(escolherProvedor(undefined, "or").useAuthToken, true); // so' OpenRouter
@@ -329,11 +379,20 @@ if (process.argv.includes("--selftest")) {
     const c = fake([{ blocos: [{ type: "tool_use", id: "b", name: "rodar_comando", input: { comando: "rm -rf /" } }], stop: "tool_use" }, fim]);
     await agente(base, "f", alvo, nada, 1, [], c.fn as any);
     assert.ok(c.recebidos.some((r) => r.includes("nao permitido")), "allowlist");
-    // executavel inexistente conta como falha de ambiente, nao como iteracao
-    const amb = fake([{ blocos: [{ type: "tool_use", id: "e", name: "rodar_comando", input: { comando: "nao-existe-xyz" } }], stop: "tool_use" }, fim]);
-    const ra = await agente(base, "f", alvo, nada, 1, ["nao-existe-xyz"], amb.fn as any);
-    assert.strictEqual(ra.falhasAmbiente, 1, "falha de ambiente contada");
-    assert.strictEqual(ra.iteracoes, 0, "ambiente nao conta iteracao");
+    // executavel inexistente no meio da run = AmbienteError (a run para em ENV-FAILED), com o custo da slice
+    const amb = fake([{ blocos: [{ type: "tool_use", id: "e", name: "rodar_comando", input: { comando: "nao-existe-xyz" } }], stop: "tool_use", usage: { in: 10, out: 2 } }, fim]);
+    await assert.rejects(agente(base, "f", alvo, nada, 1, ["nao-existe-xyz"], amb.fn as any),
+      (e: any) => e instanceof AmbienteError && e.cmd === "nao-existe-xyz" && e.tokensIn === 10);
+    // construir: slice com ambiente para a run, resto "pulada", devolve ambiente
+    const evs: Evento[] = [];
+    const cr = await construir(base, "f", [alvo, { ...alvo, tarefa: "t2" }], (ev) => evs.push(ev), ["nao-existe-xyz"], undefined,
+      fake([{ blocos: [{ type: "tool_use", id: "e", name: "rodar_comando", input: { comando: "nao-existe-xyz" } }], stop: "tool_use" }]).fn as any);
+    assert.strictEqual(cr.ambiente?.cmd, "nao-existe-xyz");
+    assert.ok(evs.some((ev) => ev.t === "slice" && ev.idx === 2 && ev.status === "pulada"));
+    // shim de executavel recusado no meio da run (o agente do incidente criou pnpm.cmd)
+    const sh = fake([{ blocos: [{ type: "tool_use", id: "s", name: "escrever_arquivo", input: { caminho: "pnpm.cmd", conteudo: "@echo off\n" } }], stop: "tool_use" }, fim]);
+    await agente(base, "f", alvo, nada, 1, ["pnpm typecheck"], sh.fn as any);
+    assert.ok(sh.recebidos.some((r) => r.startsWith("RECUSADO (fora do que")), "shim recusado");
     // editar_arquivo: troca trecho unico (inclusive em arquivo CRLF); ausente/repetido e' recusado; buscar acha a linha
     await fsp.writeFile(path.join(base, "e.txt"), "a = 1\r\nb = 2\r\nb = 2\r\n");
     const ed = fake([
@@ -539,6 +598,36 @@ server.registerTool(
             `chame status_orchestra com runId=${runId} ate vir o painel final (cancelar: botao do dashboard)`,
         }],
       };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  "doctor_orchestra",
+  {
+    title: "Doctor Orchestra (preflight)",
+    description:
+      "Roda o MESMO preflight da run, sem agentes e sem custo: cada comando da allowlist + gate na baseline, " +
+      "pelo shell do bridge (mesmo PATH/node dos agentes). Classifica: ok | esperada (falha de teste/typecheck, " +
+      "normal antes da implementacao) | AMBIENTE (executavel/node/binding/pacote/servico/timeout) | RECUSADO " +
+      "(exec, migrate/seed/... na allowlist). Qualquer AMBIENTE/RECUSADO faz executar_orchestra abortar (ENV-FAILED).",
+    inputSchema: {
+      cwd: z.string().describe("Pasta do projeto"),
+      override: z
+        .object({ cmds: z.array(z.string()).optional(), gate: z.array(z.string()).optional() })
+        .optional()
+        .describe("Mesmo override que sera passado ao executar_orchestra"),
+    },
+  },
+  async ({ cwd, override }) => {
+    try {
+      // ponytail: sincrono; se o cliente do OpenCode cortar chamada longa, vira assincrono como a run
+      const { cmds, gate: g, scripts } = await resolverComandos(cwd, override as Override | undefined);
+      const pf = await preflight(cwd, cmds, g, scripts);
+      const txt = textoPreflight(pf.itens) || "(nenhum comando resolvido)";
+      return { content: [{ type: "text", text: (pf.ok ? "PREFLIGHT OK\n" : "PREFLIGHT FALHOU (a run abortaria em ENV-FAILED)\n") + txt }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
     }

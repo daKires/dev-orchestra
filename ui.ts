@@ -54,7 +54,7 @@ export type Evento = { ts?: number } & (
   | { t: "fase"; nome: string; info?: string }
   | { t: "slice"; idx: number; total: number; tarefa: string; status: "fila" | "rodando" | "ok" | "incompleta" | "pulada";
       escritos?: string[]; comandos?: string[]; motivo?: string; ms?: number; semMudancas?: boolean }
-  | { t: "tool"; slice: number; nome: string; alvo?: string; ok: boolean; resumo?: string }
+  | { t: "tool"; slice: number; nome: string; alvo?: string; ok: boolean; resumo?: string; saida?: string }
   | { t: "gerando"; slice: number; tokens: number }
   | { t: "comando"; slice: number; cmd: string; status: "rodando" }
   | { t: "gate"; cmd: string; status: "rodando" | "ok" | "falha"; tentativa?: number; saida?: string }
