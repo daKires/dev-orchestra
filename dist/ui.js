@@ -700,6 +700,7 @@ function ceder() {
         watcher = null;
     }
     descarregarCanvas(); // grava ops pendentes antes de ceder a porta
+    servidor?.closeAllConnections(); // derruba as conexoes keep-alive do servidor antigo (nao reusa socket morto)
     servidor?.close();
     servidor = null;
     onCeder?.();
@@ -719,6 +720,10 @@ function criarServidor() {
             req.on("close", () => clientes.delete(c));
             return;
         }
+        // Toda resposta que NAO e' SSE sai SEM keep-alive: o socket morre junto com a resposta e o cliente
+        // (undici) nunca reaproveita uma conexao do servidor antigo depois de um restart/ceder de porta
+        // (evita ECONNRESET no primeiro pedido pos-restart).
+        res.shouldKeepAlive = false;
         if (url === "/versao") {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ versao: versaoUI() }));
@@ -820,13 +825,14 @@ function criarServidor() {
         }
         // ---- canvas (S2) ----
         if (caminho === "/canvas/op") {
-            if (!acaoValida(req)) {
+            // Drena o corpo ANTES de responder 400: corpo sem ler deixa a conexao suja (reset no cliente).
+            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS);
+            if (corpo === null) {
                 res.writeHead(400);
                 res.end();
                 return;
             }
-            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS);
-            if (corpo === null) {
+            if (!acaoValida(req)) {
                 res.writeHead(400);
                 res.end();
                 return;
@@ -852,13 +858,14 @@ function criarServidor() {
             return;
         }
         if (caminho === "/canvas/asset") {
-            if (!acaoValida(req)) {
+            // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS_ASSET);
+            if (corpo === null) {
                 res.writeHead(400);
                 res.end();
                 return;
             }
-            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS_ASSET);
-            if (corpo === null) {
+            if (!acaoValida(req)) {
                 res.writeHead(400);
                 res.end();
                 return;
@@ -896,13 +903,14 @@ function criarServidor() {
         }
         if (caminho === "/canvas/projetos") {
             if (req.method === "POST") {
-                if (!acaoValida(req)) {
+                // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+                const corpo = await lerCorpo(req, LIMITE_BODY);
+                if (corpo === null) {
                     res.writeHead(400);
                     res.end();
                     return;
                 }
-                const corpo = await lerCorpo(req, LIMITE_BODY);
-                if (corpo === null) {
+                if (!acaoValida(req)) {
                     res.writeHead(400);
                     res.end();
                     return;
@@ -1037,6 +1045,7 @@ export function pararUI() {
         catch { }
     }
     clientes.clear();
+    servidor?.closeAllConnections(); // fecha conexoes abertas antes do close: o proximo servidor nao herda socket morto
     servidor?.close();
     servidor = null;
     onCeder = null;

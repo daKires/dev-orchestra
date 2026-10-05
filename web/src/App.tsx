@@ -12,10 +12,13 @@ import { StatusBar } from "@/components/StatusBar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
 import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
+import { Canvas } from "@/components/Canvas";
+import { Projetos } from "@/components/canvas/Projetos";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
 import {
   chatsDoProjeto, chatsEscondidos, chatsVisiveis, filtrarFechados, modoPainelChat, porProjeto, rodando, selecaoAposFechar,
 } from "@/lib/estado";
+import { cn } from "@/lib/utils";
 
 export default function App() {
   const { estado, conectado } = useRuns();
@@ -29,6 +32,8 @@ export default function App() {
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
   const [nova, setNova] = useState(false);
+  const [vista, setVista] = useLocal<"ide" | "canvas">("vista", "ide");
+  const [canvasProjeto, setCanvasProjeto] = useLocal<string | null>("canvas-projeto", null);
   const lateral = usePanelRef();
   const inferior = usePanelRef();
   const chatRef = usePanelRef();
@@ -109,16 +114,50 @@ export default function App() {
             <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">H</span>
             Hermes <span className="font-normal text-muted-foreground">Orchestra</span>
           </span>
-          {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
-          <Button
-            size="sm" variant="outline" className="ml-auto h-6.5 gap-1.5 px-2.5 text-xs"
-            title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
-          >
-            <Plus className="size-3.5" />Nova feature
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {/* troca entre a vista IDE (de sempre) e o Canvas (pilha de projetos) */}
+            <div className="flex items-center rounded-md border bg-background/40 p-0.5" role="tablist" aria-label="Vista">
+              {(["ide", "canvas"] as const).map((v) => (
+                <button
+                  key={v} type="button" role="tab" aria-selected={vista === v}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    vista === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setVista(v)}
+                >
+                  {v === "ide" ? "IDE" : "Canvas"}
+                </button>
+              ))}
+            </div>
+            {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
+            <Button
+              size="sm" variant="outline" className="h-6.5 gap-1.5 px-2.5 text-xs"
+              title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
+            >
+              <Plus className="size-3.5" />Nova feature
+            </Button>
+          </div>
         </header>
 
         <div className="min-h-0 flex-1">
+          {vista === "canvas" ? (
+            canvasProjeto ? (
+              <div className="flex h-full flex-col">
+                <div className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setCanvasProjeto(null)}>
+                    ← Projetos
+                  </Button>
+                  <span className="truncate text-xs text-muted-foreground">{canvasProjeto}</span>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <Canvas projeto={canvasProjeto} />
+                </div>
+              </div>
+            ) : (
+              <Projetos onAbrir={setCanvasProjeto} />
+            )
+          ) : (
           <ResizablePanelGroup orientation="horizontal">
             <ResizablePanel id="lateral" panelRef={lateral} defaultSize={300} minSize={200} maxSize="45" collapsible collapsedSize={0}>
               <Sidebar
@@ -164,6 +203,7 @@ export default function App() {
               </>
             )}
           </ResizablePanelGroup>
+          )}
         </div>
 
         <StatusBar r={r} agora={agora} onCancelar={() => setCancelar(true)} onPaleta={() => setPaleta(true)} />

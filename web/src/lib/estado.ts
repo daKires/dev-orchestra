@@ -1,6 +1,7 @@
 // Estado da UI derivado SO dos eventos do bridge (SSE /events). Reducer puro: toda regra de exibicao
 // (status, progresso, KPIs, alerta de "sem resposta") mora aqui e e' testada em estado.test.ts.
 import type { Evento, NovaFeature, Planejador, SlicePlano } from "../../../ui.ts";
+import type { Aresta, No, Op } from "../../../canvas.ts";
 
 export type StatusSlice = "fila" | "rodando" | "ok" | "incompleta" | "pulada";
 export type Metrica = Extract<Evento, { t: "metrica" }>;
@@ -26,11 +27,24 @@ export type Run = {
   metricas: Metrica[]; painel: string[]; atividade: Atividade;
 };
 export type Estado = { runs: Record<string, Run>; planejadores: Planejador[]; novaFeature: NovaFeature | null };
-// Duas familias de mensagens do hub: eventos de uma run ({swarm, ev}) e mensagens globais do hub
-// ({planejadores} substitui a lista de chats; {novaFeature} guarda o andamento do ultimo pedido).
+// Lote de operacoes do canvas de um projeto (o hub emite { canvasOp: { projeto, ops } } no SSE).
+export type MsgCanvasOp = { projeto: string; ops: Op[] };
+// Snapshot do canvas de um projeto (o hub emite { canvas: { projeto, nos, arestas } } no SSE).
+export type MsgCanvasSnapshot = { projeto: string; nos: No[]; arestas: Aresta[] };
+// Ate' tres familias de mensagens do hub: eventos de uma run ({swarm, ev}); mensagens globais do hub
+// ({planejadores} substitui a lista de chats; {novaFeature} guarda o andamento do ultimo pedido); e
+// mensagens do canvas ({canvasOp}/{canvas}), que o reducer de runs apenas IGNORA (outro estado as usa).
 export type Msg =
   | { swarm: string; ev?: Evento; drop?: boolean }
-  | { planejadores?: Planejador[]; novaFeature?: NovaFeature };
+  | { planejadores?: Planejador[]; novaFeature?: NovaFeature }
+  | { canvasOp?: MsgCanvasOp; canvas?: MsgCanvasSnapshot };
+
+/** true SO' para um objeto com `canvasOp` ou `canvas` (mensagem do canvas, nao' de run/hub). */
+export function ehMsgCanvas(m: unknown): boolean {
+  if (!m || typeof m !== "object") return false;
+  const o = m as Record<string, unknown>;
+  return "canvasOp" in o || "canvas" in o;
+}
 
 export const OCIOSO_MS = 60_000;         // alerta "sem resposta" (mesmo teto do timer ocioso do bridge)
 export const CMD_TIMEOUT_MS = 120_000;   // comando alem disso = travado
@@ -140,6 +154,7 @@ export function aplicar(e: Estado, msgs: Msg[]): Estado {
   let planejadores = e.planejadores;
   let novaFeature = e.novaFeature;
   for (const m of msgs) {
+    if (ehMsgCanvas(m)) continue; // mensagens do canvas nao mexem em runs/planejadores
     if ("planejadores" in m && m.planejadores) planejadores = m.planejadores; // substitui a lista inteira
     if ("novaFeature" in m && m.novaFeature) novaFeature = m.novaFeature;     // guarda a ultima
     if (!("swarm" in m)) continue;
