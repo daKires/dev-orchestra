@@ -35,17 +35,32 @@ Passos (em PT-BR):
    diz: "testes existentes sao imutaveis; se falhar, conserte o codigo (pode criar testes extras em
    arquivo novo)". Mostre tambem `override.cmds` (allowlist) e `override.gate`.
    Mostre o plano legivel e PERGUNTE se o usuario aprova. PARE e espere a resposta.
-4. So apos o "sim", ANTES de chamar a tool, confira os comandos: rode cada comando da allowlist/gate
-   e confirme que o executavel existe. Caminho ABSOLUTO se nao estiver no PATH; NAO duplique forma
-   curta + absoluta. (O bridge aborta a run se um comando do gate nao existir e remove da allowlist o
-   que nao existir — mas o certo e' nao passar comando quebrado.)
+4. So apos o "sim", ANTES de escrever os testes, monte os comandos com esta checklist (incidente
+   career-copilot 05/10/2026: $0,91 queimados com pnpm quebrado no shell do bridge):
+   - Os comandos rodam pelo `exec` do bridge (cmd.exe no Windows), NAO pelo seu shell. Script sh sem
+     extensao no PATH (ex.: `pnpm` do nvm) nao roda la: use o `.cmd` (ex.: `node_modules\.bin\pnpm.CMD ...`).
+   - NUNCA `pnpm exec`/`npm exec` (imprime 'Command "x" not found' ate com teste falhando): use o script
+     (`pnpm --filter api test -- arq.spec.ts`) ou o bin direto. O bridge RECUSA.
+   - NUNCA comando com efeito fora do git (migrate, db push, seed, reset, drop) na allowlist/gate: o
+     REVERTER nao desfaz banco. O bridge RECUSA (olha tambem o corpo do script). `db:generate` pode.
+     Migration pendente: VOCE gera/aplica depois de revisar o diff, com consentimento do usuario.
+   - Monorepo: pacote de workspace (`@x/db`, `@x/shared`) tem que resolver o `src`, nao um `dist` velho
+     (alias/exports/conditions do vitest) - senao o teste falha com "undefined" igual a falta de
+     implementacao e NUNCA passa. Node que o pnpm usa = node do sistema (`.npmrc node-version`/engines);
+     binding opcional (rolldown, esbuild, swc) instalado pra esse node.
+   - Comando que precisa de servico (Postgres do e2e) exige o servico de pe antes da run.
 5. Escreva os testes (spec executavel):
    - rode `git branch --show-current`. Se JA estiver num branch `orchestra/...` (worktree criado pelo
      orchestra-go), NAO crie branch: use esse. Senao, `git checkout -b orchestra/<slug>` — slug = feature
      em minusculas, sem acento, todo trecho nao-alfanumerico vira `-`, sem `-` nas pontas, cortado em
      40 chars (mesma regra do bridge).
-   - escreva um arquivo de teste por slice + o runner; rode e confirme que FALHAM por falta de
-     implementacao (nao por erro de sintaxe/require no proprio teste).
+   - escreva um arquivo de teste por slice + o runner.
+   - DOCTOR (obrigatorio): chame `hermes-bridge_doctor_orchestra` com cwd e o MESMO override que vai pra run. Ele
+     roda cada comando pelo shell do bridge (o que os agentes usam; NAO confie no seu terminal/Git Bash).
+     Exija: nenhum [AMBIENTE] nem [RECUSADO] (se houver, conserte e rode de novo; nao chame a run). E, em
+     CADA [esperada], LEIA a saida: tem que falhar porque falta o simbolo/arquivo que a slice vai criar
+     (ex.: `Cannot find module './profile.service'`, export ausente do arquivo-alvo), NAO por erro de
+     sintaxe/require no proprio teste, nem por `undefined` vindo de pacote resolvido pelo `dist`.
    - commit `test: spec de <feature>` nesse branch. Esse commit vira a baseline: o REVERTER desfaz
      o codigo do swarm e mantem os testes.
 6. Chame a tool `hermes-bridge_executar_orchestra` com:
@@ -64,7 +79,7 @@ Passos (em PT-BR):
    slice, tool call, o gate e o diff crescendo) fica no dashboard web que abriu no browser
    (`http://127.0.0.1:4123` por padrao, env `HERMES_UI_PORT`) — o painel aqui e' so o resumo final.
 8. REVISE o resultado e BARRE se quebrou. Rode `git diff` (e/ou leia o painel). NAO declare sucesso
-   se: o STATUS for NEEDS-REVIEW, GATE-FAILED, FAILED ou CANCELED, houver slices com [!!]/motivo, ou o diff
+   se: o STATUS for NEEDS-REVIEW, GATE-FAILED, ENV-FAILED, FAILED ou CANCELED, houver slices com [!!]/motivo, ou o diff
    parecer quebrar algo (arquivo que perdeu estrutura, ficou vazio, encolheu demais). Nesse caso,
    avise o usuario com clareza e OFERECA reverter com o comando REVERTER do painel
    (`git checkout <baseline> -- .`). So confirme sucesso (branch, arquivos, como testar) se o diff
@@ -81,13 +96,15 @@ Passos (em PT-BR):
      (o dashboard encerra o servidor quando o worktree some). NUNCA faca push.
    Se a run NAO terminou em sucesso: nao ofereca merge; worktree e chat ficam pra continuar.
 
-Se STATUS FAILED ou GATE-FAILED, mostre a mensagem e oriente conforme a causa:
+Se STATUS FAILED, GATE-FAILED ou ENV-FAILED, mostre a mensagem e oriente conforme a causa:
 - "DEEPSEEK_API_KEY nao definida" -> rodar via `orchestra` (a funcao do PowerShell seta a env).
 - modelo invalido / erro do provedor -> conferir a env `HERMES_MODEL` (default `deepseek-flash`).
 - agente quer rodar build/teste mas cai em "comando nao permitido" -> faltou o comando em `override.cmds`.
-- "comando do gate nao existe: X" -> a run abortou antes dos agentes (custo $0); corrija o caminho do
-  executavel (absoluto) e chame de novo.
-- card "Falha de ambiente" > 0 no dashboard -> algum comando da allowlist nao roda nesse ambiente.
+- ENV-FAILED: falha de AMBIENTE (executavel, node/binding, pacote, servico fora do ar, timeout) ou comando
+  RECUSADO (exec, migrate...). No preflight: abortou antes dos agentes, custo $0, sem branch/baseline. No
+  meio da run: parou na hora, sem reparo e sem commit (ofereca o REVERTER). Mostre o comando e a saida do
+  painel, conserte o AMBIENTE (nao o codigo), rode `hermes-bridge_doctor_orchestra` ate ficar limpo e so entao chame
+  a run de novo. NAO replaneje o codigo por causa disso.
 - "ja existe run <id> rodando" -> outra run ainda roda; acompanhe/espere com `hermes-bridge_status_orchestra` ou cancele no dashboard.
 - CANCELED: o usuario cancelou (botao do dashboard). Nada foi commitado; os arquivos editados
   ficaram no working tree. Mostre o REVERTER e pergunte se ele quer reverter ou aproveitar as edicoes.
