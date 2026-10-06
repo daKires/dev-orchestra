@@ -2,7 +2,7 @@
 // Regra de conflito identica a do hub (aplicarOpsLocal, em lib/canvas.ts): a ultima escrita vence por
 // item comparando `rev`. Nada de runtime do hub aqui — so' tipos, via `import type`.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { aplicarOpsLocal } from "@/lib/canvas";
+import { aplicarOpsLocal, Historico, inversoDe } from "@/lib/canvas";
 import type { MsgCanvasOp } from "@/lib/estado";
 import type { Op, Snapshot } from "../../../canvas.ts";
 
@@ -20,8 +20,12 @@ export type CanvasRemoto = {
   estado: Snapshot;
   /** SSE vivo? false = a UI mostra "reconectando…" e bloqueia edicao. */
   conectado: boolean;
-  /** Aplica otimista e manda pro hub (POST /canvas/op com X-Hermes: 1). */
+  /** Aplica otimista, manda pro hub (POST /canvas/op com X-Hermes: 1) e registra no historico. */
   enviar: (ops: Op[]) => void;
+  /** Desfaz a ultima acao LOCAL (ops inversas com rev novo); nao entra no historico. */
+  desfazer: () => void;
+  /** Refaz a ultima acao desfeita (ops originais com rev novo); nao entra no historico. */
+  refazer: () => void;
 };
 
 /**
@@ -34,11 +38,17 @@ export function useCanvas(projeto: string): CanvasRemoto {
   const [conectado, setConectado] = useState(false);
   const atual = useRef(projeto);
   atual.current = projeto;
+  // Ultimo estado renderizado: base para o inverso de cada acao local (o "antes").
+  const antes = useRef(estado);
+  antes.current = estado;
+  // Pilha de desfazer/refazer das acoes LOCAIS (as ops do SSE nao entram aqui).
+  const historico = useRef(new Historico());
 
   // Snapshot inicial do projeto. Trocar de projeto zera a vista ate' a resposta chegar.
   useEffect(() => {
     let vivo = true;
     setEstado({ nos: [], arestas: [] });
+    historico.current = new Historico(); // historico e' por projeto
     fetch(`/canvas?projeto=${encodeURIComponent(projeto)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: Snapshot | null) => {
@@ -65,9 +75,10 @@ export function useCanvas(projeto: string): CanvasRemoto {
     return () => es.close();
   }, []);
 
-  // Envio otimista: carimba rev = Date.now() em cada op, aplica local ANTES do eco do hub (a UI fica
-  // responsiva) e so' entao faz o POST. O eco do hub apenas confirma (mesmo rev, mesma regra).
-  const enviar = useCallback((ops: Op[]) => {
+  // Envio cru (sem historico): carimba rev = Date.now() em cada op, aplica local ANTES do eco do hub
+  // (a UI fica responsiva) e so' entao faz o POST. O eco do hub apenas confirma (mesmo rev, mesma
+  // regra). Usado tanto pelas acoes locais quanto pelo proprio desfazer/refazer.
+  const postar = useCallback((ops: Op[]) => {
     if (!ops.length) return;
     const rev = Date.now();
     const carimbadas = ops.map((op) => ({ op: op.op, tipo: op.tipo, item: { ...op.item, rev } }) as Op);
@@ -79,5 +90,25 @@ export function useCanvas(projeto: string): CanvasRemoto {
     }).catch(() => {});
   }, []);
 
-  return { estado, conectado, enviar };
+  // Unico ponto de historico: TODA acao local passa por aqui e registra o par (inverso, ops originais)
+  // usando o estado ANTES da acao. Um movimento de arrasto chega como UM lote (no fim do arrasto), logo
+  // vira UMA unica acao. As ops recebidas pelo SSE NAO passam por enviar (vem direto no EventSource).
+  const enviar = useCallback((ops: Op[]) => {
+    if (!ops.length) return;
+    historico.current.registrar(inversoDe(antes.current, ops, Date.now()), ops);
+    postar(ops);
+  }, [postar]);
+
+  // Desfazer/refazer: re-carimba rev = Date.now() (via postar) e NAO registra no historico.
+  const desfazer = useCallback(() => {
+    const ops = historico.current.desfazer();
+    if (ops) postar(ops);
+  }, [postar]);
+
+  const refazer = useCallback(() => {
+    const ops = historico.current.refazer();
+    if (ops) postar(ops);
+  }, [postar]);
+
+  return { estado, conectado, enviar, desfazer, refazer };
 }

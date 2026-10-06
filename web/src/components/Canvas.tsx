@@ -11,13 +11,15 @@ import {
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
 import {
-  checarImagem, ferramentaDoAtalho, limitarZoom, noNovo, paiDoNo, pontaDaAresta, retanguloDeArrasto,
-  TAMANHO_PADRAO, type Ferramenta, type NomeForma,
+  checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, noNovo, ordemZ, paiDoNo, pontaDaAresta,
+  retanguloDeArrasto, TAMANHO_PADRAO, type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
 import { cn } from "@/lib/utils";
 import { useCanvas } from "@/hooks/useCanvas";
 import type { Aresta, No, Op, TipoNo } from "../../../canvas.ts";
 import { Barra } from "./canvas/Barra";
+import { Inspetor } from "./canvas/Inspetor";
+import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContexto";
 import { CanvasCtx, edgeTypes, nodeTypes } from "./canvas/Nos";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +53,13 @@ const emCampo = (alvo: EventTarget | null): boolean => {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
 };
 
+// zIndex de um no' no react-flow: `dados.z` do modelo (ordemZ). Grupo fica sempre atras dos filhos.
+function zIndexDoNo(no: No): number {
+  if (no.tipo === "grupo") return 0;
+  const z = no.dados?.z;
+  return typeof z === "number" && Number.isFinite(z) ? z : 1;
+}
+
 // No modelo, x/y sao ABSOLUTOS (mesma base do paiDoNo). Filho de grupo vira posicao RELATIVA ao pai.
 function noParaRf(no: No, porId: Map<string, No>): Node {
   const pai = no.pai ? porId.get(no.pai) : undefined;
@@ -62,7 +71,7 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
     width: no.w,
     height: no.h,
     parentId: pai?.id,
-    zIndex: no.tipo === "grupo" ? 0 : 1, // grupo atras dos filhos
+    zIndex: zIndexDoNo(no),
   };
 }
 
@@ -118,7 +127,7 @@ function ControleZoom() {
 // ---------------------------------------------------------------------------
 
 export function Canvas({ projeto }: { projeto: string }) {
-  const { estado, conectado, enviar } = useCanvas(projeto);
+  const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
   const [arestas, setArestas] = useState<Edge[]>([]);
   const [arestaEditando, setArestaEditando] = useState<string | null>(null);
@@ -128,10 +137,15 @@ export function Canvas({ projeto }: { projeto: string }) {
   const [espaco, setEspaco] = useState(false);
   const [arrasto, setArrasto] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null);
   const [origemSeta, setOrigemSeta] = useState<string | null>(null);
+  const [alvoMenu, setAlvoMenu] = useState<MenuAlvo | null>(null);
   const bloqueado = !conectado; // sem SSE vivo: so' leitura ("reconectando…")
   const container = useRef<HTMLDivElement | null>(null);
   const instancia = useRef<ReactFlowInstance | null>(null);
   const ajusteFeito = useRef(false);
+  // Clipboard em memoria do Ctrl+C/Ctrl+V (nos selecionados + quantas colagens ja' sairam).
+  const clipboard = useRef<{ ids: string[]; colagens: number } | null>(null);
+  // Handler de atalhos reassinado a cada render (le estado/selecao atuais sem reassinar o listener).
+  const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
 
   // Ferramenta efetiva: segurar Espaco vira "mao" temporariamente (como no Castor).
   const efetiva: Ferramenta = espaco ? "mao" : ferramenta;
@@ -161,7 +175,14 @@ export function Canvas({ projeto }: { projeto: string }) {
         return rf;
       });
     });
-    setArestas(estado.arestas.map((a) => arestaParaRf(a, porId)));
+    setArestas((antigas) => {
+      const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
+      return estado.arestas.map((a) => {
+        const rf = arestaParaRf(a, porId);
+        if (sel.has(a.id)) rf.selected = true;
+        return rf;
+      });
+    });
   }, [estado]);
 
   useEffect(() => {
@@ -175,8 +196,14 @@ export function Canvas({ projeto }: { projeto: string }) {
   useEffect(() => {
     const aoTeclar = (e: KeyboardEvent) => {
       if (emCampo(e.target)) return;
+      if (atalhos.current(e)) return; // Delete/Backspace, Ctrl+D/A/C/V/0, Shift+1
       if (e.key === " " || e.code === "Space") { setEspaco(true); return; }
-      if (e.key === "Escape") { setArrasto(null); setOrigemSeta(null); setFerramenta("selecionar"); return; }
+      if (e.key === "Escape") {
+        setArrasto(null); setOrigemSeta(null); setFerramenta("selecionar");
+        setNos((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        setArestas((es) => es.map((a) => (a.selected ? { ...a, selected: false } : a)));
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const f = ferramentaDoAtalho(e.key);
       if (f) { setOrigemSeta(null); setFerramenta(f); }
@@ -288,6 +315,137 @@ export function Canvas({ projeto }: { projeto: string }) {
     if (!atual) return;
     const limpo = rotulo.trim();
     enviar([{ op: "upsert", tipo: "aresta", item: { ...atual, rotulo: limpo || undefined, rev: Date.now() } }]);
+  };
+
+  // --- selecao / inspetor (S3) ---
+  /** Desmarca tudo: fecha o inspetor (Esc, ✕ ou depois de agrupar/apagar). */
+  const deselecionar = () => {
+    setNos((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    setArestas((es) => es.map((a) => (a.selected ? { ...a, selected: false } : a)));
+  };
+
+  /** Remove em lote (painel "N itens" ou Delete). */
+  const apagarSelecao = (alvos: { nos: string[]; arestas: string[] }) => {
+    if (bloqueado) return;
+    const rev = Date.now();
+    const ops: Op[] = [
+      ...alvos.nos.map((id): Op => ({ op: "remove", tipo: "no", item: { id, rev } })),
+      ...alvos.arestas.map((id): Op => ({ op: "remove", tipo: "aresta", item: { id, rev } })),
+    ];
+    if (ops.length) enviar(ops);
+    deselecionar();
+  };
+
+  /** Cria uma regiao ao redor dos nos escolhidos e os torna filhos dela. */
+  const agruparSelecao = (ids: string[]) => {
+    if (bloqueado || ids.length === 0) return;
+    const escolhidos = estado.nos.filter((n) => ids.includes(n.id));
+    if (escolhidos.length === 0) return;
+    const pad = 24;
+    const minX = Math.min(...escolhidos.map((n) => n.x)) - pad;
+    const maxX = Math.max(...escolhidos.map((n) => n.x + n.w)) + pad;
+    const minY = Math.min(...escolhidos.map((n) => n.y)) - pad - 22; // espaco pro titulo da regiao
+    const maxY = Math.max(...escolhidos.map((n) => n.y + n.h)) + pad;
+    const id = novoId("g");
+    const rev = Date.now();
+    const grupo: No = { id, tipo: "grupo", x: minX, y: minY, w: maxX - minX, h: maxY - minY, dados: { titulo: "Região", cor: "lilas" }, rev };
+    const ops: Op[] = [{ op: "upsert", tipo: "no", item: grupo }];
+    for (const n of escolhidos) ops.push({ op: "upsert", tipo: "no", item: { ...n, pai: id, rev } });
+    enviar(ops);
+    deselecionar();
+  };
+
+  // --- duplicar / copiar-colar / ordem z (S3b) ---
+  /** Ids dos nos selecionados no momento (a partir da selecao do react-flow). */
+  const idsSelecionados = () => nos.filter((n) => n.selected).map((n) => n.id);
+
+  /** Duplica os nos de `ids` (+ filhos de grupos e arestas internas) com `desloc` px; upsert. */
+  const duplicarCom = (ids: string[], desloc: number): boolean => {
+    if (bloqueado || ids.length === 0) return false;
+    const copia = duplicarNos({ nos: estado.nos, arestas: estado.arestas }, ids, () => novoId("d"), desloc);
+    if (copia.nos.length === 0 && copia.arestas.length === 0) return false;
+    const rev = Date.now();
+    const ops: Op[] = [
+      ...copia.nos.map((n): Op => ({ op: "upsert", tipo: "no", item: { ...n, rev } })),
+      ...copia.arestas.map((a): Op => ({ op: "upsert", tipo: "aresta", item: { ...a, rev } })),
+    ];
+    enviar(ops);
+    return true;
+  };
+
+  /** Ctrl+A: marca todos os nos e arestas. */
+  const selecionarTudo = () => {
+    setNos((ns) => ns.map((n) => (n.selected ? n : { ...n, selected: true })));
+    setArestas((es) => es.map((a) => (a.selected ? a : { ...a, selected: true })));
+  };
+
+  /** Ctrl+C: guarda os nos selecionados no clipboard em memoria. */
+  const copiarSelecao = () => {
+    const ids = idsSelecionados();
+    if (ids.length) clipboard.current = { ids, colagens: 0 };
+  };
+
+  /** Ctrl+V / menu Colar: cola o clipboard deslocando +24 a cada colagem. */
+  const colarClipboard = (): boolean => {
+    const cb = clipboard.current;
+    if (!cb) return false;
+    if (!duplicarCom(cb.ids, 24 * (cb.colagens + 1))) return false;
+    clipboard.current = { ids: cb.ids, colagens: cb.colagens + 1 };
+    return true;
+  };
+
+  /** Traz/envia um no' pra frente/tras (ordemZ -> upsert com dados.z). */
+  const mudarOrdem = (id: string, onde: "frente" | "tras") => {
+    if (bloqueado) return;
+    const alterados = ordemZ(estado.nos, [id], onde);
+    if (alterados.length) enviar(alterados.map((n): Op => ({ op: "upsert", tipo: "no", item: n })));
+  };
+
+  /** Nova nota na posicao (plano do canvas) do clique direito no vazio. */
+  const novaNotaEm = (x: number, y: number) => {
+    if (bloqueado) return;
+    const no = noNovo("nota", { x, y, w: TAMANHO_PADRAO.nota.w, h: TAMANHO_PADRAO.nota.h }, novoId("n"));
+    if (no) enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
+  // Atalhos de edicao do canvas (o listener chama este handler reassinado a cada render).
+  atalhos.current = (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    // Delete/Backspace apaga a selecao (nos + arestas).
+    if (e.key === "Delete" || e.key === "Backspace") {
+      const alvos = { nos: idsSelecionados(), arestas: arestas.filter((a) => a.selected).map((a) => a.id) };
+      if (alvos.nos.length === 0 && alvos.arestas.length === 0) return false;
+      e.preventDefault();
+      apagarSelecao(alvos);
+      return true;
+    }
+    if (ctrl && !e.altKey) {
+      const k = e.key.toLowerCase();
+      // Desfazer/refazer locais: Ctrl+Z desfaz; Ctrl+Shift+Z e Ctrl+Y refazem.
+      if (k === "z") {
+        if (bloqueado) return false;
+        e.preventDefault();
+        if (e.shiftKey) refazer(); else desfazer();
+        return true;
+      }
+      if (k === "y") {
+        if (bloqueado) return false;
+        e.preventDefault();
+        refazer();
+        return true;
+      }
+      if (k === "d") { if (duplicarCom(idsSelecionados(), 24)) { e.preventDefault(); return true; } return false; }
+      if (k === "a") { e.preventDefault(); selecionarTudo(); return true; }
+      if (k === "c") { copiarSelecao(); return true; }
+      if (k === "v") { if (colarClipboard()) { e.preventDefault(); return true; } return false; }
+      if (k === "0") { e.preventDefault(); void instancia.current?.zoomTo(1); return true; }
+    }
+    if (!ctrl && e.shiftKey && (e.key === "!" || e.key === "1")) {
+      e.preventDefault();
+      void instancia.current?.fitView({ maxZoom: 1, padding: 0.25 });
+      return true;
+    }
+    return false;
   };
 
   // --- criacao de nos por clique/arrasto no pane (S2) ---
@@ -421,7 +579,26 @@ export function Canvas({ projeto }: { projeto: string }) {
     editarAresta: setArestaEditando,
   };
 
+  // Menu de contexto: no' do alvo (tipo/paleta) e as acoes que ele chama de volta.
+  const noDoMenu = alvoMenu?.tipo === "no" ? estado.nos.find((n) => n.id === alvoMenu.id) : undefined;
+  const acoesMenu: MenuAcoes = {
+    duplicar: (id) => { duplicarCom([id], 24); },
+    mudarCor: (id, cor) => aoEditar(id, { cor }),
+    paraFrente: (id) => mudarOrdem(id, "frente"),
+    paraTras: (id) => mudarOrdem(id, "tras"),
+    apagar: aoRemoverNo,
+    novaNota: novaNotaEm,
+    colar: () => { colarClipboard(); },
+  };
+
+  // Itens selecionados (modelo): o inspetor decide o painel a partir daqui.
+  const idsNos = new Set(nos.filter((n) => n.selected).map((n) => n.id));
+  const idsArestas = new Set(arestas.filter((a) => a.selected).map((a) => a.id));
+  const nosSelecionados = estado.nos.filter((n) => idsNos.has(n.id));
+  const arestasSelecionadas = estado.arestas.filter((a) => idsArestas.has(a.id));
+
   return (
+    <MenuContexto alvo={alvoMenu} no={noDoMenu} acoes={acoesMenu} onFechar={() => setAlvoMenu(null)}>
     <div
       ref={container}
       className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
@@ -439,6 +616,15 @@ export function Canvas({ projeto }: { projeto: string }) {
           onNodeClick={aoClicarNo}
           onEdgeDoubleClick={(_e, a) => setArestaEditando(a.id)}
           onPaneClick={() => { setArestaEditando(null); if (ferramenta === "seta") setOrigemSeta(null); }}
+          onNodeContextMenu={(e, node) => {
+            e.preventDefault();
+            setAlvoMenu({ tipo: "no", id: node.id, x: e.clientX, y: e.clientY });
+          }}
+          onPaneContextMenu={(e) => {
+            e.preventDefault();
+            const p = instancia.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY }) ?? { x: 0, y: 0 };
+            setAlvoMenu({ tipo: "pane", x: e.clientX, y: e.clientY, fx: p.x, fy: p.y });
+          }}
           onInit={(i) => { instancia.current = i; }}
           onPointerDown={aoApontarPane}
           onPointerMove={aoMoverPane}
@@ -454,7 +640,7 @@ export function Canvas({ projeto }: { projeto: string }) {
           panOnDrag={efetiva === "mao" ? true : selecionando ? [1] : false}
           selectionOnDrag={selecionando}
           panOnScroll={false}
-          deleteKeyCode={bloqueado ? null : ["Delete", "Backspace"]}
+          deleteKeyCode={null}
           nodesDraggable={!bloqueado}
           nodesConnectable={!bloqueado && !criando && ferramenta !== "seta"}
           elementsSelectable={!bloqueado}
@@ -492,6 +678,17 @@ export function Canvas({ projeto }: { projeto: string }) {
         onImagem={(arquivo) => void criarImagem(arquivo)}
       />
 
+      <Inspetor
+        nos={nosSelecionados}
+        arestas={arestasSelecionadas}
+        bloquear={bloqueado}
+        editar={aoEditar}
+        rotular={aoRotular}
+        apagar={apagarSelecao}
+        agrupar={agruparSelecao}
+        fechar={deselecionar}
+      />
+
       {bloqueado && (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center p-2">
           <div className="flex items-center gap-2 rounded-full border border-warn/40 bg-warn/10 px-3 py-1 text-xs text-warn">
@@ -506,6 +703,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         </div>
       )}
     </div>
+    </MenuContexto>
   );
 }
 
