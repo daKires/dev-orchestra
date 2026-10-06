@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts && npm --prefix web test",
+    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts && npm --prefix web test",
     "test:runs": "tsc && node --test dist/runs.test.js",
     "test:hub": "tsc && node --test dist/hub.test.js",
     "test:novafeature": "tsc && node --test dist/ui-nova-feature.test.js",
@@ -16,7 +16,10 @@
     "test:modelo": "tsc && node --test dist/modelo-planejador.test.js",
     "test:canvas-modelo": "node --experimental-strip-types --test canvas.test.ts",
     "test:canvas-hub": "tsc && node --test dist/ui-canvas.test.js",
-    "test:canvas-texto": "node --experimental-strip-types --test canvas-texto.test.ts"
+    "test:canvas-texto": "node --experimental-strip-types --test canvas-texto.test.ts",
+    "test:agentes": "node --experimental-strip-types --test agentes.test.ts",
+    "test:contexto": "node --experimental-strip-types --test contexto.test.ts",
+    "test:agentes-hub": "tsc && node --test dist/ui-agentes.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
