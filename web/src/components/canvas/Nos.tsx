@@ -12,6 +12,7 @@ import {
   CORES_FORMA, CORES_NOTA, estiloForma, estiloNota, mdBlocos, type Trecho,
 } from "@/lib/canvas";
 import { cn } from "@/lib/utils";
+import type { EmConversa } from "@/lib/colab";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -420,23 +421,39 @@ export const nodeTypes = { nota: NoNota, imagem: NoImagem, forma: NoForma, grupo
 // edgeTypes: aresta bezier com rotulo editavel (duplo clique) em pilula
 // ---------------------------------------------------------------------------
 
-function ArestaRotulo({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd }: EdgeProps) {
+/** Cor do tracejado/balao das arestas em conversa (F3 S4) — mesmo azul das alcas ativas. */
+const AZUL_CONVERSA = "#74aaff";
+
+/** data da aresta: `rotulo` do usuario e, quando em conversa, `{sentido, balao}` (F3 S4). */
+type DadosAresta = { rotulo?: string; conversa?: EmConversa };
+
+function ArestaRotulo({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd, style }: EdgeProps) {
   const acoes = useContext(CanvasCtx);
+  const dados = data as DadosAresta | undefined;
+  const conversa = dados?.conversa;
+  // Aresta em conversa (F3 S4): o balao do chat virou rotulo e a animacao azul e' o destaque.
   const [caminho, rotX, rotY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
-  const rotulo = String((data as { rotulo?: string } | undefined)?.rotulo ?? "");
-  const editando = acoes.arestaEditando === id;
+  const rotulo = conversa ? conversa.balao : String(dados?.rotulo ?? "");
+  const editando = acoes.arestaEditando === id && !conversa;
   const [rascunho, setRascunho] = useState(rotulo);
   useEffect(() => { if (editando) setRascunho(rotulo); }, [editando, rotulo]);
   const salvar = () => { acoes.rotular(id, rascunho); acoes.editarAresta(null); };
   return (
     <>
-      <BaseEdge id={id} path={caminho} markerEnd={markerEnd} />
+      <BaseEdge
+        id={id}
+        path={caminho}
+        markerEnd={markerEnd}
+        style={conversa ? { ...style, stroke: AZUL_CONVERSA } : style}
+      />
       <EdgeLabelRenderer>
         <div
           className="nodrag nopan absolute"
           style={{ transform: `translate(-50%, -50%) translate(${rotX}px, ${rotY}px)`, pointerEvents: "all" }}
         >
-          {editando ? (
+          {conversa ? (
+            <span className="cv-rotulo-conversa" title={conversa.balao}>{conversa.balao}</span>
+          ) : editando ? (
             <input
               autoFocus value={rascunho}
               onChange={(e) => setRascunho(e.target.value)}

@@ -16,6 +16,7 @@ import {
 } from "@/lib/canvas";
 import { layoutAgentes, layoutRuns } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
+import { arestasEmConversa, type EmConversa } from "@/lib/colab";
 import { cn } from "@/lib/utils";
 import { useAgentes } from "@/hooks/useAgentes";
 import { useAgora, useRuns } from "@/hooks/useRuns";
@@ -28,6 +29,7 @@ import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContex
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
 import { AgentesCtx, nodeTypes as agenteNodeTypes } from "./canvas/Agente";
 import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes } from "./canvas/Run";
+import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -36,15 +38,16 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b) + run/worker/arquivo (S5c).
-const nodeTypes = { ...nosNodeTypes, ...agenteNodeTypes, ...runNodeTypes };
+// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b) + run/worker/arquivo (S5c)
+// + o explorador de arquivos (F3 S5).
+const nodeTypes = { ...nosNodeTypes, ...agenteNodeTypes, ...runNodeTypes, ...exploradorNodeTypes };
 
 // ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 // ---------------------------------------------------------------------------
 
-// Tipos que tem render proprio; os demais (explorador, navegador…) caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo"]);
+// Tipos que tem render proprio; os demais (navegador…) caem no card de nota como fallback.
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -93,14 +96,19 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
 }
 
 // A seta (markerEnd ArrowClosed) so' aparece quando as duas pontas sao formas (pontaDaAresta).
-function arestaParaRf(a: Aresta, porId: Map<string, No>): Edge {
+// Aresta em conversa (F3 S4): tracejado azul animado (#74aaff) com o balao como rotulo; sentido
+// reverso inverte a animacao pela classe CSS `cv-anim-reversa` (sem trocar source/target).
+function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<string, EmConversa>): Edge {
   const comSeta = pontaDaAresta(porId.get(a.de)?.tipo, porId.get(a.para)?.tipo);
+  const conv = emConversa[a.id];
   return {
     id: a.id,
     source: a.de,
     target: a.para,
     type: "rotulo",
-    data: { rotulo: a.rotulo ?? "" },
+    data: { rotulo: a.rotulo ?? "", conversa: conv },
+    animated: !!conv,
+    className: conv?.sentido === "reverso" ? "cv-anim-reversa" : undefined,
     markerEnd: comSeta ? { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 } : undefined,
   };
 }
@@ -168,7 +176,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
 
   // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
-  const { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos } = useAgentes(projeto);
+  const { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos } = useAgentes(projeto);
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
@@ -208,6 +216,12 @@ export function Canvas({ projeto }: { projeto: string }) {
     const arestas = [...estado.arestas, ...arestasExtras].filter((a) => idsNos.has(a.de) && idsNos.has(a.para));
     return { nos, arestas };
   }, [estado, agentes, runsProjeto]);
+
+  // Arestas em conversa (F3 S4): mapa edgeId -> {sentido, balao} a partir de {conversas} do SSE.
+  const emConversa = useMemo(
+    () => arestasEmConversa(conversas, modelo.arestas),
+    [conversas, modelo.arestas],
+  );
 
   // Agente de planejador novo: persistido UMA vez, quando aparece no canvas (id novo no `ag:<id>`).
   useEffect(() => {
@@ -252,12 +266,12 @@ export function Canvas({ projeto }: { projeto: string }) {
     setArestas((antigas) => {
       const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
       return modelo.arestas.map((a) => {
-        const rf = arestaParaRf(a, porId);
+        const rf = arestaParaRf(a, porId, emConversa);
         if (sel.has(a.id)) rf.selected = true;
         return rf;
       });
     });
-  }, [modelo]);
+  }, [modelo, emConversa]);
 
   useEffect(() => {
     if (!aviso) return;
@@ -617,8 +631,33 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /** Card 'arquivo' solto no canvas a partir do Explorador: guarda o agente + caminho (previa no clique). */
+  const criarArquivoNo = (agenteId: string, caminho: string, cliente?: { x: number; y: number }) => {
+    if (bloqueado) return;
+    const p = centro(cliente);
+    const w = 240;
+    const h = 56;
+    const no: No = {
+      id: novoId("arq"), tipo: "arquivo",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { agenteId, caminho, status: "referência" }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
   const aoSoltarArquivo = (e: DragEvent) => {
     e.preventDefault();
+    // Arrasto de um arquivo do Explorador: vira um no' 'arquivo' com dados {agenteId, caminho, status}.
+    const bruto = e.dataTransfer?.getData(MIME_ARQUIVO);
+    if (bruto) {
+      try {
+        const j = JSON.parse(bruto) as { agenteId?: unknown; caminho?: unknown };
+        if (typeof j.agenteId === "string" && j.agenteId && typeof j.caminho === "string" && j.caminho) {
+          criarArquivoNo(j.agenteId, j.caminho, { x: e.clientX, y: e.clientY });
+          return;
+        }
+      } catch {}
+    }
     const arquivo = e.dataTransfer?.files?.[0];
     if (arquivo) void criarImagem(arquivo, { x: e.clientX, y: e.clientY });
   };
@@ -723,6 +762,24 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /** "+ Explorador" do menu do agente: cria o no' `exp:<agenteId>` (320x460) a esquerda do agente, ligado a ele. */
+  const abrirExplorador = (agenteId: string) => {
+    if (bloqueado) return;
+    const agNo = buscarNo(`ag:${agenteId}`);
+    const w = 320;
+    const h = 460;
+    const x = agNo ? Math.round(agNo.x - w - 40) : 0;
+    const y = agNo ? Math.round(agNo.y) : 0;
+    const idExp = `exp:${agenteId}`;
+    const rev = Date.now();
+    const no: No = { id: idExp, tipo: "explorador", x, y, w, h, dados: { agenteId }, rev };
+    const aresta: Aresta = { id: `${idExp}->ag:${agenteId}`, de: idExp, para: `ag:${agenteId}`, rev };
+    enviar([
+      { op: "upsert", tipo: "no", item: no },
+      { op: "upsert", tipo: "aresta", item: aresta },
+    ]);
+  };
+
   // Nos 'agente' escondidos (dados.oculto) deste projeto: conteudo do menu "Reabrir agente".
   const agentesOcultos = estado.nos.filter((n) => n.tipo === "agente" && n.dados.oculto === true);
   const nomeAgente = (no: No): string => {
@@ -734,7 +791,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   const agentesValor = {
     agentes,
     linhasPorId,
-    acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos },
+    acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos, explorador: abrirExplorador },
     onFechar: pedirFecharAgente,
   };
   const runsValor = {

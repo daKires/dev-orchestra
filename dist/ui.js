@@ -11,6 +11,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
 import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps } from "./canvas.js";
+import { randomBytes } from "node:crypto";
+import { conectados, resolverAlvo, slugNome, Conversas, FilaEntregas, fmtPergunta, fmtResposta, fmtMensagem, fmtSemResposta, linhaIdentidade, opsFlowAdd, opsFlowLink, opsFile, opsNote, validarCaminho, } from "./colaboracao.js";
 import { PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas, aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos, } from "./agentes.js";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
@@ -269,6 +271,8 @@ function atualizarPlanejadores() {
     planejadores = lista;
     for (const c of clientes)
         sse(c, { planejadores: lista });
+    for (const p of lista)
+        void garantirTokenPlanejador(p); // F3/S2: identidade do planejador (uma vez)
     void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
 }
 // Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
@@ -644,6 +648,12 @@ let matarProcessoAtual = (pid) => { try {
     process.kill(pid);
 }
 catch { } };
+// ---- colaboracao entre agentes (F3/S2): identidade por token, conversas e fila de entregas ----
+const conversas = new Conversas();
+const filaEntregas = new FilaEntregas();
+const tokensPlanejadores = new Map(); // "plan-<slug>" -> token
+let expiracao = null; // varre as conversas pendentes a cada 60s
+function novoToken() { return randomBytes(24).toString("hex"); } // 48 chars (>=16)
 // Porta livre escolhida pelo SO (mesma ideia do TcpListener do orchestra-go.ps1).
 function portaLivre() {
     return new Promise((ok, falha) => {
@@ -670,13 +680,23 @@ function caminhoOpencode() {
     catch { }
     return "opencode";
 }
+// PATH do processo do serve com a pasta bin/ do hermes-bridge na frente (o CLI `canvas` fica la).
+// No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave no env do filho).
+function envServe() {
+    const bin = path.join(RAIZ_BRIDGE, "bin");
+    const env = { ...process.env };
+    const atual = env.PATH ?? env.Path ?? "";
+    delete env.Path;
+    env.PATH = bin + path.delimiter + atual;
+    return env;
+}
 // Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
-async function subirServeReal(cwd) {
+async function subirServeReal(cwd, env) {
     const porta = await portaLivre();
     // detached + unref: o serve vira processo independente (novo grupo no Windows) e SOBREVIVE ao hub
     // (mesmo efeito do Start-Process do orchestra-go.ps1). Sem isso ele e' filho do processo do hub e
     // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
-    const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: process.env, detached: true });
+    const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: env ?? process.env, detached: true });
     p.unref();
     const base = `http://127.0.0.1:${porta}`;
     for (let i = 0; i < 60; i++) {
@@ -711,7 +731,13 @@ function carregarAgentes() {
     for (const f of files) {
         try {
             const a = validarAgente(JSON.parse(fs.readFileSync(path.join(AGENTES_DIR, f), "utf8")));
-            if (a)
+            if (!a)
+                continue; // nao e' um agente do canvas (ex.: registro {id,token} de planejador): ignora
+            if (!a.token) {
+                a.token = novoToken();
+                gravarAgente(a);
+            } // agente antigo sem token ganha um ao carregar
+            else
                 agentes.set(a.id, a);
         }
         catch { }
@@ -949,39 +975,50 @@ function tratarEvento(base, ev, papeis, partes) {
         broadcast({ agenteLinhas: { id: ag.id, linhas: novas } });
     }
     if (r.status) {
-        if (r.status === "ocupado")
+        if (r.status === "ocupado") {
             fila.marcarOcupado(ag.id);
+            filaEntregas.marcarOcupado(ag.id);
+        }
         else {
             fila.marcarOcioso(ag.id);
+            filaEntregas.marcarOcioso(ag.id);
             tentarLiberarAviso(ag.id);
+            tentarLiberarEntregas(ag.id);
         }
         broadcast({ agentes: listarAgentes(ag.projeto) });
     }
 }
-// system do prompt: instrucao do papel (com o <id> substituido); garante a linha do README de contexto.
+// system do prompt: instrucao do papel (com o <id> substituido) + linha do README de contexto +
+// a identidade do agente (nome (id) + comando `canvas --eu id:token`, F3/S2).
 function instrucaoDe(a) {
     const comId = (a.instrucao ?? "").replace(/<id>/g, a.id).trim();
-    if (/README\.md/.test(comId))
-        return comId;
-    const linha = "Antes de responder, leia .orchestra/contexto/" + a.id + "/README.md se existir.";
-    return comId ? comId + " " + linha : linha;
+    const partes = [];
+    if (comId)
+        partes.push(comId);
+    if (!/README\.md/.test(comId))
+        partes.push("Antes de responder, leia .orchestra/contexto/" + a.id + "/README.md se existir.");
+    if (a.token)
+        partes.push(linhaIdentidade(a.nome, a.id, a.token));
+    return partes.join(" ");
 }
-async function enviarPrompt(a, texto) {
-    if (!a.base || !a.sessao)
+// POST /session/<sessao>/prompt_async (best-effort); model/system opcionais.
+async function enviarTexto(base, sessao, texto, sistema, modelo) {
+    if (!base || !sessao)
         return;
     const corpo = { parts: [{ type: "text", text: texto }] };
-    const m = separarModelo(a.modelo);
-    if (m)
-        corpo.model = m;
-    const sistema = instrucaoDe(a);
+    if (modelo)
+        corpo.model = modelo;
     if (sistema)
         corpo.system = sistema;
     try {
-        await fetch(`${a.base}/session/${a.sessao}/prompt_async`, {
+        await fetch(`${base}/session/${sessao}/prompt_async`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo),
         });
     }
     catch { }
+}
+async function enviarPrompt(a, texto) {
+    await enviarTexto(a.base, a.sessao, texto, instrucaoDe(a), separarModelo(a.modelo));
 }
 function tentarLiberarAviso(id) {
     const a = agentes.get(id);
@@ -990,6 +1027,159 @@ function tentarLiberarAviso(id) {
     const msg = fila.liberar(id, Date.now());
     if (msg)
         void enviarPrompt(a, msg);
+}
+// ---------------------------------------------------------------------------
+// Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
+// ---------------------------------------------------------------------------
+// Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
+function colabDe(id) {
+    const a = agentes.get(id);
+    if (a)
+        return { id: a.id, nome: a.nome, projeto: a.projeto, cwd: a.cwd, base: a.base, sessao: a.sessao, token: a.token ?? "" };
+    const tok = tokensPlanejadores.get(id);
+    const p = planejadores.find((x) => "plan-" + x.slug === id);
+    if (p && tok) {
+        const ag = agenteDePlanejador(p);
+        return { id, nome: ag.nome, projeto: ag.projeto, cwd: ag.cwd, base: ag.base, sessao: ag.sessao, token: tok };
+    }
+    return undefined;
+}
+// X-Eu: "id:token" -> Colab so' se o token bater (senao undefined = identidade invalida).
+function colabDoToken(eu) {
+    const i = eu.indexOf(":");
+    if (i <= 0 || i === eu.length - 1)
+        return undefined;
+    const id = eu.slice(0, i);
+    const token = eu.slice(i + 1);
+    const c = colabDe(id);
+    return c && c.token === token ? c : undefined;
+}
+// Agentes do projeto do agente (id + nome), na ordem dos registros; alimenta conectados/resolverAlvo.
+function agentesRefProjeto(projeto) {
+    const out = [];
+    for (const a of agentes.values())
+        if (a.projeto === projeto)
+            out.push({ id: a.id, nome: a.nome });
+    for (const p of planejadores) {
+        if (p.raiz !== projeto && idProjeto(p.raiz) !== idProjeto(projeto))
+            continue;
+        const ag = agenteDePlanejador(p);
+        out.push({ id: ag.id, nome: ag.nome });
+    }
+    return out;
+}
+// Status de colaboracao: ocupado -> "trabalhando"; encerrado -> "encerrado"; resto -> "ocioso".
+function statusColab(id) {
+    const s = statusDe(id);
+    if (s === "encerrado")
+        return "encerrado";
+    if (s === "ocupado")
+        return "trabalhando";
+    return "ocioso";
+}
+function estaOcupado(id) { return fila.estados.get(id)?.ocupado === true; }
+// Envia agora (ocioso) ou enfileira (ocupado). Devolve true se entregou na hora.
+async function entregarColab(id, texto) {
+    if (estaOcupado(id)) {
+        filaEntregas.enfileirar(id, texto);
+        return false;
+    }
+    const a = agentes.get(id);
+    if (a) {
+        await enviarPrompt(a, texto);
+        return true;
+    }
+    const c = colabDe(id);
+    if (c)
+        await enviarTexto(c.base, c.sessao, texto);
+    return true;
+}
+// Alvo ficou ocioso: esvazia a fila de entregas dele.
+function tentarLiberarEntregas(id) {
+    const pend = filaEntregas.liberar(id);
+    for (const texto of pend)
+        void entregarColab(id, texto);
+}
+// {conversas:[{q,de,para,texto}]} em toda mudanca (ids de agentes).
+function broadcastConversas() {
+    broadcast({ conversas: conversas.pendentes().map((p) => ({ q: p.q, de: p.de, para: p.para, texto: p.texto })) });
+}
+// Expiracao das perguntas pendentes: avisa a origem que o alvo nao respondeu.
+function expirarConversas() {
+    const expiradas = conversas.expirar();
+    if (!expiradas.length)
+        return;
+    for (const p of expiradas) {
+        const nomeAlvo = colabDe(p.para)?.nome ?? p.para;
+        void entregarColab(p.de, fmtSemResposta(nomeAlvo, p.q));
+    }
+    broadcastConversas();
+}
+function iniciarExpiracao() {
+    if (expiracao)
+        return;
+    expiracao = setInterval(expirarConversas, 60_000);
+    expiracao.unref?.();
+}
+function pararExpiracao() { if (expiracao) {
+    clearInterval(expiracao);
+    expiracao = null;
+} }
+// Planejadores: na primeira vez que sao vistos, ganham um token (AGENTES_DIR/<id>.json = {id,token})
+// e recebem UMA vez a linha de identidade como mensagem.
+function arquivoTokenPlanejador(id) { return path.join(AGENTES_DIR, id + ".json"); }
+async function garantirTokenPlanejador(p) {
+    const id = "plan-" + p.slug;
+    if (tokensPlanejadores.has(id))
+        return;
+    try {
+        const j = JSON.parse(fs.readFileSync(arquivoTokenPlanejador(id), "utf8"));
+        if (j && j.id === id && typeof j.token === "string" && j.token.length >= 16) {
+            tokensPlanejadores.set(id, j.token);
+            return;
+        }
+    }
+    catch { }
+    const token = novoToken();
+    tokensPlanejadores.set(id, token);
+    try {
+        fs.mkdirSync(AGENTES_DIR, { recursive: true });
+        fs.writeFileSync(arquivoTokenPlanejador(id), JSON.stringify({ id, token }));
+    }
+    catch { }
+    const ag = agenteDePlanejador(p);
+    await entregarColab(id, linhaIdentidade(ag.nome, id, token));
+}
+// Aplica um lote de ops no canvas do projeto pelo MESMO caminho do POST /canvas/op.
+function aplicarOpsProjeto(projeto, ops) {
+    const id = idProjeto(projeto);
+    const snapNovo = aplicarOps(lerCanvas(id), ops);
+    canvasCache.set(id, snapNovo);
+    gravarCanvasDebounced(id);
+    broadcast({ canvasOp: { projeto, ops } });
+    try {
+        sincronizarContexto(projeto, snapNovo);
+    }
+    catch { }
+}
+// Arvore do worktree do agente: `git ls-files` + nao rastreados (exclui ignorados), barras '/', ate 5000.
+function listarArvore(cwd) {
+    const opcoes = { cwd, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] };
+    const out = new Set();
+    try {
+        for (const linha of execSync("git ls-files", opcoes).split(/\r?\n/))
+            if (linha.trim())
+                out.add(linha.trim().replace(/\\/g, "/"));
+        for (const linha of execSync("git ls-files --others --exclude-standard", opcoes).split(/\r?\n/))
+            if (linha.trim())
+                out.add(linha.trim().replace(/\\/g, "/"));
+    }
+    catch { }
+    return [...out].slice(0, 5000);
+}
+function responderTexto(res, status, texto) {
+    res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(texto);
 }
 async function criarSessao(base, nome) {
     try {
@@ -1232,6 +1422,7 @@ function ceder() {
         clearInterval(limpeza);
         limpeza = null;
     }
+    pararExpiracao();
     if (watcher) {
         try {
             watcher.close();
@@ -1562,7 +1753,7 @@ function criarServidor() {
             }
             if (!serve) {
                 try {
-                    serve = await subirServeAtual(cwd);
+                    serve = await subirServeAtual(cwd, envServe());
                     serves.set(cwd, serve);
                 }
                 catch (e) {
@@ -1583,6 +1774,7 @@ function criarServidor() {
             const reg = {
                 id, projeto, cwd, base: serve ? serve.base : "", sessao, nome,
                 papel: papel, modelo, instrucao, tipo: "opencode", origem: "canvas",
+                token: novoToken(),
             };
             if (!ok)
                 reg.erro = erro || "falha ao subir o OpenCode";
@@ -1667,7 +1859,13 @@ function criarServidor() {
                     return;
                 }
                 if (acao === "encerrar") {
+                    // Encerra as conversas do agente: quem perguntou a ele recebe o aviso de "sem resposta".
+                    const pendentes = conversas.encerrarAgente(id);
+                    for (const p of pendentes)
+                        void entregarColab(p.de, fmtSemResposta(a.nome, p.q));
                     await encerrarAgente(a);
+                    if (pendentes.length)
+                        broadcastConversas();
                     res.writeHead(204);
                     res.end();
                     return;
@@ -1696,7 +1894,7 @@ function criarServidor() {
                     let erro = "";
                     if (!serve) {
                         try {
-                            serve = await subirServeAtual(a.cwd);
+                            serve = await subirServeAtual(a.cwd, envServe());
                             serves.set(a.cwd, serve);
                         }
                         catch (e) {
@@ -1741,6 +1939,190 @@ function criarServidor() {
             }
             res.writeHead(404);
             res.end();
+            return;
+        }
+        // ---- CLI dos agentes (F3/S2): POST /cli/<cmd> com X-Hermes e X-Eu: id:token ----
+        if (caminho.startsWith("/cli/")) {
+            const corpo = await lerCorpo(req, LIMITE_BODY);
+            if (corpo === null) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            if (!acaoValida(req)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            const c = colabDoToken(String(req.headers["x-eu"] ?? ""));
+            if (!c) {
+                responderTexto(res, 403, "identidade inválida");
+                return;
+            }
+            let j = null;
+            try {
+                j = corpo ? JSON.parse(corpo) : null;
+            }
+            catch { }
+            const cmd = caminho.slice("/cli/".length);
+            const snap = lerCanvas(idProjeto(c.projeto));
+            const noAg = snap.nos.find((n) => n.id === "ag:" + c.id);
+            // No' do agente no canvas do projeto; se nao existir, uma posicao padrao.
+            const agNo = noAg ?? { id: "ag:" + c.id, tipo: "agente", x: 0, y: 0, w: 620, h: 420, dados: { agenteId: c.id }, rev: 0 };
+            const refs = () => conectados(snap, c.id, agentesRefProjeto(c.projeto));
+            const alvoDe = (bruto) => {
+                const alvo = typeof bruto === "string" ? bruto : "";
+                if (!alvo)
+                    return { erro: "alvo obrigatório" };
+                return resolverAlvo(refs(), alvo);
+            };
+            if (cmd === "list") {
+                const lista = refs();
+                responderTexto(res, 200, lista.length ? lista.map((a) => `${slugNome(a.nome)} (${a.id}) — ${a.nome}, ${statusColab(a.id)}`).join("\n") : "nenhum agente conectado a você");
+                return;
+            }
+            if (cmd === "ask") {
+                const alvo = alvoDe(j?.alvo);
+                if ("erro" in alvo) {
+                    responderTexto(res, 400, alvo.erro);
+                    return;
+                }
+                const texto = typeof j?.texto === "string" ? j.texto : "";
+                const r = conversas.perguntar(c.id, alvo.ok.id, texto);
+                if ("erro" in r) {
+                    responderTexto(res, 400, r.erro);
+                    return;
+                }
+                const entregue = await entregarColab(alvo.ok.id, fmtPergunta(c.nome, r.ok.q, texto));
+                broadcastConversas();
+                responderTexto(res, 200, entregue ? `pergunta ${r.ok.q} enviada a ${alvo.ok.nome}` : `pergunta ${r.ok.q} enfileirada (${alvo.ok.nome} ocupado)`);
+                return;
+            }
+            if (cmd === "tell") {
+                const alvo = alvoDe(j?.alvo);
+                if ("erro" in alvo) {
+                    responderTexto(res, 400, alvo.erro);
+                    return;
+                }
+                const texto = typeof j?.texto === "string" ? j.texto : "";
+                const entregue = await entregarColab(alvo.ok.id, fmtMensagem(c.nome, texto));
+                responderTexto(res, 200, entregue ? `mensagem enviada a ${alvo.ok.nome}` : `mensagem enfileirada (${alvo.ok.nome} ocupado)`);
+                return;
+            }
+            if (cmd === "reply") {
+                const q = typeof j?.q === "string" ? j.q : "";
+                const texto = typeof j?.texto === "string" ? j.texto : "";
+                const r = conversas.responder(c.id, q);
+                if ("erro" in r) {
+                    responderTexto(res, 400, r.erro);
+                    return;
+                }
+                await entregarColab(r.ok.de, fmtResposta(c.nome, r.ok.q, texto));
+                broadcastConversas();
+                responderTexto(res, 200, `resposta enviada a ${colabDe(r.ok.de)?.nome ?? r.ok.de}`);
+                return;
+            }
+            if (cmd === "flow-add") {
+                const r = opsFlowAdd(snap, agNo, c.nome, String(j?.chave ?? ""), String(j?.forma ?? ""), String(j?.texto ?? ""), typeof j?.cor === "string" ? j.cor : undefined, Date.now());
+                if ("erro" in r) {
+                    responderTexto(res, 400, r.erro);
+                    return;
+                }
+                aplicarOpsProjeto(c.projeto, r.ops);
+                responderTexto(res, 200, "fluxo atualizado");
+                return;
+            }
+            if (cmd === "flow-link") {
+                const r = opsFlowLink(snap, c.id, String(j?.a ?? ""), String(j?.b ?? ""), typeof j?.rotulo === "string" ? j.rotulo : undefined, Date.now());
+                if ("erro" in r) {
+                    responderTexto(res, 400, r.erro);
+                    return;
+                }
+                aplicarOpsProjeto(c.projeto, r.ops);
+                responderTexto(res, 200, "fluxo atualizado");
+                return;
+            }
+            if (cmd === "file") {
+                const limpo = validarCaminho(c.cwd, typeof j?.caminho === "string" ? j.caminho : "");
+                if (!limpo) {
+                    responderTexto(res, 400, "caminho inválido");
+                    return;
+                }
+                aplicarOpsProjeto(c.projeto, opsFile(snap, agNo, limpo, typeof j?.status === "string" ? j.status : "", Date.now()));
+                responderTexto(res, 200, "arquivo atualizado");
+                return;
+            }
+            if (cmd === "note") {
+                aplicarOpsProjeto(c.projeto, opsNote(snap, agNo, typeof j?.titulo === "string" ? j.titulo : "", typeof j?.corpo === "string" ? j.corpo : "", Date.now()));
+                responderTexto(res, 200, "nota atualizada");
+                return;
+            }
+            responderTexto(res, 400, "comando desconhecido: " + cmd);
+            return;
+        }
+        // ---- arvore e preview de arquivo do agente (F3/S2) ----
+        if (caminho === "/arvore") {
+            const c = colabDe(new URL(url, "http://x").searchParams.get("agente") || "");
+            if (!c) {
+                res.writeHead(404);
+                res.end();
+                return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(listarArvore(c.cwd)));
+            return;
+        }
+        if (caminho === "/arquivo") {
+            const params = new URL(url, "http://x").searchParams;
+            const c = colabDe(params.get("agente") || "");
+            if (!c) {
+                res.writeHead(404);
+                res.end();
+                return;
+            }
+            const limpo = validarCaminho(c.cwd, params.get("caminho") || "");
+            if (!limpo) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            const raiz = path.resolve(c.cwd);
+            const alvo = path.resolve(raiz, limpo);
+            if (alvo !== raiz && !alvo.startsWith(raiz + path.sep)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            let st;
+            try {
+                st = fs.statSync(alvo);
+            }
+            catch {
+                res.writeHead(404);
+                res.end();
+                return;
+            }
+            if (!st.isFile()) {
+                res.writeHead(404);
+                res.end();
+                return;
+            }
+            if (st.size > 200 * 1024) {
+                res.writeHead(413);
+                res.end();
+                return;
+            }
+            let buf;
+            try {
+                buf = fs.readFileSync(alvo);
+            }
+            catch {
+                res.writeHead(404);
+                res.end();
+                return;
+            }
+            res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+            res.end(buf);
             return;
         }
         servirEstatico(url, res);
@@ -1816,6 +2198,7 @@ export async function iniciarUI(opts = {}) {
         await tentarAssumir();
     if (servidor)
         void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
+    iniciarExpiracao(); // F3/S2: varre as conversas pendentes (expira -> avisa a origem)
     // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
     if (!reassumir)
         reassumir = setInterval(() => { if (!servidor)
@@ -1836,6 +2219,7 @@ export function pararUI() {
         clearInterval(limpeza);
         limpeza = null;
     }
+    pararExpiracao();
     if (watcher) {
         try {
             watcher.close();

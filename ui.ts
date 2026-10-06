@@ -10,7 +10,14 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
-import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type No, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import { randomBytes } from "node:crypto";
+import {
+  conectados, resolverAlvo, slugNome, Conversas, FilaEntregas,
+  fmtPergunta, fmtResposta, fmtMensagem, fmtSemResposta, linhaIdentidade,
+  opsFlowAdd, opsFlowLink, opsFile, opsNote, validarCaminho,
+  type AgenteRef,
+} from "./colaboracao.js";
 import {
   PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas,
   aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos,
@@ -268,6 +275,7 @@ function atualizarPlanejadores(): void {
   planejadoresAssinatura = assinatura;
   planejadores = lista;
   for (const c of clientes) sse(c, { planejadores: lista });
+  for (const p of lista) void garantirTokenPlanejador(p); // F3/S2: identidade do planejador (uma vez)
   void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
 }
 
@@ -551,7 +559,7 @@ function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
 
 // Registro em disco de um agente: o Agente do modelo + campos de runtime (erro do ultimo start,
 // pid do serve e status explicito marcado pelo reiniciar, que destaca o serve como saudavel).
-type RegistroAgente = Agente & { erro?: string; pid?: number; status?: string };
+type RegistroAgente = Agente & { erro?: string; pid?: number; status?: string; token?: string };
 
 const agentes = new Map<string, RegistroAgente>();             // id -> registro
 const serves = new Map<string, { base: string; pid: number }>(); // cwd -> serve do OpenCode (reaproveitado)
@@ -562,8 +570,19 @@ let reconectando = false;                                     // serializa o rec
 const ctxAssinaturas = new Map<string, AssinaturaArquivo[]>(); // id -> assinaturas do contexto em disco
 const fila = new FilaAvisos();
 let agentesCarregados = false;
-let subirServeAtual: (cwd: string) => Promise<{ base: string; pid: number }> = subirServeReal;
+let subirServeAtual: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }> = subirServeReal;
 let matarProcessoAtual: (pid: number) => void = (pid) => { try { process.kill(pid); } catch {} };
+
+// ---- colaboracao entre agentes (F3/S2): identidade por token, conversas e fila de entregas ----
+const conversas = new Conversas();
+const filaEntregas = new FilaEntregas<string>();
+const tokensPlanejadores = new Map<string, string>();  // "plan-<slug>" -> token
+let expiracao: NodeJS.Timeout | null = null;           // varre as conversas pendentes a cada 60s
+
+// Referencia de um agente para as rotas /cli (id + nome + contexto de entrega + token).
+type Colab = { id: string; nome: string; projeto: string; cwd: string; base: string; sessao: string; token: string };
+
+function novoToken(): string { return randomBytes(24).toString("hex"); } // 48 chars (>=16)
 
 // Porta livre escolhida pelo SO (mesma ideia do TcpListener do orchestra-go.ps1).
 function portaLivre(): Promise<number> {
@@ -589,13 +608,24 @@ function caminhoOpencode(): string {
   return "opencode";
 }
 
+// PATH do processo do serve com a pasta bin/ do hermes-bridge na frente (o CLI `canvas` fica la).
+// No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave no env do filho).
+function envServe(): NodeJS.ProcessEnv {
+  const bin = path.join(RAIZ_BRIDGE, "bin");
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const atual = env.PATH ?? env.Path ?? "";
+  delete env.Path;
+  env.PATH = bin + path.delimiter + atual;
+  return env;
+}
+
 // Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
-async function subirServeReal(cwd: string): Promise<{ base: string; pid: number }> {
+async function subirServeReal(cwd: string, env?: Record<string, string | undefined>): Promise<{ base: string; pid: number }> {
   const porta = await portaLivre();
   // detached + unref: o serve vira processo independente (novo grupo no Windows) e SOBREVIVE ao hub
   // (mesmo efeito do Start-Process do orchestra-go.ps1). Sem isso ele e' filho do processo do hub e
   // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
-  const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: process.env, detached: true });
+  const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: env ?? process.env, detached: true });
   p.unref();
   const base = `http://127.0.0.1:${porta}`;
   for (let i = 0; i < 60; i++) {
@@ -616,8 +646,10 @@ function carregarAgentes(): void {
   try { files = fs.readdirSync(AGENTES_DIR).filter((f) => f.endsWith(".json")); } catch { return; }
   for (const f of files) {
     try {
-      const a = validarAgente(JSON.parse(fs.readFileSync(path.join(AGENTES_DIR, f), "utf8")));
-      if (a) agentes.set(a.id, a as RegistroAgente);
+      const a = validarAgente(JSON.parse(fs.readFileSync(path.join(AGENTES_DIR, f), "utf8"))) as RegistroAgente | null;
+      if (!a) continue; // nao e' um agente do canvas (ex.: registro {id,token} de planejador): ignora
+      if (!a.token) { a.token = novoToken(); gravarAgente(a); } // agente antigo sem token ganha um ao carregar
+      else agentes.set(a.id, a);
     } catch {}
   }
 }
@@ -802,32 +834,42 @@ function tratarEvento(base: string, ev: unknown, papeis: Map<string, string>, pa
     broadcast({ agenteLinhas: { id: ag.id, linhas: novas } });
   }
   if (r.status) {
-    if (r.status === "ocupado") fila.marcarOcupado(ag.id);
-    else { fila.marcarOcioso(ag.id); tentarLiberarAviso(ag.id); }
+    if (r.status === "ocupado") { fila.marcarOcupado(ag.id); filaEntregas.marcarOcupado(ag.id); }
+    else {
+      fila.marcarOcioso(ag.id); filaEntregas.marcarOcioso(ag.id);
+      tentarLiberarAviso(ag.id);
+      tentarLiberarEntregas(ag.id);
+    }
     broadcast({ agentes: listarAgentes(ag.projeto) });
   }
 }
 
-// system do prompt: instrucao do papel (com o <id> substituido); garante a linha do README de contexto.
+// system do prompt: instrucao do papel (com o <id> substituido) + linha do README de contexto +
+// a identidade do agente (nome (id) + comando `canvas --eu id:token`, F3/S2).
 function instrucaoDe(a: RegistroAgente): string {
   const comId = (a.instrucao ?? "").replace(/<id>/g, a.id).trim();
-  if (/README\.md/.test(comId)) return comId;
-  const linha = "Antes de responder, leia .orchestra/contexto/" + a.id + "/README.md se existir.";
-  return comId ? comId + " " + linha : linha;
+  const partes: string[] = [];
+  if (comId) partes.push(comId);
+  if (!/README\.md/.test(comId)) partes.push("Antes de responder, leia .orchestra/contexto/" + a.id + "/README.md se existir.");
+  if (a.token) partes.push(linhaIdentidade(a.nome, a.id, a.token));
+  return partes.join(" ");
 }
 
-async function enviarPrompt(a: RegistroAgente, texto: string): Promise<void> {
-  if (!a.base || !a.sessao) return;
+// POST /session/<sessao>/prompt_async (best-effort); model/system opcionais.
+async function enviarTexto(base: string, sessao: string, texto: string, sistema?: string, modelo?: unknown): Promise<void> {
+  if (!base || !sessao) return;
   const corpo: Record<string, unknown> = { parts: [{ type: "text", text: texto }] };
-  const m = separarModelo(a.modelo);
-  if (m) corpo.model = m;
-  const sistema = instrucaoDe(a);
+  if (modelo) corpo.model = modelo;
   if (sistema) corpo.system = sistema;
   try {
-    await fetch(`${a.base}/session/${a.sessao}/prompt_async`, {
+    await fetch(`${base}/session/${sessao}/prompt_async`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo),
     });
   } catch {}
+}
+
+async function enviarPrompt(a: RegistroAgente, texto: string): Promise<void> {
+  await enviarTexto(a.base, a.sessao, texto, instrucaoDe(a), separarModelo(a.modelo));
 }
 
 function tentarLiberarAviso(id: string): void {
@@ -835,6 +877,136 @@ function tentarLiberarAviso(id: string): void {
   if (!a) return;
   const msg = fila.liberar(id, Date.now());
   if (msg) void enviarPrompt(a, msg);
+}
+
+// ---------------------------------------------------------------------------
+// Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
+// ---------------------------------------------------------------------------
+
+// Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
+function colabDe(id: string): Colab | undefined {
+  const a = agentes.get(id);
+  if (a) return { id: a.id, nome: a.nome, projeto: a.projeto, cwd: a.cwd, base: a.base, sessao: a.sessao, token: a.token ?? "" };
+  const tok = tokensPlanejadores.get(id);
+  const p = planejadores.find((x) => "plan-" + x.slug === id);
+  if (p && tok) { const ag = agenteDePlanejador(p); return { id, nome: ag.nome, projeto: ag.projeto, cwd: ag.cwd, base: ag.base, sessao: ag.sessao, token: tok }; }
+  return undefined;
+}
+
+// X-Eu: "id:token" -> Colab so' se o token bater (senao undefined = identidade invalida).
+function colabDoToken(eu: string): Colab | undefined {
+  const i = eu.indexOf(":");
+  if (i <= 0 || i === eu.length - 1) return undefined;
+  const id = eu.slice(0, i);
+  const token = eu.slice(i + 1);
+  const c = colabDe(id);
+  return c && c.token === token ? c : undefined;
+}
+
+// Agentes do projeto do agente (id + nome), na ordem dos registros; alimenta conectados/resolverAlvo.
+function agentesRefProjeto(projeto: string): AgenteRef[] {
+  const out: AgenteRef[] = [];
+  for (const a of agentes.values()) if (a.projeto === projeto) out.push({ id: a.id, nome: a.nome });
+  for (const p of planejadores) {
+    if (p.raiz !== projeto && idProjeto(p.raiz) !== idProjeto(projeto)) continue;
+    const ag = agenteDePlanejador(p);
+    out.push({ id: ag.id, nome: ag.nome });
+  }
+  return out;
+}
+
+// Status de colaboracao: ocupado -> "trabalhando"; encerrado -> "encerrado"; resto -> "ocioso".
+function statusColab(id: string): string {
+  const s = statusDe(id);
+  if (s === "encerrado") return "encerrado";
+  if (s === "ocupado") return "trabalhando";
+  return "ocioso";
+}
+
+function estaOcupado(id: string): boolean { return fila.estados.get(id)?.ocupado === true; }
+
+// Envia agora (ocioso) ou enfileira (ocupado). Devolve true se entregou na hora.
+async function entregarColab(id: string, texto: string): Promise<boolean> {
+  if (estaOcupado(id)) { filaEntregas.enfileirar(id, texto); return false; }
+  const a = agentes.get(id);
+  if (a) { await enviarPrompt(a, texto); return true; }
+  const c = colabDe(id);
+  if (c) await enviarTexto(c.base, c.sessao, texto);
+  return true;
+}
+
+// Alvo ficou ocioso: esvazia a fila de entregas dele.
+function tentarLiberarEntregas(id: string): void {
+  const pend = filaEntregas.liberar(id);
+  for (const texto of pend) void entregarColab(id, texto);
+}
+
+// {conversas:[{q,de,para,texto}]} em toda mudanca (ids de agentes).
+function broadcastConversas(): void {
+  broadcast({ conversas: conversas.pendentes().map((p) => ({ q: p.q, de: p.de, para: p.para, texto: p.texto })) });
+}
+
+// Expiracao das perguntas pendentes: avisa a origem que o alvo nao respondeu.
+function expirarConversas(): void {
+  const expiradas = conversas.expirar();
+  if (!expiradas.length) return;
+  for (const p of expiradas) {
+    const nomeAlvo = colabDe(p.para)?.nome ?? p.para;
+    void entregarColab(p.de, fmtSemResposta(nomeAlvo, p.q));
+  }
+  broadcastConversas();
+}
+
+function iniciarExpiracao(): void {
+  if (expiracao) return;
+  expiracao = setInterval(expirarConversas, 60_000);
+  expiracao.unref?.();
+}
+
+function pararExpiracao(): void { if (expiracao) { clearInterval(expiracao); expiracao = null; } }
+
+// Planejadores: na primeira vez que sao vistos, ganham um token (AGENTES_DIR/<id>.json = {id,token})
+// e recebem UMA vez a linha de identidade como mensagem.
+function arquivoTokenPlanejador(id: string): string { return path.join(AGENTES_DIR, id + ".json"); }
+
+async function garantirTokenPlanejador(p: Planejador): Promise<void> {
+  const id = "plan-" + p.slug;
+  if (tokensPlanejadores.has(id)) return;
+  try {
+    const j = JSON.parse(fs.readFileSync(arquivoTokenPlanejador(id), "utf8"));
+    if (j && j.id === id && typeof j.token === "string" && j.token.length >= 16) { tokensPlanejadores.set(id, j.token); return; }
+  } catch {}
+  const token = novoToken();
+  tokensPlanejadores.set(id, token);
+  try { fs.mkdirSync(AGENTES_DIR, { recursive: true }); fs.writeFileSync(arquivoTokenPlanejador(id), JSON.stringify({ id, token })); } catch {}
+  const ag = agenteDePlanejador(p);
+  await entregarColab(id, linhaIdentidade(ag.nome, id, token));
+}
+
+// Aplica um lote de ops no canvas do projeto pelo MESMO caminho do POST /canvas/op.
+function aplicarOpsProjeto(projeto: string, ops: Op[]): void {
+  const id = idProjeto(projeto);
+  const snapNovo = aplicarOps(lerCanvas(id), ops);
+  canvasCache.set(id, snapNovo);
+  gravarCanvasDebounced(id);
+  broadcast({ canvasOp: { projeto, ops } });
+  try { sincronizarContexto(projeto, snapNovo); } catch {}
+}
+
+// Arvore do worktree do agente: `git ls-files` + nao rastreados (exclui ignorados), barras '/', ate 5000.
+function listarArvore(cwd: string): string[] {
+  const opcoes = { cwd, encoding: "utf8" as const, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] as ("ignore" | "pipe")[] };
+  const out = new Set<string>();
+  try {
+    for (const linha of execSync("git ls-files", opcoes).split(/\r?\n/)) if (linha.trim()) out.add(linha.trim().replace(/\\/g, "/"));
+    for (const linha of execSync("git ls-files --others --exclude-standard", opcoes).split(/\r?\n/)) if (linha.trim()) out.add(linha.trim().replace(/\\/g, "/"));
+  } catch {}
+  return [...out].slice(0, 5000);
+}
+
+function responderTexto(res: http.ServerResponse, status: number, texto: string): void {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(texto);
 }
 
 async function criarSessao(base: string, nome: string): Promise<string | null> {
@@ -997,6 +1169,7 @@ function ceder(): void {
   clientes.clear();
   if (intervalo) { clearInterval(intervalo); intervalo = null; }
   if (limpeza) { clearInterval(limpeza); limpeza = null; }
+  pararExpiracao();
   if (watcher) { try { watcher.close(); } catch {} watcher = null; }
   descarregarCanvas(); // grava ops pendentes antes de ceder a porta
   for (const ctrl of pontes.values()) { try { ctrl.abort(); } catch {} }
@@ -1191,7 +1364,7 @@ function criarServidor(): http.Server {
         if (serve) serves.set(cwd, serve);
       }
       if (!serve) {
-        try { serve = await subirServeAtual(cwd); serves.set(cwd, serve); }
+        try { serve = await subirServeAtual(cwd, envServe()); serves.set(cwd, serve); }
         catch (e: any) { erro = String(e?.message ?? e); }
       }
       if (serve) abrirPonte(serve.base);
@@ -1205,6 +1378,7 @@ function criarServidor(): http.Server {
       const reg: RegistroAgente = {
         id, projeto, cwd, base: serve ? serve.base : "", sessao, nome,
         papel: papel as Papel, modelo, instrucao, tipo: "opencode", origem: "canvas",
+        token: novoToken(),
       };
       if (!ok) reg.erro = erro || "falha ao subir o OpenCode";
       gravarAgente(reg);
@@ -1248,7 +1422,14 @@ function criarServidor(): http.Server {
           res.writeHead(204); res.end(); return;
         }
         if (acao === "abortar") { await abortarSessao(a); res.writeHead(204); res.end(); return; }
-        if (acao === "encerrar") { await encerrarAgente(a); res.writeHead(204); res.end(); return; }
+        if (acao === "encerrar") {
+          // Encerra as conversas do agente: quem perguntou a ele recebe o aviso de "sem resposta".
+          const pendentes = conversas.encerrarAgente(id);
+          for (const p of pendentes) void entregarColab(p.de, fmtSemResposta(a.nome, p.q));
+          await encerrarAgente(a);
+          if (pendentes.length) broadcastConversas();
+          res.writeHead(204); res.end(); return;
+        }
         if (acao === "reiniciar") {
           // Reabre a sessao do agente: reaproveita um serve VIVO da mesma cwd (o serve destacado
           // sobrevive ao hub) ou sobe um novo com subirServe(cwd), cria uma sessao limpa e reabre a
@@ -1264,7 +1445,7 @@ function criarServidor(): http.Server {
           }
           let erro = "";
           if (!serve) {
-            try { serve = await subirServeAtual(a.cwd); serves.set(a.cwd, serve); }
+            try { serve = await subirServeAtual(a.cwd, envServe()); serves.set(a.cwd, serve); }
             catch (e: any) { erro = String(e?.message ?? e); }
           }
           let sessao = "";
@@ -1297,6 +1478,116 @@ function criarServidor(): http.Server {
         res.writeHead(404); res.end(); return;
       }
       res.writeHead(404); res.end(); return;
+    }
+    // ---- CLI dos agentes (F3/S2): POST /cli/<cmd> com X-Hermes e X-Eu: id:token ----
+    if (caminho.startsWith("/cli/")) {
+      const corpo = await lerCorpo(req, LIMITE_BODY);
+      if (corpo === null) { res.writeHead(400); res.end(); return; }
+      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
+      const c = colabDoToken(String(req.headers["x-eu"] ?? ""));
+      if (!c) { responderTexto(res, 403, "identidade inválida"); return; }
+      let j: any = null;
+      try { j = corpo ? JSON.parse(corpo) : null; } catch {}
+      const cmd = caminho.slice("/cli/".length);
+      const snap = lerCanvas(idProjeto(c.projeto));
+      const noAg = snap.nos.find((n) => n.id === "ag:" + c.id);
+      // No' do agente no canvas do projeto; se nao existir, uma posicao padrao.
+      const agNo: No = noAg ?? { id: "ag:" + c.id, tipo: "agente", x: 0, y: 0, w: 620, h: 420, dados: { agenteId: c.id }, rev: 0 };
+      const refs = () => conectados(snap, c.id, agentesRefProjeto(c.projeto));
+      const alvoDe = (bruto: unknown): { ok: AgenteRef } | { erro: string } => {
+        const alvo = typeof bruto === "string" ? bruto : "";
+        if (!alvo) return { erro: "alvo obrigatório" };
+        return resolverAlvo(refs(), alvo);
+      };
+      if (cmd === "list") {
+        const lista = refs();
+        responderTexto(res, 200, lista.length ? lista.map((a) => `${slugNome(a.nome)} (${a.id}) — ${a.nome}, ${statusColab(a.id)}`).join("\n") : "nenhum agente conectado a você");
+        return;
+      }
+      if (cmd === "ask") {
+        const alvo = alvoDe(j?.alvo);
+        if ("erro" in alvo) { responderTexto(res, 400, alvo.erro); return; }
+        const texto = typeof j?.texto === "string" ? j.texto : "";
+        const r = conversas.perguntar(c.id, alvo.ok.id, texto);
+        if ("erro" in r) { responderTexto(res, 400, r.erro); return; }
+        const entregue = await entregarColab(alvo.ok.id, fmtPergunta(c.nome, r.ok.q, texto));
+        broadcastConversas();
+        responderTexto(res, 200, entregue ? `pergunta ${r.ok.q} enviada a ${alvo.ok.nome}` : `pergunta ${r.ok.q} enfileirada (${alvo.ok.nome} ocupado)`);
+        return;
+      }
+      if (cmd === "tell") {
+        const alvo = alvoDe(j?.alvo);
+        if ("erro" in alvo) { responderTexto(res, 400, alvo.erro); return; }
+        const texto = typeof j?.texto === "string" ? j.texto : "";
+        const entregue = await entregarColab(alvo.ok.id, fmtMensagem(c.nome, texto));
+        responderTexto(res, 200, entregue ? `mensagem enviada a ${alvo.ok.nome}` : `mensagem enfileirada (${alvo.ok.nome} ocupado)`);
+        return;
+      }
+      if (cmd === "reply") {
+        const q = typeof j?.q === "string" ? j.q : "";
+        const texto = typeof j?.texto === "string" ? j.texto : "";
+        const r = conversas.responder(c.id, q);
+        if ("erro" in r) { responderTexto(res, 400, r.erro); return; }
+        await entregarColab(r.ok.de, fmtResposta(c.nome, r.ok.q, texto));
+        broadcastConversas();
+        responderTexto(res, 200, `resposta enviada a ${colabDe(r.ok.de)?.nome ?? r.ok.de}`);
+        return;
+      }
+      if (cmd === "flow-add") {
+        const r = opsFlowAdd(snap, agNo, c.nome, String(j?.chave ?? ""), String(j?.forma ?? ""), String(j?.texto ?? ""), typeof j?.cor === "string" ? j.cor : undefined, Date.now());
+        if ("erro" in r) { responderTexto(res, 400, r.erro); return; }
+        aplicarOpsProjeto(c.projeto, r.ops);
+        responderTexto(res, 200, "fluxo atualizado");
+        return;
+      }
+      if (cmd === "flow-link") {
+        const r = opsFlowLink(snap, c.id, String(j?.a ?? ""), String(j?.b ?? ""), typeof j?.rotulo === "string" ? j.rotulo : undefined, Date.now());
+        if ("erro" in r) { responderTexto(res, 400, r.erro); return; }
+        aplicarOpsProjeto(c.projeto, r.ops);
+        responderTexto(res, 200, "fluxo atualizado");
+        return;
+      }
+      if (cmd === "file") {
+        const limpo = validarCaminho(c.cwd, typeof j?.caminho === "string" ? j.caminho : "");
+        if (!limpo) { responderTexto(res, 400, "caminho inválido"); return; }
+        aplicarOpsProjeto(c.projeto, opsFile(snap, agNo, limpo, typeof j?.status === "string" ? j.status : "", Date.now()));
+        responderTexto(res, 200, "arquivo atualizado");
+        return;
+      }
+      if (cmd === "note") {
+        aplicarOpsProjeto(c.projeto, opsNote(snap, agNo, typeof j?.titulo === "string" ? j.titulo : "", typeof j?.corpo === "string" ? j.corpo : "", Date.now()));
+        responderTexto(res, 200, "nota atualizada");
+        return;
+      }
+      responderTexto(res, 400, "comando desconhecido: " + cmd);
+      return;
+    }
+    // ---- arvore e preview de arquivo do agente (F3/S2) ----
+    if (caminho === "/arvore") {
+      const c = colabDe(new URL(url, "http://x").searchParams.get("agente") || "");
+      if (!c) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(listarArvore(c.cwd)));
+      return;
+    }
+    if (caminho === "/arquivo") {
+      const params = new URL(url, "http://x").searchParams;
+      const c = colabDe(params.get("agente") || "");
+      if (!c) { res.writeHead(404); res.end(); return; }
+      const limpo = validarCaminho(c.cwd, params.get("caminho") || "");
+      if (!limpo) { res.writeHead(400); res.end(); return; }
+      const raiz = path.resolve(c.cwd);
+      const alvo = path.resolve(raiz, limpo);
+      if (alvo !== raiz && !alvo.startsWith(raiz + path.sep)) { res.writeHead(400); res.end(); return; }
+      let st: fs.Stats;
+      try { st = fs.statSync(alvo); } catch { res.writeHead(404); res.end(); return; }
+      if (!st.isFile()) { res.writeHead(404); res.end(); return; }
+      if (st.size > 200 * 1024) { res.writeHead(413); res.end(); return; }
+      let buf: Buffer;
+      try { buf = fs.readFileSync(alvo); } catch { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(buf);
+      return;
     }
     servirEstatico(url, res);
   });
@@ -1354,7 +1645,7 @@ export type OpcoesUI = {
   sempreAssumir?: boolean; // modo --ui: assume a porta de qualquer hub Hermes, sem comparar versao
   executarNovaFeature?: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }>;
   limiteBodyNovaFeature?: number; // teto proprio do corpo de /nova-feature (default 350MB)
-  subirServe?: (cwd: string) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
+  subirServe?: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
   matarProcesso?: (pid: number) => void; // encerra o serve (injetavel)
 };
 
@@ -1369,6 +1660,7 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   carregarAgentes();
   if (!(await escutar())) await tentarAssumir();
   if (servidor) void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
+  iniciarExpiracao(); // F3/S2: varre as conversas pendentes (expira -> avisa a origem)
   // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
   if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar(); }, 10_000);
   reassumir.unref();
@@ -1379,6 +1671,7 @@ export function pararUI(): void {
   if (intervalo) { clearInterval(intervalo); intervalo = null; }
   if (reassumir) { clearInterval(reassumir); reassumir = null; }
   if (limpeza) { clearInterval(limpeza); limpeza = null; }
+  pararExpiracao();
   if (watcher) { try { watcher.close(); } catch {} watcher = null; }
   descarregarCanvas(); // grava ops pendentes do debounce antes de desligar
   for (const ctrl of pontes.values()) { try { ctrl.abort(); } catch {} }
