@@ -15,7 +15,7 @@ test("estiloNota: cor desconhecida cai no amarelo; texto nunca e' branco (CA-V2)
   assert.deepEqual(estiloNota("foguete"), estiloNota("amarelo"));
   assert.deepEqual(estiloNota(undefined), estiloNota("amarelo"));
   for (const c of Object.keys(CORES_NOTA)) {
-    assert.notMatch(estiloNota(c).texto.toLowerCase(), /^#(fff|ffffff|eee|eeeeee)$/, c);
+    assert.doesNotMatch(estiloNota(c).texto.toLowerCase(), /^#(fff|ffffff|eee|eeeeee)$/, c);
     assert.equal(CORES_NOTA[c as keyof typeof CORES_NOTA], estiloNota(c).fundo, "CORES_NOTA = fundo da nota " + c);
   }
 });
