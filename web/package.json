@@ -17,7 +17,8 @@
     "test:canvas-miniatura": "node --experimental-strip-types --test src/lib/canvas-miniatura.test.ts",
     "test:canvas-medidas": "node --experimental-strip-types --test src/lib/canvas-medidas.test.ts",
     "test:canvas-runs": "node --experimental-strip-types --test src/lib/canvas-runs.test.ts",
-    "test:canvas-f21": "node --experimental-strip-types --test src/lib/canvas-f21.test.ts"
+    "test:canvas-f21": "node --experimental-strip-types --test src/lib/canvas-f21.test.ts",
+    "test:colab": "node --experimental-strip-types --test src/lib/colab.test.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

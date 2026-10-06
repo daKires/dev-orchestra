@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts && npm --prefix web test",
+    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js dist/ui-cli.test.js dist/ui-ceder.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts colaboracao.test.ts cli.test.ts && npm --prefix web test",
     "test:runs": "tsc && node --test dist/runs.test.js",
     "test:hub": "tsc && node --test dist/hub.test.js",
     "test:novafeature": "tsc && node --test dist/ui-nova-feature.test.js",
@@ -23,7 +23,11 @@
     "test:agentes-delta": "node --experimental-strip-types --test agentes-delta.test.ts",
     "test:agentes-f21": "tsc && node --test dist/ui-agentes-f21.test.js",
     "test:agentes-reconecta": "tsc && node --test dist/ui-agentes-reconecta.test.js",
-    "test:agentes-reiniciar": "tsc && node --test dist/ui-agentes-reiniciar.test.js"
+    "test:agentes-reiniciar": "tsc && node --test dist/ui-agentes-reiniciar.test.js",
+    "test:colab": "node --experimental-strip-types --test colaboracao.test.ts",
+    "test:cli-hub": "tsc && node --test dist/ui-cli.test.js",
+    "test:cli": "node --experimental-strip-types --test cli.test.ts",
+    "test:ceder": "tsc && node --test dist/ui-ceder.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

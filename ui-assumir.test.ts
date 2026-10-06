@@ -29,6 +29,8 @@ const PORTA = await portaLivre();
 process.env.HERMES_UI_PORT = String(PORTA);
 const PLAN = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan-a-"));
 process.env.HERMES_PLANEJADORES_DIR = PLAN;
+process.env.HERMES_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-ag-")); // nunca os agentes reais
+process.env.HERMES_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-cv-"));
 const ui = await import("./ui.js");
 
 const ms = (n: number) => new Promise((r) => setTimeout(r, n));
