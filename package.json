@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js dist/ui-cli.test.js dist/ui-ceder.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts colaboracao.test.ts cli.test.ts cli-sh.test.ts && npm --prefix web test",
+    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js dist/ui-cli.test.js dist/ui-ceder.test.js dist/ui-browser.test.js dist/ui-claude.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts colaboracao.test.ts cli.test.ts cli-sh.test.ts navegador.test.ts claude-pty.test.ts cli-browser.test.ts && npm --prefix web test",
     "test:runs": "tsc && node --test dist/runs.test.js",
     "test:hub": "tsc && node --test dist/hub.test.js",
     "test:novafeature": "tsc && node --test dist/ui-nova-feature.test.js",
@@ -28,15 +28,24 @@
     "test:cli-hub": "tsc && node --test dist/ui-cli.test.js",
     "test:cli": "node --experimental-strip-types --test cli.test.ts",
     "test:ceder": "tsc && node --test dist/ui-ceder.test.js",
-    "test:cli-sh": "node --experimental-strip-types --test cli-sh.test.ts"
+    "test:cli-sh": "node --experimental-strip-types --test cli-sh.test.ts",
+    "test:navegador": "node --experimental-strip-types --test navegador.test.ts",
+    "test:claude-pty": "node --experimental-strip-types --test claude-pty.test.ts",
+    "test:browser-hub": "tsc && node --test dist/ui-browser.test.js",
+    "test:claude-hub": "tsc && node --test dist/ui-claude.test.js",
+    "test:cli-browser": "node --experimental-strip-types --test cli-browser.test.ts",
+    "desktop:check": "tsc -p desktop/tsconfig.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "@lydell/node-pty": "^1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "electron": "^44.6.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^6.0.3"
   }
 }

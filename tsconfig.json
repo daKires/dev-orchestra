@@ -31,6 +31,8 @@
     "ui-agentes-reconecta.test.ts",
     "ui-agentes-reiniciar.test.ts",
     "ui-cli.test.ts",
-    "ui-ceder.test.ts"
+    "ui-ceder.test.ts",
+    "ui-browser.test.ts",
+    "ui-claude.test.ts"
   ]
 }
