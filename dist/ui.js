@@ -673,7 +673,11 @@ function caminhoOpencode() {
 // Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
 async function subirServeReal(cwd) {
     const porta = await portaLivre();
-    const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: process.env });
+    // detached + unref: o serve vira processo independente (novo grupo no Windows) e SOBREVIVE ao hub
+    // (mesmo efeito do Start-Process do orchestra-go.ps1). Sem isso ele e' filho do processo do hub e
+    // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
+    const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: process.env, detached: true });
+    p.unref();
     const base = `http://127.0.0.1:${porta}`;
     for (let i = 0; i < 60; i++) {
         await new Promise((ok) => setTimeout(ok, 500));
@@ -741,7 +745,10 @@ function statusDe(id, base = "") {
         return "ocioso";
     if (a.erro)
         return "falhou";
-    return fila.estados.get(id)?.ocupado ? "ocupado" : "ocioso";
+    if (fila.estados.get(id)?.ocupado)
+        return "ocupado";
+    // Agente reiniciado com sucesso grava status 'ok' (serve/sessao novos); os demais ficam 'ocioso'.
+    return a.status ?? "ocioso";
 }
 function resumoAgente(a) {
     return {
@@ -1663,6 +1670,69 @@ function criarServidor() {
                     await encerrarAgente(a);
                     res.writeHead(204);
                     res.end();
+                    return;
+                }
+                if (acao === "reiniciar") {
+                    // Reabre a sessao do agente: reaproveita um serve VIVO da mesma cwd (o serve destacado
+                    // sobrevive ao hub) ou sobe um novo com subirServe(cwd), cria uma sessao limpa e reabre a
+                    // ponte do /event. Sucesso -> 200 {id,status:'ok'}; falha ao subir -> 200 {id,status:'falhou',erro}.
+                    let serve = serves.get(a.cwd);
+                    if (serve && !(await serveVivo(serve.base))) {
+                        serves.delete(a.cwd);
+                        serve = undefined;
+                    }
+                    if (!serve) {
+                        for (const x of agentes.values()) {
+                            if (x.id === a.id || x.cwd !== a.cwd || !x.base || x.erro)
+                                continue;
+                            if (await serveVivo(x.base)) {
+                                serve = { base: x.base, pid: x.pid ?? 0 };
+                                break;
+                            }
+                        }
+                        if (serve)
+                            serves.set(a.cwd, serve);
+                    }
+                    let erro = "";
+                    if (!serve) {
+                        try {
+                            serve = await subirServeAtual(a.cwd);
+                            serves.set(a.cwd, serve);
+                        }
+                        catch (e) {
+                            erro = String(e?.message ?? e);
+                        }
+                    }
+                    let sessao = "";
+                    if (serve) {
+                        const s = await criarSessao(serve.base, a.nome);
+                        if (s)
+                            sessao = s;
+                        else if (!erro)
+                            erro = "nao foi possivel criar a sessao no OpenCode";
+                    }
+                    if (serve && sessao) {
+                        a.base = serve.base;
+                        a.sessao = sessao;
+                        a.pid = serve.pid;
+                        delete a.erro;
+                        a.status = "ok";
+                        gravarAgente(a); // registro atualizado em disco (base, pid, sessao, status)
+                        agenteLinhas.set(a.id, []); // sessao nova: zera o chat em memoria
+                        basesMortas.delete(serve.base);
+                        abrirPonte(serve.base); // reabre a ponte do /event da base
+                        broadcast({ agenteLinhas: { id: a.id, linhas: [] } });
+                        broadcast({ agentes: listarAgentes(a.projeto) });
+                        res.writeHead(200, { "Content-Type": "application/json" });
+                        res.end(JSON.stringify({ id: a.id, status: "ok" }));
+                        return;
+                    }
+                    const motivo = erro || "falha ao reiniciar o OpenCode";
+                    a.erro = motivo;
+                    gravarAgente(a);
+                    broadcast({ agentes: listarAgentes(a.projeto) });
+                    res.writeHead(200, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ id: a.id, status: "falhou", erro: motivo }));
                     return;
                 }
                 res.writeHead(404);
