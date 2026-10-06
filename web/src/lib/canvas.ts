@@ -67,6 +67,33 @@ export function paiDoNo(no: No, grupos: No[]): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Nos do react-flow: medidas/selecao (S5 - F1.5, fix das arestas invisiveis)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mescla os nos RECONSTRUIDOS do modelo (`novos`) com os nos antigos do react-flow (`antigos`).
+ * Pura (nunca muta a entrada, sempre devolve objetos novos): de cada antigo de mesmo id copia o
+ * `measured` que o xyflow preencheu via onNodesChange (mudancas "dimensions") e o `selected`;
+ * posicao, dados e todo o resto vem do novo. No' sem antigo fica sem `measured`/`selected`.
+ * Sem `measured` o xyflow nao calcula a posicao das alcas e nao desenha as arestas.
+ */
+export function mesclarNosRf<T extends { id: string; measured?: unknown; selected?: boolean }>(
+  novos: T[],
+  antigos: T[],
+): T[] {
+  const porId = new Map(antigos.map((a) => [a.id, a]));
+  return novos.map((novo) => {
+    const antigo = porId.get(novo.id);
+    const saida: Record<string, unknown> = { ...novo };
+    delete saida.measured;
+    delete saida.selected;
+    if (antigo?.measured !== undefined) saida.measured = antigo.measured;
+    if (antigo?.selected !== undefined) saida.selected = antigo.selected;
+    return saida as unknown as T;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Markdown -> blocos
 // ---------------------------------------------------------------------------
 

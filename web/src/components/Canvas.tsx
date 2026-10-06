@@ -11,8 +11,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
 import {
-  checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, noNovo, ordemZ, paiDoNo, pontaDaAresta,
-  retanguloDeArrasto, TAMANHO_PADRAO, type Ferramenta, type NomeForma,
+  checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, mesclarNosRf, noNovo, ordemZ, paiDoNo,
+  pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO, type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
 import { cn } from "@/lib/utils";
 import { useCanvas } from "@/hooks/useCanvas";
@@ -163,18 +163,13 @@ export function Canvas({ projeto }: { projeto: string }) {
     return () => window.clearTimeout(id);
   }, [estado]);
 
-  // modelo -> react-flow; grupos primeiro (ficam atras) e selecao preservada entre atualizacoes.
+  // modelo -> react-flow; grupos primeiro (ficam atras) e, em cada reconstrucao, `measured` (que o
+  // xyflow preenche via onNodesChange) e a selecao sao herdados do no' antigo (mesclarNosRf) — sem
+  // medida o xyflow nao posiciona as alcas e nenhuma aresta e' desenhada.
   useEffect(() => {
     const porId = new Map(estado.nos.map((n) => [n.id, n]));
     const ordenados = [...estado.nos].sort((a, b) => (a.tipo === "grupo" ? 0 : 1) - (b.tipo === "grupo" ? 0 : 1));
-    setNos((antigos) => {
-      const sel = new Set(antigos.filter((n) => n.selected).map((n) => n.id));
-      return ordenados.map((n) => {
-        const rf = noParaRf(n, porId);
-        if (sel.has(n.id)) rf.selected = true;
-        return rf;
-      });
-    });
+    setNos((antigos) => mesclarNosRf(ordenados.map((n) => noParaRf(n, porId)), antigos));
     setArestas((antigas) => {
       const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
       return estado.arestas.map((a) => {
