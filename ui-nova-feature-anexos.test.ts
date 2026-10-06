@@ -30,6 +30,7 @@ process.env.HERMES_UI_PORT = String(PORTA);
 process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-planf-"));
 const ANEXOS = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-anexos-"));
 process.env.HERMES_ANEXOS_DIR = ANEXOS;
+process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("./ui.js");
 
 const B64 = Buffer.from("ola anexo").toString("base64");
