@@ -275,6 +275,7 @@ function NoNota({ id, data, selected }: NodeProps) {
           </div>
         )}
       </div>
+      <Alcas />
     </div>
   );
 }
@@ -365,6 +366,7 @@ function NoGrupo({ id, data, selected }: NodeProps) {
         </BotaoOpcoes>
         <BotaoRemover id={id} cor={cor} />
       </div>
+      <Alcas />
     </div>
   );
 }
