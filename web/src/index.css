@@ -325,6 +325,89 @@
   color: #858585;
 }
 
+/* Menu de contexto (S3b - F1.5): mesmo tom do Castor — fundo #222, borda #414141, raio 8, padding 6,
+   sombra 0 8px 24px #0008; itens 12px com padding 8, raio 4, hover #333 e texto #eee. */
+.cv-ctx {
+  min-width: 184px;
+  background: #222;
+  border: 1px solid #414141;
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px #0008;
+  color: #eee;
+  font: 400 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+  z-index: 60;
+  outline: none;
+}
+.cv-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #eee;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+.cv-ctx-item[data-highlighted],
+.cv-ctx-item[data-state="open"] {
+  background: #333;
+  color: #eee;
+}
+.cv-ctx-item[data-disabled] {
+  color: #6b6b6b;
+  pointer-events: none;
+}
+.cv-ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #414141;
+}
+.cv-ctx-seta {
+  margin-left: auto;
+}
+
+/* Inspetor (S3 - F1.5): campos com borda #414141 e foco azul, bolinhas de cor e segmentos P/M/G. */
+.cv-insp-campo::placeholder,
+.cv-insp-area::placeholder {
+  color: currentColor;
+  opacity: 0.5;
+}
+.cv-insp-campo:focus,
+.cv-insp-area:focus {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--cv-selecao) 45%, transparent);
+}
+.cv-insp-bola {
+  border: 1px solid #414141;
+  transition: transform 100ms ease;
+}
+.cv-insp-bola:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+.cv-insp-bola-on {
+  box-shadow: 0 0 0 2px #1c1c1c, 0 0 0 3.5px #fff;
+}
+.cv-insp-seg {
+  flex: 1;
+  border: 1px solid #414141;
+  border-radius: 7px;
+  background: #111;
+  color: #b8b8b8;
+  font: 500 12px/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 7px 0;
+  cursor: pointer;
+}
+.cv-insp-seg:hover:not(:disabled) {
+  background: #1c1c1c;
+}
+.cv-insp-seg-on {
+  background: #2979ff;
+  border-color: #2979ff;
+  color: #fff;
+}
+
 /* Ferramentas (S2 - F1.5): cursor por ferramenta. Criacao = crosshair; mao = grab/grabbing. */
 .cv.cv-pane-criacao .react-flow__pane {
   cursor: crosshair;
