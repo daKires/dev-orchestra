@@ -55,7 +55,7 @@ export type Agente = {
   papel: Papel;
   modelo: string;
   instrucao: string;
-  tipo: "opencode";
+  tipo: "opencode" | "claude";
   origem: OrigemAgente;
 };
 
@@ -69,7 +69,7 @@ const CAMPOS_TEXTO: readonly (keyof Agente)[] = [
   "instrucao",
 ];
 
-/** id so' com [a-z0-9-] e nao vazio; strings obrigatorias; papel/origem validos; senao null. */
+/** id so' com [a-z0-9-] e nao vazio; strings obrigatorias; papel/origem/tipo validos; senao null. */
 export function validarAgente(x: unknown): Agente | null {
   if (!x || typeof x !== "object") return null;
   const a = x as Record<string, unknown>;
@@ -77,7 +77,7 @@ export function validarAgente(x: unknown): Agente | null {
   for (const k of CAMPOS_TEXTO) if (typeof a[k] !== "string") return null;
   if (typeof a.papel !== "string" || !Object.prototype.hasOwnProperty.call(PAPEIS, a.papel)) return null;
   if (a.origem !== "canvas" && a.origem !== "planejador") return null;
-  if (a.tipo !== "opencode") return null;
+  if (a.tipo !== "opencode" && a.tipo !== "claude") return null;
   return x as Agente;
 }
 
