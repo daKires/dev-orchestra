@@ -268,6 +268,7 @@ function atualizarPlanejadores(): void {
   planejadoresAssinatura = assinatura;
   planejadores = lista;
   for (const c of clientes) sse(c, { planejadores: lista });
+  void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
 }
 
 // Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
@@ -554,6 +555,8 @@ const agentes = new Map<string, RegistroAgente>();             // id -> registro
 const serves = new Map<string, { base: string; pid: number }>(); // cwd -> serve do OpenCode (reaproveitado)
 const agenteLinhas = new Map<string, Linha[]>();               // id -> transcricao (linhas do chat)
 const pontes = new Map<string, AbortController>();             // base -> ponte do /event
+const basesMortas = new Set<string>();                         // base -> serve inacessivel (status 'encerrado')
+let reconectando = false;                                     // serializa o reconectar das pontes (sem sobrepor)
 const ctxAssinaturas = new Map<string, AssinaturaArquivo[]>(); // id -> assinaturas do contexto em disco
 const fila = new FilaAvisos();
 let agentesCarregados = false;
@@ -625,9 +628,12 @@ function removerAgenteDoDisco(id: string): void {
   try { fs.unlinkSync(arquivoAgente(id)); } catch {}
 }
 
-// status de um agente: 'falhou' quando o serve/sessao nao subiu; senao ocupado/ocioso pela fila de avisos.
-function statusDe(id: string): string {
+// status de um agente: 'falhou' quando o serve/sessao nao subiu; 'encerrado' quando a base nao
+// responde mais (serve morto); senao ocupado/ocioso pela fila de avisos.
+function statusDe(id: string, base = ""): string {
   const a = agentes.get(id);
+  const b = base || a?.base || "";
+  if (b && basesMortas.has(b)) return "encerrado";
   if (!a) return "ocioso";
   if (a.erro) return "falhou";
   return fila.estados.get(id)?.ocupado ? "ocupado" : "ocioso";
@@ -638,7 +644,7 @@ type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; c
 function resumoAgente(a: Agente): ResumoAgente {
   return {
     id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem,
-    status: statusDe(a.id), ocupado: fila.estados.get(a.id)?.ocupado === true,
+    status: statusDe(a.id, a.base), ocupado: fila.estados.get(a.id)?.ocupado === true,
   };
 }
 
@@ -724,6 +730,52 @@ function fecharPonte(base: string): void {
   if (!ctrl) return;
   try { ctrl.abort(); } catch {}
   pontes.delete(base);
+}
+
+// O serve do OpenCode responde? GET {base}/doc com timeout curto (~1.5s), usado ANTES de abrir a
+// ponte de um agente recarregado do disco (nao adianta assinar /event de um serve que morreu).
+async function serveVivo(base: string): Promise<boolean> {
+  try {
+    const r = await fetch(base + "/doc", { signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch { return false; }
+}
+
+// Empurra a lista de agentes de cada projeto conhecido (canvas + raiz dos planejadores).
+function broadcastAgentes(): void {
+  const projetos = new Set<string>();
+  for (const a of agentes.values()) projetos.add(a.projeto);
+  for (const p of planejadores) projetos.add(p.raiz);
+  for (const projeto of projetos) broadcast({ agentes: listarAgentes(projeto) });
+}
+
+// Reabre as pontes de /event dos agentes conhecidos (canvas recarregado do disco + derivados dos
+// planejadores do orchestra-go): para cada base distinta testa o serve com GET /doc e so' entao abre
+// a ponte (abrirPonte ja ignora base repetida). Base inacessivel NAO abre ponte e fica marcada como
+// morta (status 'encerrado' no GET /agentes e no broadcast {agentes}); e' retentada de forma espacada
+// (no intervalo de limpeza), nunca em loop agressivo.
+async function reconectarPontes(): Promise<void> {
+  if (reconectando) return;
+  reconectando = true;
+  try {
+    const bases = new Set<string>();
+    for (const a of agentes.values()) if (a.base) bases.add(a.base);
+    for (const p of planejadores) { const b = agenteDePlanejador(p).base; if (b) bases.add(b); }
+    let mudou = false;
+    for (const base of bases) {
+      if (!servidor) return; // hub parou durante a checagem: nao abre ponte orfa
+      if (pontes.has(base)) continue; // ja conectado
+      if (await serveVivo(base)) {
+        if (basesMortas.delete(base)) mudou = true;
+        abrirPonte(base);
+      } else if (!basesMortas.has(base)) {
+        basesMortas.add(base);
+        mudou = true;
+      }
+    }
+    for (const base of [...basesMortas]) if (!bases.has(base)) { basesMortas.delete(base); mudou = true; }
+    if (mudou) broadcastAgentes();
+  } finally { reconectando = false; }
 }
 
 function agenteDaSessao(base: string, sessao: string): RegistroAgente | undefined {
@@ -1228,7 +1280,8 @@ function escutar(): Promise<boolean> {
       podar();
       rescan();
       void limparPlanejadores(PLANEJADORES_DIR); // uma vez no start
-      limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); }, 5000);
+      // Limpeza dos registros orfaos + retentativa espacada das pontes (bases que ainda nao respondem).
+      limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); void reconectarPontes(); }, 5000);
       limpeza.unref();
       try { watcher = fs.watch(RUNS_DIR, () => rescan()); } catch {}
       intervalo = setInterval(rescan, 1000);
@@ -1262,6 +1315,7 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   matarProcessoAtual = opts.matarProcesso ?? ((pid: number) => { try { process.kill(pid); } catch {} });
   carregarAgentes();
   if (!(await escutar())) await tentarAssumir();
+  if (servidor) void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
   // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
   if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar(); }, 10_000);
   reassumir.unref();
