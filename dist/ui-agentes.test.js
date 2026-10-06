@@ -34,7 +34,7 @@ function openCodeFalso() {
                 res.writeHead(200, { "Content-Type": "text/event-stream" });
                 res.write(`data: ${JSON.stringify({ type: "server.connected", properties: {} })}\n\n`);
                 sse.add(res);
-                req.on("close", () => sse.delete(res));
+                res.on("close", () => sse.delete(res));
                 return;
             }
             if (rota === "/doc") {
