@@ -26,6 +26,7 @@
     "ui-assumir.test.ts",
     "modelo-planejador.test.ts",
     "ui-canvas.test.ts",
-    "ui-agentes.test.ts"
+    "ui-agentes.test.ts",
+    "ui-agentes-f21.test.ts"
   ]
 }
