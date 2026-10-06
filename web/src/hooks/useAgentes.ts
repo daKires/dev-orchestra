@@ -20,6 +20,7 @@ export type Agentes = {
   mensagem: (id: string, texto: string) => void;
   abortar: (id: string) => void;
   encerrar: (id: string) => void;
+  reiniciar: (id: string) => void;
   trocarModelo: (id: string, modelo: string) => void;
   modelos: (cwd: string) => Promise<string[]>;
 };
@@ -82,6 +83,16 @@ export function useAgentes(projeto: string): Agentes {
     return () => es.close();
   }, []);
 
+  // Recarrega a lista do projeto atual (GET /agentes?projeto=): usado pelo reiniciar pra refletir o
+  // status novo sem esperar o SSE (que so' chega quando o hub mudar algo).
+  const recarregar = useCallback(() => {
+    const projeto = atual.current;
+    void fetch(`/agentes?projeto=${encodeURIComponent(projeto)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: AgenteVisivel[] | null) => { if (Array.isArray(j)) setAgentes(j); })
+      .catch(() => {});
+  }, []);
+
   // Historico do agente (GET /agentes/:id/historico): preenche SO' quando ainda nao houver linhas.
   const carregarHistorico = useCallback((id: string) => {
     void fetch(`/agentes/${encodeURIComponent(id)}/historico`)
@@ -103,6 +114,20 @@ export function useAgentes(projeto: string): Agentes {
     setLinhasPorId((l) => { const novo = { ...l }; delete novo[id]; return novo; });
   }, []);
 
+  // Reiniciar a sessao (POST /agentes/:id/reiniciar): o hub recria a sessao do OpenCode. Ao responder,
+  // recarregamos a lista do projeto (status pode voltar a 'ok'/'falhou') e zeramos a transcricao do id.
+  const reiniciar = useCallback((id: string) => {
+    if (!id) return;
+    void fetch(`/agentes/${encodeURIComponent(id)}/reiniciar`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify({}),
+    })
+      .then(() => {
+        recarregar();
+        setLinhasPorId((l) => { const novo = { ...l }; delete novo[id]; return novo; });
+      })
+      .catch(() => {});
+  }, [recarregar]);
+
   // Trocar o modelo nao volta pelo SSE: reflete localmente alem de mandar pro hub.
   const trocarModelo = useCallback((id: string, modelo: string) => {
     post(id, "modelo", { modelo });
@@ -119,5 +144,5 @@ export function useAgentes(projeto: string): Agentes {
     } catch { return []; }
   }, []);
 
-  return { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, trocarModelo, modelos };
+  return { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos };
 }

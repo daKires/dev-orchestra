@@ -26,6 +26,8 @@ export type AcoesAgente = {
   carregarHistorico: (id: string) => void;
   mensagem: (id: string, texto: string) => void;
   abortar: (id: string) => void;
+  /** Reinicia a sessao do agente encerrado/falho (POST /agentes/:id/reiniciar). */
+  reiniciar: (id: string) => void;
   /** Troca o modelo do agente (POST /agentes/:id/modelo). */
   trocarModelo: (id: string, modelo: string) => void;
   /** Modelos disponiveis na cwd (GET /agentes/modelos?cwd=). */
@@ -44,7 +46,7 @@ export type AgentesValor = {
 export const AgentesCtx = createContext<AgentesValor>({
   agentes: [],
   linhasPorId: {},
-  acoes: { carregarHistorico: () => {}, mensagem: () => {}, abortar: () => {}, trocarModelo: () => {}, modelos: async () => [] },
+  acoes: { carregarHistorico: () => {}, mensagem: () => {}, abortar: () => {}, reiniciar: () => {}, trocarModelo: () => {}, modelos: async () => [] },
   onFechar: () => {},
 });
 
@@ -166,6 +168,8 @@ export function NoAgente({ id, data, selected }: NodeProps) {
   const status = agente?.status ?? "ocioso";
   const ocupado = agente?.ocupado === true;
   const cor = corStatus(status, ocupado);
+  // Sessao encerrada (serve morto) ou falha no start: o agente nao fala mais -> input travado.
+  const parado = status === "encerrado" || status === "falhou";
 
   return (
     <div className={cn("cv-card relative flex h-full w-full flex-col overflow-hidden", !!selected && "cv-sel")}>
@@ -203,25 +207,36 @@ export function NoAgente({ id, data, selected }: NodeProps) {
         {ocupado && <p className="mt-1" style={{ color: "#858585" }}>Working • esc para interromper</p>}
       </div>
 
-      {status === "falhou" ? (
+      {parado && (
         <div className="shrink-0 space-y-1.5 px-2.5 py-2" style={{ borderTop: "1px solid #303030", font: "400 12px/1.4 ui-sans-serif, system-ui, sans-serif" }}>
-          <p style={{ color: VERMELHO }}>{agente?.erro || "o agente não iniciou (falha no OpenCode)"}</p>
-          {acoes.recriar && (
+          <p style={{ color: VERMELHO }}>
+            {status === "encerrado" ? "Sessão encerrada." : (agente?.erro || "o agente não iniciou (falha no OpenCode)")}
+          </p>
+          {acoes.recriar && status === "falhou" && (
             <button type="button" onClick={() => acoes.recriar?.(agenteId)} className="nodrag rounded px-2 py-1 hover:bg-white/10" style={{ border: "1px solid #414141", color: "#eee" }}>
               Tentar de novo
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => { if (agenteId) acoes.reiniciar(agenteId); }}
+            className="nodrag rounded font-medium transition-[filter] hover:brightness-110"
+            style={{ background: "#2979ff", color: "#fff", borderRadius: 7, fontSize: 12, padding: "5px 10px" }}
+          >
+            Reiniciar sessão
+          </button>
         </div>
-      ) : (
-        <input
-          value={texto}
-          onChange={(e) => setTexto(e.target.value)}
-          onKeyDown={aoTeclar}
-          placeholder="Peça ao agente…"
-          className="nodrag nowheel shrink-0 bg-transparent px-2.5 py-2 outline-none placeholder:opacity-50"
-          style={{ borderTop: "1px solid #303030", color: "#dedee3", font: MONO }}
-        />
       )}
+
+      <input
+        value={texto}
+        onChange={(e) => setTexto(e.target.value)}
+        onKeyDown={aoTeclar}
+        disabled={parado}
+        placeholder="Peça ao agente…"
+        className="nodrag nowheel shrink-0 bg-transparent px-2.5 py-2 outline-none placeholder:opacity-50 disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ borderTop: "1px solid #303030", color: "#dedee3", font: MONO }}
+      />
 
       <footer className="flex shrink-0 items-center gap-1 px-2.5 py-1" style={{ background: "#ecd9ac", color: "#3d3312", font: "400 12px/1.4 ui-sans-serif, system-ui, sans-serif" }}>
         <SelectModelo agenteId={agenteId} modelo={agente?.modelo || ""} cwd={agente?.cwd || ""} acoes={acoes} />

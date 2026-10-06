@@ -168,7 +168,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
 
   // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
-  const { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, trocarModelo, modelos } = useAgentes(projeto);
+  const { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos } = useAgentes(projeto);
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
@@ -734,7 +734,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   const agentesValor = {
     agentes,
     linhasPorId,
-    acoes: { carregarHistorico, mensagem, abortar, trocarModelo, modelos },
+    acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos },
     onFechar: pedirFecharAgente,
   };
   const runsValor = {
