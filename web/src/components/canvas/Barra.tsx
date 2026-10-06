@@ -3,7 +3,7 @@
 // quando !conectado (bloquear). A criacao em si (clique/arrasto) mora no Canvas.
 import { useRef, type ChangeEvent, type ReactNode } from "react";
 import {
-  ArrowUpRight, Circle, Diamond, Frame, Hand, Image as ImageIcon,
+  ArrowUpRight, Bot, Circle, Diamond, Frame, Hand, Image as ImageIcon,
   MousePointer2, Square, StickyNote, Type,
 } from "lucide-react";
 import {
@@ -20,6 +20,8 @@ type Props = {
   onFerramenta: (f: Ferramenta) => void;
   onForma: (forma: NomeForma) => void;
   onImagem: (arquivo: File) => void;
+  /** Abre o dialog de criar um agente (atalho A). */
+  onAgente: () => void;
 };
 
 const TAM = 36; // icone de 36px (Castor)
@@ -54,7 +56,7 @@ function Botao({ titulo, ativo, disabled, onClick, children }: {
   );
 }
 
-export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem }: Props) {
+export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente }: Props) {
   const arquivo = useRef<HTMLInputElement | null>(null);
 
   const escolherArquivo = (e: ChangeEvent<HTMLInputElement>) => {
@@ -126,6 +128,9 @@ export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem }:
       </Botao>
       <Botao titulo="Texto (T)" ativo={ferramenta === "texto"} disabled={bloquear} onClick={() => onFerramenta("texto")}>
         <Type className="size-4" />
+      </Botao>
+      <Botao titulo="+ Agente (A)" disabled={bloquear} onClick={onAgente}>
+        <Bot className="size-4" />
       </Botao>
     </div>
   );

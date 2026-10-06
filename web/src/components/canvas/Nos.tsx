@@ -125,7 +125,7 @@ function TituloEditavel({ valor, onCommit, className, style }: { valor: string; 
  * sourceHandle/targetHandle: source[0] = direita e target[0] = esquerda (fluxo esquerda->direita).
  * O tamanho/cor/apagado vem do tema em index.css (aparecem no hover do no').
  */
-function Alcas() {
+export function Alcas() {
   return (
     <>
       <Handle type="target" id="alca-esq" position={Position.Left} />
