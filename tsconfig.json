@@ -25,6 +25,7 @@
     "ui-nova-feature-anexos.test.ts",
     "ui-assumir.test.ts",
     "modelo-planejador.test.ts",
-    "ui-canvas.test.ts"
+    "ui-canvas.test.ts",
+    "ui-agentes.test.ts"
   ]
 }
