@@ -184,3 +184,155 @@
 .react-flow .react-flow__attribution a {
   color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
 }
+
+/* ==========================================================================
+   Tema do canvas fiel ao Castor (F1.5 - S1).
+   Todos os tokens --cv-* vivem em `.cv` (a raiz do Canvas). Nada aqui vaza
+   pra vista IDE (editor/chat/diff ficam fora de `.cv`).
+   ========================================================================== */
+.cv {
+  --cv-canvas: #111;
+  --cv-ponto: #303030;
+  --cv-card: #1c1c1c;
+  --cv-cabecalho: #222;
+  --cv-borda: #303030;
+  --cv-borda-menu: #414141;
+  --cv-raio: 12px;
+  --cv-sombra: 0 1px 2px #0006, 0 6px 16px #0006;
+  --cv-texto: #eee;
+  --cv-icone: #858585;
+  --cv-selecao: #2979ff;
+  --cv-aresta: #606060;
+  --cv-aresta-ativa: #74aaff;
+  --cv-menu: #222;
+  --cv-menu-hover: #333;
+  color-scheme: dark;
+}
+
+/* Chrome dos cards: card escuro arredondado, cabecalho #222, selecao por outline azul. */
+.cv .cv-card {
+  background: var(--cv-card);
+  border: 1px solid var(--cv-borda);
+  border-radius: var(--cv-raio);
+  box-shadow: var(--cv-sombra);
+}
+.cv .cv-card.cv-sel,
+.cv .cv-forma-sel {
+  outline: 2px solid var(--cv-selecao);
+  outline-offset: 3px;
+}
+.cv .cv-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--cv-cabecalho);
+  border-bottom: 1px solid var(--cv-borda);
+  color: var(--cv-texto);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+}
+.cv .cv-title {
+  min-width: 0;
+  flex: 1;
+  color: inherit;
+}
+.cv .cv-title::placeholder {
+  color: currentColor;
+  opacity: 0.5;
+}
+
+/* react-flow: fundo #111, arestas cinza 2px, alcas que so' aparecem no hover do no'. */
+.cv .react-flow {
+  --xy-background-color: var(--cv-canvas);
+  --xy-background-pattern-color: var(--cv-ponto);
+  --xy-edge-stroke: var(--cv-aresta);
+  --xy-edge-stroke-width: 2;
+  --xy-edge-stroke-selected: var(--cv-aresta-ativa);
+  --xy-connectionline-stroke: var(--cv-aresta-ativa);
+  --xy-handle-background-color: var(--cv-aresta-ativa);
+  --xy-handle-border-color: var(--cv-canvas);
+  --xy-selection-background-color: color-mix(in oklab, var(--cv-selecao) 12%, transparent);
+  --xy-selection-border: 1px dashed var(--cv-selecao);
+  --xy-edge-label-background-color: var(--cv-menu);
+  --xy-edge-label-color: var(--cv-texto);
+  --xy-resize-background-color: var(--cv-selecao);
+  background-color: var(--cv-canvas);
+}
+.cv .react-flow__background {
+  background-color: var(--cv-canvas);
+}
+.cv .react-flow .react-flow__edge-path {
+  stroke: var(--cv-aresta);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.cv .react-flow .react-flow__edge.selected .react-flow__edge-path,
+.cv .react-flow .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--cv-aresta-ativa);
+}
+.cv .react-flow .react-flow__handle {
+  min-width: 7px;
+  min-height: 7px;
+  width: 7px;
+  height: 7px;
+  border-width: 1px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.cv .react-flow .react-flow__node:hover .react-flow__handle,
+.cv .react-flow .react-flow__node.selected .react-flow__handle,
+.cv .react-flow .react-flow__handle.connectingfrom,
+.cv .react-flow .react-flow__handle.connectionindicator {
+  opacity: 0.9;
+}
+.cv .react-flow .react-flow__attribution {
+  background: transparent;
+}
+.cv .react-flow .react-flow__attribution a {
+  color: color-mix(in oklab, var(--cv-texto) 40%, transparent);
+}
+
+/* Rotulo de aresta: pilula #222 com borda #414141 (dentro do viewport, herda os --cv-*). */
+.cv .cv-rotulo {
+  background: var(--cv-menu);
+  border: 1px solid var(--cv-borda-menu);
+  border-radius: 9999px;
+  padding: 1px 8px;
+  color: var(--cv-texto);
+  font: 400 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Menu (Radix porta pro body, fora de `.cv`): escuro no mesmo tom do canvas. */
+.cv-menu {
+  background: #222;
+  border: 1px solid #414141;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.cv-menu [data-slot="dropdown-menu-item"] {
+  font-size: 12px;
+  color: #eee;
+}
+.cv-menu [data-slot="dropdown-menu-item"]:focus,
+.cv-menu [data-slot="dropdown-menu-item"][data-highlighted] {
+  background: #333;
+  color: #eee;
+}
+.cv-menu [data-slot="dropdown-menu-label"] {
+  font-size: 11px;
+  color: #858585;
+}
+
+/* Ferramentas (S2 - F1.5): cursor por ferramenta. Criacao = crosshair; mao = grab/grabbing. */
+.cv.cv-pane-criacao .react-flow__pane {
+  cursor: crosshair;
+}
+.cv.cv-pane-mao .react-flow__pane,
+.cv.cv-pane-mao .react-flow__pane.draggable {
+  cursor: grab;
+}
+.cv.cv-pane-mao .react-flow__pane.dragging {
+  cursor: grabbing;
+}

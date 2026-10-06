@@ -1,28 +1,55 @@
 // Vista Canvas (S4): o grafo do projeto renderizado com @xyflow/react. O modelo do hub (No/Aresta)
 // vira nodes/edges, e as edicoes (mover, redimensionar, editar, conectar, apagar, imagem) voltam como
 // operacoes pro hub (useCanvas). UI em PT-BR, so' tema escuro.
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow,
+  Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow, ViewportPortal,
   applyEdgeChanges, applyNodeChanges,
   useReactFlow, useViewport,
   type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
-import { checarImagem, limitarZoom, paiDoNo } from "@/lib/canvas";
+import {
+  checarImagem, ferramentaDoAtalho, limitarZoom, noNovo, paiDoNo, pontaDaAresta, retanguloDeArrasto,
+  TAMANHO_PADRAO, type Ferramenta, type NomeForma,
+} from "@/lib/canvas";
+import { cn } from "@/lib/utils";
 import { useCanvas } from "@/hooks/useCanvas";
 import type { Aresta, No, Op, TipoNo } from "../../../canvas.ts";
-import { Barra, type NomeForma } from "./canvas/Barra";
+import { Barra } from "./canvas/Barra";
 import { CanvasCtx, edgeTypes, nodeTypes } from "./canvas/Nos";
 
 // ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 // ---------------------------------------------------------------------------
 
-// Tipos que tem card proprio; os demais (agente, worker, run…) caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo"]);
+// Tipos que tem render proprio; os demais (agente, worker, run…) caem no card de nota como fallback.
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
+
+// Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
+const FERRAMENTAS_CRIACAO = new Set<Ferramenta>(["nota", "forma", "regiao", "texto"]);
+
+/** Tamanho padrao de uma ferramenta de criacao (so' usado no clique, sem arrasto). */
+const padraoDe = (f: Ferramenta): { w: number; h: number } =>
+  f === "forma" ? TAMANHO_PADRAO.forma : f === "regiao" ? TAMANHO_PADRAO.regiao : f === "texto" ? TAMANHO_PADRAO.texto : TAMANHO_PADRAO.nota;
+
+/** O alvo do evento e' o fundo do pane (nao um no', alca, aresta ou painel flutuante)? */
+const ehPane = (alvo: EventTarget | null): boolean => {
+  const el = alvo as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return false;
+  if (!el.closest(".react-flow__pane")) return false;
+  return !el.closest(".react-flow__node") && !el.closest(".react-flow__handle") &&
+    !el.closest(".react-flow__edge") && !el.closest(".react-flow__panel") && !el.closest("button");
+};
+
+/** Foco em campo de texto (input/textarea/contenteditable): atalhos de ferramenta nao valem. */
+const emCampo = (alvo: EventTarget | null): boolean => {
+  const el = alvo as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
+};
 
 // No modelo, x/y sao ABSOLUTOS (mesma base do paiDoNo). Filho de grupo vira posicao RELATIVA ao pai.
 function noParaRf(no: No, porId: Map<string, No>): Node {
@@ -39,8 +66,17 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
   };
 }
 
-function arestaParaRf(a: Aresta): Edge {
-  return { id: a.id, source: a.de, target: a.para, type: "rotulo", data: { rotulo: a.rotulo ?? "" } };
+// A seta (markerEnd ArrowClosed) so' aparece quando as duas pontas sao formas (pontaDaAresta).
+function arestaParaRf(a: Aresta, porId: Map<string, No>): Edge {
+  const comSeta = pontaDaAresta(porId.get(a.de)?.tipo, porId.get(a.para)?.tipo);
+  return {
+    id: a.id,
+    source: a.de,
+    target: a.para,
+    type: "rotulo",
+    data: { rotulo: a.rotulo ?? "" },
+    markerEnd: comSeta ? { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 } : undefined,
+  };
 }
 
 const novoId = (prefixo: string) => prefixo + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -65,10 +101,14 @@ function ControleZoom() {
   const pct = Math.round(limitarZoom(zoom) * 100);
   const passo = (delta: number) => void zoomTo(limitarZoom(zoom + delta));
   return (
-    <Panel position="bottom-right" className="flex items-center gap-0.5 rounded-lg border border-border bg-card/95 px-1 py-0.5 shadow-lg backdrop-blur">
-      <button type="button" title="Diminuir zoom" onClick={() => passo(-0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-muted">−</button>
-      <span className="w-10 text-center font-mono text-[11px] tabular-nums">{pct}%</span>
-      <button type="button" title="Aumentar zoom" onClick={() => passo(0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-muted">+</button>
+    <Panel
+      position="bottom-right"
+      className="flex items-center gap-0.5 px-1 py-0.5"
+      style={{ background: "#222", border: "1px solid #303030", borderRadius: 8 }}
+    >
+      <button type="button" title="Diminuir zoom" onClick={() => passo(-0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>−</button>
+      <span className="w-10 text-center tabular-nums" style={{ fontSize: 12, color: "#b8b8b8" }}>{pct}%</span>
+      <button type="button" title="Aumentar zoom" onClick={() => passo(0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>+</button>
     </Panel>
   );
 }
@@ -83,10 +123,20 @@ export function Canvas({ projeto }: { projeto: string }) {
   const [arestas, setArestas] = useState<Edge[]>([]);
   const [arestaEditando, setArestaEditando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  const [ferramenta, setFerramenta] = useState<Ferramenta>("selecionar");
+  const [formaPendente, setFormaPendente] = useState<NomeForma>("retangulo");
+  const [espaco, setEspaco] = useState(false);
+  const [arrasto, setArrasto] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null);
+  const [origemSeta, setOrigemSeta] = useState<string | null>(null);
   const bloqueado = !conectado; // sem SSE vivo: so' leitura ("reconectando…")
   const container = useRef<HTMLDivElement | null>(null);
   const instancia = useRef<ReactFlowInstance | null>(null);
   const ajusteFeito = useRef(false);
+
+  // Ferramenta efetiva: segurar Espaco vira "mao" temporariamente (como no Castor).
+  const efetiva: Ferramenta = espaco ? "mao" : ferramenta;
+  const criando = FERRAMENTAS_CRIACAO.has(efetiva);
+  const selecionando = efetiva === "selecionar";
 
   // Ao trocar de projeto, o proximo grafo carregado merece um enquadramento novo.
   useEffect(() => { ajusteFeito.current = false; }, [projeto]);
@@ -111,7 +161,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         return rf;
       });
     });
-    setArestas(estado.arestas.map(arestaParaRf));
+    setArestas(estado.arestas.map((a) => arestaParaRf(a, porId)));
   }, [estado]);
 
   useEffect(() => {
@@ -119,6 +169,28 @@ export function Canvas({ projeto }: { projeto: string }) {
     const t = setTimeout(() => setAviso(null), 4200);
     return () => clearTimeout(t);
   }, [aviso]);
+
+  // Atalhos das ferramentas (V/H/N/R/C/T). Espaco = mao temporaria; Esc cancela e volta a selecionar.
+  // Ignorados com foco em input/textarea (o title/corpo dos cards continuam digitaveis).
+  useEffect(() => {
+    const aoTeclar = (e: KeyboardEvent) => {
+      if (emCampo(e.target)) return;
+      if (e.key === " " || e.code === "Space") { setEspaco(true); return; }
+      if (e.key === "Escape") { setArrasto(null); setOrigemSeta(null); setFerramenta("selecionar"); return; }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const f = ferramentaDoAtalho(e.key);
+      if (f) { setOrigemSeta(null); setFerramenta(f); }
+    };
+    const aoSoltarTecla = (e: KeyboardEvent) => {
+      if (e.key === " " || e.code === "Space") setEspaco(false);
+    };
+    window.addEventListener("keydown", aoTeclar);
+    window.addEventListener("keyup", aoSoltarTecla);
+    return () => {
+      window.removeEventListener("keydown", aoTeclar);
+      window.removeEventListener("keyup", aoSoltarTecla);
+    };
+  }, []);
 
   const buscarNo = (id: string): No | undefined => estado.nos.find((n) => n.id === id);
 
@@ -218,7 +290,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "aresta", item: { ...atual, rotulo: limpo || undefined, rev: Date.now() } }]);
   };
 
-  // --- criacao de nos ---
+  // --- criacao de nos por clique/arrasto no pane (S2) ---
   const centro = (cliente?: { x: number; y: number }) => {
     const inst = instancia.current;
     if (cliente && inst) return inst.screenToFlowPosition(cliente);
@@ -227,34 +299,63 @@ export function Canvas({ projeto }: { projeto: string }) {
     return { x: 0, y: 0 };
   };
 
-  const criarNo = (tipo: TipoNo, dados: Record<string, unknown>, w: number, h: number) => {
+  /** Cria o no' da ferramenta no retangulo do clique/arrasto e volta pra "selecionar". */
+  const criarPelaFerramenta = (f: Ferramenta, a: { x: number; y: number }, b: { x: number; y: number }) => {
     if (bloqueado) return;
-    const p = centro();
-    const agora = Date.now();
-    const no: No = { id: novoId("n"), tipo, x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h, dados, rev: agora };
-    enviar([{ op: "upsert", tipo: "no", item: no }]);
+    const ret = retanguloDeArrasto(a, b, padraoDe(f));
+    const no = noNovo(f, ret, novoId("n"), { forma: formaPendente });
+    if (!no) return;
+    const ops: Op[] = [{ op: "upsert", tipo: "no", item: no }];
+    // Regiao: os nos inteiramente dentro dela viram filhos (o menor grupo que contem vence).
+    if (f === "regiao") {
+      const agora = Date.now();
+      const grupos = [...estado.nos.filter((n) => n.tipo === "grupo"), no];
+      for (const n of estado.nos) {
+        if (n.tipo === "grupo" || n.pai === no.id) continue;
+        if (paiDoNo(n, grupos) === no.id) ops.push({ op: "upsert", tipo: "no", item: { ...n, pai: no.id, rev: agora } });
+      }
+    }
+    enviar(ops);
+    setFerramenta("selecionar");
   };
 
-  // Agrupar: cria um no' grupo envolvendo os selecionados e define o pai deles.
-  const aoAgrupar = () => {
-    if (bloqueado) return;
-    const selecionados = nos.filter((n) => n.selected && n.type !== "grupo");
-    const modelos = selecionados.map((n) => buscarNo(n.id)).filter((n): n is No => !!n);
-    if (!modelos.length) { setAviso("Selecione um ou mais nós para agrupar."); return; }
-    const minX = Math.min(...modelos.map((n) => n.x));
-    const minY = Math.min(...modelos.map((n) => n.y));
-    const maxX = Math.max(...modelos.map((n) => n.x + n.w));
-    const maxY = Math.max(...modelos.map((n) => n.y + n.h));
-    const pad = 28;
-    const agora = Date.now();
-    const gid = novoId("g");
-    const ops: Op[] = [{
-      op: "upsert", tipo: "no",
-      item: { id: gid, tipo: "grupo", x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2, dados: { titulo: "Grupo", cor: "lilas" }, rev: agora },
-    }];
-    for (const m of modelos) ops.push({ op: "upsert", tipo: "no", item: { ...m, pai: gid, rev: agora } });
-    enviar(ops);
+  const aoApontarPane = (e: ReactPointerEvent) => {
+    if (e.button !== 0 || !criando) return;
+    if (!ehPane(e.target)) return;
+    const inst = instancia.current;
+    if (!inst) return;
+    const p = inst.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    setArrasto({ a: p, b: p });
   };
+
+  const aoMoverPane = (e: ReactPointerEvent) => {
+    if (!arrasto) return;
+    const inst = instancia.current;
+    if (!inst) return;
+    const b = inst.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    setArrasto((atual) => (atual ? { a: atual.a, b } : atual));
+  };
+
+  const aoSoltarPane = (e: ReactPointerEvent) => {
+    if (!arrasto) return;
+    const a = arrasto.a;
+    setArrasto(null);
+    if (e.button !== 0 || !criando) return;
+    const inst = instancia.current;
+    if (!inst) return;
+    criarPelaFerramenta(efetiva, a, inst.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+  };
+
+  /** Ferramenta "seta": 1o clique escolhe a origem, 2o cria a aresta origem->destino. */
+  const aoClicarNo = (_e: unknown, node: Node) => {
+    if (ferramenta !== "seta" || bloqueado) return;
+    if (!origemSeta) { setOrigemSeta(node.id); return; }
+    if (origemSeta === node.id) { setOrigemSeta(null); return; }
+    enviar([{ op: "upsert", tipo: "aresta", item: { id: novoId("e"), de: origemSeta, para: node.id, rev: Date.now() } }]);
+    setOrigemSeta(null);
+  };
+
+  const retArrasto = arrasto ? retanguloDeArrasto(arrasto.a, arrasto.b, padraoDe(ferramenta)) : null;
 
   // --- imagem por drop de arquivo ou Ctrl+V ---
   const criarImagem = async (arquivo: File, cliente?: { x: number; y: number }) => {
@@ -321,7 +422,10 @@ export function Canvas({ projeto }: { projeto: string }) {
   };
 
   return (
-    <div ref={container} className="relative h-full w-full bg-background">
+    <div
+      ref={container}
+      className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
+    >
       <CanvasCtx.Provider value={ctx}>
         <ReactFlow
           nodes={nos}
@@ -332,22 +436,27 @@ export function Canvas({ projeto }: { projeto: string }) {
           onEdgesChange={aoMudarArestas}
           onConnect={aoConectar}
           onNodeDragStop={aoSoltarNo}
+          onNodeClick={aoClicarNo}
           onEdgeDoubleClick={(_e, a) => setArestaEditando(a.id)}
-          onPaneClick={() => setArestaEditando(null)}
+          onPaneClick={() => { setArestaEditando(null); if (ferramenta === "seta") setOrigemSeta(null); }}
           onInit={(i) => { instancia.current = i; }}
+          onPointerDown={aoApontarPane}
+          onPointerMove={aoMoverPane}
+          onPointerUp={aoSoltarPane}
           onDrop={aoSoltarArquivo}
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; }}
           connectionMode={ConnectionMode.Loose}
-          defaultEdgeOptions={{ type: "rotulo", markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8", width: 16, height: 16 } }}
+          defaultEdgeOptions={{ type: "rotulo" }}
           minZoom={0.1}
           maxZoom={2}
           zoomOnScroll
           zoomOnDoubleClick={false}
-          panOnDrag
+          panOnDrag={efetiva === "mao" ? true : selecionando ? [1] : false}
+          selectionOnDrag={selecionando}
           panOnScroll={false}
           deleteKeyCode={bloqueado ? null : ["Delete", "Backspace"]}
           nodesDraggable={!bloqueado}
-          nodesConnectable={!bloqueado}
+          nodesConnectable={!bloqueado && !criando && ferramenta !== "seta"}
           elementsSelectable={!bloqueado}
           nodesFocusable={!bloqueado}
           fitView
@@ -355,16 +464,32 @@ export function Canvas({ projeto }: { projeto: string }) {
           attributionPosition="bottom-left"
           className="h-full w-full"
         >
-          <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} />
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#303030" />
           <ControleZoom />
+          {retArrasto && (
+            <ViewportPortal>
+              <div
+                className="pointer-events-none absolute"
+                style={{
+                  transform: `translate(${retArrasto.x}px, ${retArrasto.y}px)`,
+                  width: retArrasto.w,
+                  height: retArrasto.h,
+                  border: "1.5px dashed var(--cv-selecao)",
+                  background: "color-mix(in oklab, var(--cv-selecao) 12%, transparent)",
+                  borderRadius: 4,
+                }}
+              />
+            </ViewportPortal>
+          )}
         </ReactFlow>
       </CanvasCtx.Provider>
 
       <Barra
         bloquear={bloqueado}
-        onNota={() => criarNo("nota", { titulo: "Nota", corpo: "", cor: "amarelo" }, 240, 170)}
-        onForma={(forma: NomeForma) => criarNo("forma", { forma, texto: "", cor: "cinza" }, 170, 130)}
-        onAgrupar={aoAgrupar}
+        ferramenta={ferramenta}
+        onFerramenta={(f) => { setOrigemSeta(null); setFerramenta(f); }}
+        onForma={(forma) => { setFormaPendente(forma); setOrigemSeta(null); setFerramenta("forma"); }}
+        onImagem={(arquivo) => void criarImagem(arquivo)}
       />
 
       {bloqueado && (

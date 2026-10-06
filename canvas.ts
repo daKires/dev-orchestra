@@ -9,6 +9,7 @@ export type TipoNo =
   | "imagem"
   | "forma"
   | "grupo"
+  | "texto"
   | "agente"
   | "worker"
   | "run"
@@ -22,6 +23,7 @@ export const TIPOS_NO: readonly TipoNo[] = [
   "imagem",
   "forma",
   "grupo",
+  "texto",
   "agente",
   "worker",
   "run",

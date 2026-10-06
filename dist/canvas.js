@@ -9,6 +9,7 @@ export const TIPOS_NO = [
     "imagem",
     "forma",
     "grupo",
+    "texto",
     "agente",
     "worker",
     "run",
