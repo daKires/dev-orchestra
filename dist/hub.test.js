@@ -24,6 +24,7 @@ function portaLivre() {
 const PORTA = await portaLivre();
 process.env.HERMES_UI_PORT = String(PORTA);
 process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan-"));
+process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("./ui.js");
 const REG = (over = {}) => ({
     slug: "x", projeto: "p", raiz: "D:\\p", cwd: "D:\\p\\.claude\\worktrees\\x",
