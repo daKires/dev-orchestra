@@ -6,9 +6,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { Ellipsis, X } from "lucide-react";
+import { Ellipsis, MessagesSquare, X } from "lucide-react";
 import { Alcas } from "./Nos";
 import { cn } from "@/lib/utils";
+import { ehLinhaColab } from "@/lib/colab";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -34,6 +35,8 @@ export type AcoesAgente = {
   modelos: (cwd: string) => Promise<string[]>;
   /** Opcional: recria o agente que falhou ("Tentar de novo"). */
   recriar?: (id: string) => void;
+  /** Opcional: cria o card Explorador (`exp:<agenteId>`) a esquerda do agente, com uma aresta. */
+  explorador?: (agenteId: string) => void;
 };
 
 export type AgentesValor = {
@@ -68,6 +71,18 @@ const corStatus = (status: string, ocupado: boolean): string =>
 /** Uma linha da transcricao: usuario (fundo #2a2a2a), texto (paragrafo) ou tool (✓/✗/→). */
 function LinhaTxt({ l }: { l: Linha }) {
   if (l.tipo === "usuario") {
+    // Linha de colaboracao entre agentes (F3 S4): destaque azul + icone de conversa.
+    if (ehLinhaColab(l.texto)) {
+      return (
+        <p
+          className="flex items-start gap-1.5 whitespace-pre-wrap rounded px-1.5 py-0.5"
+          style={{ background: "#19253a", borderLeft: "2px solid #74aaff" }}
+        >
+          <MessagesSquare className="mt-0.5 size-3.5 shrink-0" style={{ color: "#74aaff" }} />
+          <span className="min-w-0 flex-1">{l.texto}</span>
+        </p>
+      );
+    }
     return (
       <p className="whitespace-pre-wrap rounded px-1.5 py-0.5" style={{ background: "#2a2a2a" }}>
         <span style={{ color: "#858585" }}>{"› "}</span>{l.texto}
@@ -188,6 +203,7 @@ export function NoAgente({ id, data, selected }: NodeProps) {
           <DropdownMenuContent align="end" className="cv-menu min-w-40">
             <DropdownMenuItem onSelect={() => { if (agenteId) acoes.carregarHistorico(agenteId); }}>Recarregar histórico</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => { if (agenteId) acoes.abortar(agenteId); }}>Interromper</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => { if (agenteId) acoes.explorador?.(agenteId); }}>+ Explorador</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <button type="button" title="Fechar" onClick={() => onFechar(id, agenteId)} className="nodrag grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: "#858585" }}>

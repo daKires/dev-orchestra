@@ -113,6 +113,8 @@ $texto += "`n`nAntes de responder, leia .orchestra/contexto/plan-$slug/README.md
 $exe = Join-Path (Split-Path (Get-Command opencode.cmd).Source) 'node_modules\opencode-ai\bin\opencode.exe'
 if (-not (Test-Path $exe)) { Falha "opencode nao encontrado ($exe). Rode: npm i -g opencode-ai" }
 $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); $porta = $l.LocalEndpoint.Port; $l.Stop()
+# PATH do serve com a pasta bin/ do hermes-bridge na frente (o CLI `canvas` dos agentes fica la).
+$env:PATH = "$PSScriptRoot\bin$([IO.Path]::PathSeparator)$env:PATH"
 $proc = Start-Process $exe -ArgumentList 'serve', '--port', $porta -WorkingDirectory $wt -WindowStyle Hidden -PassThru
 $baseUrl = "http://127.0.0.1:$porta"
 $ok = $false

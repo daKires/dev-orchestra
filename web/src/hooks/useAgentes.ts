@@ -2,6 +2,7 @@
 // Snapshot por HTTP (GET /agentes?projeto=), lista e transcricoes ao vivo pelo SSE /events e as acoes
 // de conversa (POST). Nada de runtime do hub/OpenCode aqui — no maximo tipos, via `import type`.
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Conversa } from "@/lib/colab";
 
 /** Resumo de um agente como o hub devolve em GET /agentes e no SSE {agentes}. */
 export type AgenteVisivel = {
@@ -16,6 +17,8 @@ export type Linha = { id: string; msg: string; tipo: string; estado?: string; te
 export type Agentes = {
   agentes: AgenteVisivel[];
   linhasPorId: Record<string, Linha[]>;
+  /** Conversas pendentes entre agentes do projeto (SSE {conversas}); base do balao das arestas. */
+  conversas: Conversa[];
   carregarHistorico: (id: string) => void;
   mensagem: (id: string, texto: string) => void;
   abortar: (id: string) => void;
@@ -45,12 +48,14 @@ function post(id: string, acao: string, corpo: unknown): void {
 
 /**
  * Agentes do projeto: GET /agentes?projeto= na montagem (trocar de projeto zera a vista ate' a
- * resposta); o EventSource('/events') aplica {agentes} (substitui a lista do projeto) e
- * {agenteLinhas} (substitui a transcricao daquele id). As acoes chamam as rotas POST do hub.
+ * resposta); o EventSource('/events') aplica {agentes} (substitui a lista do projeto),
+ * {agenteLinhas} (substitui a transcricao daquele id) e {conversas} (pendentes entre agentes).
+ * As acoes chamam as rotas POST do hub.
  */
 export function useAgentes(projeto: string): Agentes {
   const [agentes, setAgentes] = useState<AgenteVisivel[]>([]);
   const [linhasPorId, setLinhasPorId] = useState<Record<string, Linha[]>>({});
+  const [conversas, setConversas] = useState<Conversa[]>([]);
   const atual = useRef(projeto); // pro handler do SSE (o stream nao e' reaberto ao trocar de projeto)
   atual.current = projeto;
 
@@ -59,6 +64,7 @@ export function useAgentes(projeto: string): Agentes {
     let vivo = true;
     setAgentes([]);
     setLinhasPorId({});
+    setConversas([]);
     fetch(`/agentes?projeto=${encodeURIComponent(projeto)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: AgenteVisivel[] | null) => { if (vivo && Array.isArray(j)) setAgentes(j); })
@@ -66,11 +72,12 @@ export function useAgentes(projeto: string): Agentes {
     return () => { vivo = false; };
   }, [projeto]);
 
-  // SSE: so' {agentes} (lista inteira) e {agenteLinhas} (transcricao inteira de um id) importam.
+  // SSE: so' {agentes} (lista inteira), {agenteLinhas} (transcricao inteira de um id) e {conversas}
+  // (pendentes entre agentes) importam.
   useEffect(() => {
     const es = new EventSource("/events");
     es.onmessage = (m) => {
-      let d: { agentes?: AgenteVisivel[]; agenteLinhas?: { id: string; linhas: Linha[] } } | null = null;
+      let d: { agentes?: AgenteVisivel[]; agenteLinhas?: { id: string; linhas: Linha[] }; conversas?: Conversa[] } | null = null;
       try { d = JSON.parse(m.data); } catch { return; }
       if (Array.isArray(d?.agentes)) {
         setAgentes(d.agentes.filter((a) => a && typeof a.id === "string" && doProjeto(a, atual.current)));
@@ -78,6 +85,9 @@ export function useAgentes(projeto: string): Agentes {
       const al = d?.agenteLinhas;
       if (al && typeof al.id === "string" && Array.isArray(al.linhas)) {
         setLinhasPorId((l) => ({ ...l, [al.id]: al.linhas }));
+      }
+      if (Array.isArray(d?.conversas)) {
+        setConversas(d.conversas.filter((c) => c && typeof c.q === "string" && typeof c.de === "string" && typeof c.para === "string"));
       }
     };
     return () => es.close();
@@ -144,5 +154,5 @@ export function useAgentes(projeto: string): Agentes {
     } catch { return []; }
   }, []);
 
-  return { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos };
+  return { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos };
 }
