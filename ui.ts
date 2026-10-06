@@ -14,7 +14,7 @@ import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type 
 import {
   PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas,
   aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos,
-  type Agente, type AssinaturaArquivo, type Linha, type Papel,
+  type Agente, type AssinaturaArquivo, type Linha, type Papel, type ParteRegistrada,
 } from "./agentes.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
@@ -633,10 +633,13 @@ function statusDe(id: string): string {
   return fila.estados.get(id)?.ocupado ? "ocupado" : "ocioso";
 }
 
-type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string };
+type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string; ocupado: boolean };
 
 function resumoAgente(a: Agente): ResumoAgente {
-  return { id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem, status: statusDe(a.id) };
+  return {
+    id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem,
+    status: statusDe(a.id), ocupado: fila.estados.get(a.id)?.ocupado === true,
+  };
 }
 
 // Agentes do canvas daquele projeto + os derivados dos planejadores (agenteDePlanejador).
@@ -684,6 +687,7 @@ function abrirPonte(base: string): void {
 
 async function loopPonte(base: string, ctrl: AbortController): Promise<void> {
   const papeis = new Map<string, string>();
+  const partes = new Map<string, ParteRegistrada>(); // por ponte (por base): acumula os deltas de texto
   while (!ctrl.signal.aborted) {
     try {
       const r = await fetch(base + "/event", { signal: ctrl.signal, headers: { Accept: "text/event-stream" } });
@@ -705,7 +709,7 @@ async function loopPonte(base: string, ctrl: AbortController): Promise<void> {
             if (!dados) continue;
             let ev: unknown = null;
             try { ev = JSON.parse(dados); } catch { continue; }
-            tratarEvento(base, ev, papeis);
+            tratarEvento(base, ev, papeis, partes);
           }
         }
       }
@@ -727,8 +731,8 @@ function agenteDaSessao(base: string, sessao: string): RegistroAgente | undefine
   return undefined;
 }
 
-function tratarEvento(base: string, ev: unknown, papeis: Map<string, string>): void {
-  const r = normalizarEvento(ev, papeis);
+function tratarEvento(base: string, ev: unknown, papeis: Map<string, string>, partes: Map<string, ParteRegistrada>): void {
+  const r = normalizarEvento(ev, papeis, partes);
   if (!r) return;
   const ag = agenteDaSessao(base, r.sessao);
   if (!ag) return;
@@ -887,7 +891,8 @@ function sincronizarContexto(projeto: string, snap: Snapshot): void {
     }
     gravarManifest(a, atual);
     ctxAssinaturas.set(aid, atual);
-    const nomes = [...d.gravar, ...d.remover];
+    // README.md NAO entra nos nomes do aviso: mudanca so do README (ou sem itens) nao avisa.
+    const nomes = [...d.gravar, ...d.remover].filter((n) => n !== "README.md");
     if (nomes.length) { fila.adicionar(aid, nomes); tentarLiberarAviso(aid); }
   }
 }
@@ -1116,7 +1121,7 @@ function criarServidor(): http.Server {
       const def = PAPEIS[papel as Papel];
       const id = "ag-" + randomUUID().slice(0, 8);
       const nome = j && typeof j.nome === "string" && j.nome.trim() ? j.nome.trim() : def.nome;
-      const modelo = j && typeof j.modelo === "string" ? j.modelo.trim() : "";
+      const modelo = (j && typeof j.modelo === "string" ? j.modelo.trim() : "") || "opencode-go/glm-5.2";
       const instrucao = j && typeof j.instrucao === "string" ? j.instrucao : def.instrucao;
       let serve = serves.get(cwd);
       let erro = "";

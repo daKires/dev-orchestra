@@ -70,6 +70,8 @@ const ARQ_W = 240;
 const ARQ_H = 40;
 const GAP_ARQ = 12;
 const REG_GAP = 40;           // distancia do card ate' a regiao
+const MARGEM_CONTEUDO = 80;   // folga minima entre a coluna de runs e o conteudo do usuario
+const ESPACO_REGIAO = 40;     // folga extra reservada pra regiao da run nao invadir o conteudo
 
 /** Ids salvos do snapshot (para reusar posicao/dados dos nos ja' existentes). */
 function indexarSalvos(snap: Snapshot): Map<string, No> {
@@ -84,8 +86,25 @@ function comSalvo(no: No, salvos: Map<string, No>): No {
 }
 
 /**
+ * Largura que a regiao de uma run TERIA (a maior regiao possivel), ignorando posicoes salvas: so'
+ * depende do numero de slices (cadeia do fluxo) e dos arquivos. Usada pra reservar espaco a esquerda
+ * do conteudo do usuario sem a regiao nunca invadir nada.
+ */
+function larguraRegiao(run: Run): number {
+  const n = Math.max(run.plano.length, run.slices.length);
+  let fim = FLOW_W; // forma "Início" (pos 0); o fluxo sempre tem essa largura minima
+  for (let pos = 0; pos <= n + 2; pos++) fim = Math.max(fim, PAD + pos * STEP + FLOW_W);
+  for (let idx = 1; idx <= n; idx++) fim = Math.max(fim, PAD + idx * STEP + WORKER_W);
+  if (run.ordemDiffs.length) fim = Math.max(fim, PAD + ARQ_W);
+  return fim + PAD;
+}
+
+/**
  * Coluna de cards de run (280x110), mais recente em cima; a run com o no' salvo marcado
- * `dados.expandida` ganha a direita um grupo `reg:<id>` com o fluxo, os workers e os arquivos.
+ * `dados.expandida` ganha a direita um grupo `reg:<id>` (nomeado pela feature da run) com o fluxo, os
+ * workers e os arquivos. A coluna fica a ESQUERDA de todo o conteudo do usuario (nos sem dados.auto
+ * e que nao sao 'agente'), reservando espaco pra maior regiao possivel; sem conteudo do usuario,
+ * mantem a coluna padrao (COLUNA_X).
  */
 export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
   const salvos = indexarSalvos(snap);
@@ -93,10 +112,19 @@ export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
   const nos: No[] = [];
   const arestas: ArestaLayout[] = [];
 
+  // Conteudo criado a mao pelo usuario (notas/imagens/formas/regioes/textos): a coluna de runs
+  // precisa caber inteira (card + regiao) a esquerda de tudo isso.
+  const doUsuario = snap.nos.filter((n) => n.dados?.auto !== true && n.tipo !== "agente");
+  const minX = doUsuario.length ? Math.min(...doUsuario.map((n) => n.x)) : undefined;
+  const larguraRegiaoMax = ordenadas.reduce((m, r) => Math.max(m, larguraRegiao(r)), FLOW_W);
+  const colunaX = minX === undefined
+    ? COLUNA_X
+    : minX - MARGEM_CONTEUDO - CARD_W - ESPACO_REGIAO - larguraRegiaoMax;
+
   ordenadas.forEach((run, i) => {
     const cardId = `run:${run.id}`;
     const card = comSalvo({
-      id: cardId, tipo: "run", x: COLUNA_X, y: COLUNA_Y + i * (CARD_H + ESPACO_VERTICAL),
+      id: cardId, tipo: "run", x: colunaX, y: COLUNA_Y + i * (CARD_H + ESPACO_VERTICAL),
       w: CARD_W, h: CARD_H, dados: { auto: true, runId: run.id }, rev: 0,
     }, salvos);
     nos.push(card);
@@ -141,7 +169,7 @@ export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
     const altura = Math.max(FLOW_H, ...resolvidos.map((f) => f.y + f.h - regY)) + PAD;
     nos.push(comSalvo({
       id: regId, tipo: "grupo", x: regX, y: regY, w: largura, h: altura,
-      dados: { auto: true, runId: run.id }, rev: 0,
+      dados: { auto: true, runId: run.id, titulo: run.feature }, rev: 0,
     }, salvos));
     nos.push(...resolvidos);
 

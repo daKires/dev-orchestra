@@ -126,9 +126,11 @@ function linhaDaParte(part, role, msgPadrao) {
 }
 /**
  * Normaliza um evento cru do `/event` do OpenCode. `papeis` (messageID -> role) e' alimentado pelos
- * `message.updated` para decidir se uma parte de texto e' do usuario ou do assistente.
+ * `message.updated` para decidir se uma parte de texto e' do usuario ou do assistente. O 3o argumento
+ * opcional `partes` (partID -> registro) guarda o tipo da parte e o texto acumulado dos deltas
+ * (`message.part.delta`), formato do OpenCode 1.18 (CA-4a).
  */
-export function normalizarEvento(ev, papeis) {
+export function normalizarEvento(ev, papeis, partes) {
     if (!ev || typeof ev !== "object")
         return null;
     const e = ev;
@@ -152,11 +154,34 @@ export function normalizarEvento(ev, papeis) {
         if (!part || typeof part !== "object")
             return null;
         const sid = typeof part.sessionID === "string" ? part.sessionID : sessionID;
-        const role = papeis.get(String(part.messageID)) ?? "";
-        const linha = linhaDaParte(part, role, typeof part.messageID === "string" ? part.messageID : "");
+        const msg = typeof part.messageID === "string" ? part.messageID : "";
+        const role = papeis.get(msg) ?? "";
+        if (partes && typeof part.id === "string" && part.id.length > 0) {
+            // Registra a parte para casar com os deltas: texto (acumula), tool e o resto (ignorado).
+            if (part.type === "text")
+                partes.set(part.id, { tipo: "texto", msg, texto: typeof part.text === "string" ? part.text : "" });
+            else if (part.type === "tool")
+                partes.set(part.id, { tipo: "tool", msg, texto: "" });
+            else
+                partes.set(part.id, { tipo: "ignorado", msg, texto: "" });
+        }
+        const linha = linhaDaParte(part, role, msg);
         if (!linha)
             return null;
         return { sessao: sid, linha };
+    }
+    if (e.type === "message.part.delta") {
+        if (!partes || props.field !== "text")
+            return null;
+        const partID = typeof props.partID === "string" ? props.partID : "";
+        if (!partID)
+            return null;
+        const reg = partes.get(partID);
+        if (!reg || reg.tipo !== "texto")
+            return null; // parte ignorada/desconhecida ou sem mapa: ignora
+        reg.texto += typeof props.delta === "string" ? props.delta : "";
+        const role = papeis.get(reg.msg) ?? "";
+        return { sessao: sessionID, linha: { id: partID, msg: reg.msg, tipo: role === "user" ? "usuario" : "texto", texto: reg.texto } };
     }
     if (e.type === "session.idle") {
         return { sessao: sessionID, status: "ocioso" };

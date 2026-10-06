@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** Resumo de um agente como o hub devolve em GET /agentes e no SSE {agentes}. */
 export type AgenteVisivel = {
   id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string;
+  /** true enquanto o agente esta trabalhando (busy do OpenCode); base do ponto pulsante do card. */
+  ocupado: boolean;
 };
 
 /** Linha da transcricao do chat do agente (mesma forma da Linha do hub). */
