@@ -1,7 +1,7 @@
 // Vista Canvas (S4): o grafo do projeto renderizado com @xyflow/react. O modelo do hub (No/Aresta)
 // vira nodes/edges, e as edicoes (mover, redimensionar, editar, conectar, apagar, imagem) voltam como
 // operacoes pro hub (useCanvas). UI em PT-BR, so' tema escuro.
-import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow, ViewportPortal,
   applyEdgeChanges, applyNodeChanges,
@@ -14,20 +14,37 @@ import {
   checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, mesclarNosRf, noNovo, ordemZ, paiDoNo,
   pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO, type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
+import { layoutAgentes, layoutRuns } from "@/lib/layout";
+import { runsDoProjeto } from "@/lib/estado";
 import { cn } from "@/lib/utils";
+import { useAgentes } from "@/hooks/useAgentes";
+import { useAgora, useRuns } from "@/hooks/useRuns";
 import { useCanvas } from "@/hooks/useCanvas";
-import type { Aresta, No, Op, TipoNo } from "../../../canvas.ts";
+import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 import { Barra } from "./canvas/Barra";
 import { Inspetor } from "./canvas/Inspetor";
+import { NovoAgente } from "./canvas/NovoAgente";
 import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContexto";
-import { CanvasCtx, edgeTypes, nodeTypes } from "./canvas/Nos";
+import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
+import { AgentesCtx, nodeTypes as agenteNodeTypes } from "./canvas/Agente";
+import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes } from "./canvas/Run";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b) + run/worker/arquivo (S5c).
+const nodeTypes = { ...nosNodeTypes, ...agenteNodeTypes, ...runNodeTypes };
 
 // ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 // ---------------------------------------------------------------------------
 
-// Tipos que tem render proprio; os demais (agente, worker, run…) caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto"]);
+// Tipos que tem render proprio; os demais (explorador, navegador…) caem no card de nota como fallback.
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -144,8 +161,70 @@ export function Canvas({ projeto }: { projeto: string }) {
   const ajusteFeito = useRef(false);
   // Clipboard em memoria do Ctrl+C/Ctrl+V (nos selecionados + quantas colagens ja' sairam).
   const clipboard = useRef<{ ids: string[]; colagens: number } | null>(null);
+  // `bloqueado` lido pelo handler de atalhos (o listener e' montado uma vez, deps []).
+  const bloqueadoRef = useRef(bloqueado);
+  bloqueadoRef.current = bloqueado;
   // Handler de atalhos reassinado a cada render (le estado/selecao atuais sem reassinar o listener).
   const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
+
+  // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
+  const { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, trocarModelo, modelos } = useAgentes(projeto);
+  const { estado: runsEstado } = useRuns();
+  const agora = useAgora();
+  const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
+  const [novoAgenteAberto, setNovoAgenteAberto] = useState(false);
+  const [diff, setDiff] = useState<{ runId: string; arquivo: string } | null>(null);
+  // Agentes de planejador JA' persistidos uma vez (nao re-upsertamos a cada render).
+  const agentesUpsertados = useRef<Set<string>>(new Set());
+
+  // Runs deste canvas: mesma raiz do projeto (worktree conta como o projeto).
+  const runsProjeto = useMemo(
+    () => runsDoProjeto(Object.values(runsEstado.runs), projeto),
+    [runsEstado, projeto],
+  );
+
+  // Modelo exibido = snapshot (MENOS os nos ocultos) + layout das runs + layout dos agentes.
+  // O id que ja' esta' no snapshot SEMPRE vence (nada de duplicar). As arestas do layout entram so' se
+  // forem novas (as do snapshot ganham).
+  const modelo = useMemo<Snapshot>(() => {
+    const ocultos = new Set(estado.nos.filter((n) => n.dados?.oculto === true).map((n) => n.id));
+    const visiveis = estado.nos.filter((n) => !ocultos.has(n.id));
+    const lr = layoutRuns(runsProjeto, estado);
+    const la = layoutAgentes(agentes, estado);
+    const jaTem = new Set(estado.nos.map((n) => n.id));
+    const extras: No[] = [];
+    for (const n of [...lr.nos, ...la]) {
+      if (jaTem.has(n.id)) continue;
+      jaTem.add(n.id);
+      extras.push(n);
+    }
+    const nos = [...visiveis, ...extras];
+    const idsNos = new Set(nos.map((n) => n.id));
+    const idsArestas = new Set(estado.arestas.map((a) => a.id));
+    const arestasExtras: Aresta[] = lr.arestas
+      .filter((a) => !idsArestas.has(a.id))
+      .map((a) => ({ id: a.id, de: a.de, para: a.para, rev: 0 }));
+    // Arestas do snapshot + as do layout, descartando as que ficaram orfas (ponta oculta/inexistente).
+    const arestas = [...estado.arestas, ...arestasExtras].filter((a) => idsNos.has(a.de) && idsNos.has(a.para));
+    return { nos, arestas };
+  }, [estado, agentes, runsProjeto]);
+
+  // Agente de planejador novo: persistido UMA vez, quando aparece no canvas (id novo no `ag:<id>`).
+  useEffect(() => {
+    if (bloqueado) return;
+    const jaTem = new Set(estado.nos.map((n) => n.id));
+    const novos = modelo.nos.filter(
+      (n) => n.tipo === "agente" && typeof n.dados.agenteId === "string"
+        && !jaTem.has(n.id) && !agentesUpsertados.current.has(n.id),
+    );
+    if (novos.length === 0) return;
+    const rev = Date.now();
+    const ops: Op[] = novos.map((n) => {
+      agentesUpsertados.current.add(n.id);
+      return { op: "upsert", tipo: "no", item: { ...n, rev } };
+    });
+    enviar(ops);
+  }, [modelo, estado, bloqueado, enviar]);
 
   // Ferramenta efetiva: segurar Espaco vira "mao" temporariamente (como no Castor).
   const efetiva: Ferramenta = espaco ? "mao" : ferramenta;
@@ -157,28 +236,28 @@ export function Canvas({ projeto }: { projeto: string }) {
 
   // Primeiro grafo do projeto: enquadra tudo (o `fitView` do componente roda com a lista ainda vazia).
   useEffect(() => {
-    if (ajusteFeito.current || estado.nos.length === 0) return;
+    if (ajusteFeito.current || modelo.nos.length === 0) return;
     ajusteFeito.current = true;
     const id = window.setTimeout(() => { void instancia.current?.fitView({ maxZoom: 1, padding: 0.25 }); }, 150);
     return () => window.clearTimeout(id);
-  }, [estado]);
+  }, [modelo]);
 
   // modelo -> react-flow; grupos primeiro (ficam atras) e, em cada reconstrucao, `measured` (que o
   // xyflow preenche via onNodesChange) e a selecao sao herdados do no' antigo (mesclarNosRf) — sem
   // medida o xyflow nao posiciona as alcas e nenhuma aresta e' desenhada.
   useEffect(() => {
-    const porId = new Map(estado.nos.map((n) => [n.id, n]));
-    const ordenados = [...estado.nos].sort((a, b) => (a.tipo === "grupo" ? 0 : 1) - (b.tipo === "grupo" ? 0 : 1));
+    const porId = new Map(modelo.nos.map((n) => [n.id, n]));
+    const ordenados = [...modelo.nos].sort((a, b) => (a.tipo === "grupo" ? 0 : 1) - (b.tipo === "grupo" ? 0 : 1));
     setNos((antigos) => mesclarNosRf(ordenados.map((n) => noParaRf(n, porId)), antigos));
     setArestas((antigas) => {
       const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
-      return estado.arestas.map((a) => {
+      return modelo.arestas.map((a) => {
         const rf = arestaParaRf(a, porId);
         if (sel.has(a.id)) rf.selected = true;
         return rf;
       });
     });
-  }, [estado]);
+  }, [modelo]);
 
   useEffect(() => {
     if (!aviso) return;
@@ -200,6 +279,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.toLowerCase() === "a") { if (!bloqueadoRef.current) setNovoAgenteAberto(true); return; }
       const f = ferramentaDoAtalho(e.key);
       if (f) { setOrigemSeta(null); setFerramenta(f); }
     };
@@ -214,7 +294,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     };
   }, []);
 
-  const buscarNo = (id: string): No | undefined => estado.nos.find((n) => n.id === id);
+  const buscarNo = (id: string): No | undefined => modelo.nos.find((n) => n.id === id);
 
   // --- mudancas locais vindas do react-flow (mover/redimensionar/selecionar/apagar) ---
   const aoMudarNos = (mudancas: NodeChange<Node>[]) => {
@@ -240,7 +320,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   // --- soltar um no': define/limpa o pai (paiDoNo) e persiste as posicoes ABSOLUTAS ---
   const aoSoltarNo = (_e: unknown, node: Node, arrastados: Node[]) => {
     if (bloqueado) return;
-    const porId = new Map(estado.nos.map((n) => [n.id, n]));
+    const porId = new Map(modelo.nos.map((n) => [n.id, n]));
     const agora = Date.now();
     const lista = arrastados?.length ? arrastados : [node];
 
@@ -255,7 +335,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     }
 
     // 2) grupos ja' na posicao nova (senao um filho de grupo arrastado pareceria ter saido do pai).
-    const grupos: No[] = estado.nos
+    const grupos: No[] = modelo.nos
       .filter((n) => n.tipo === "grupo")
       .map((g) => (novas.has(g.id) ? { ...g, ...novas.get(g.id)! } : g));
 
@@ -275,7 +355,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       const dx = pos.x - atual.x;
       const dy = pos.y - atual.y;
       if (!dx && !dy) continue;
-      for (const filho of estado.nos) {
+      for (const filho of modelo.nos) {
         if (filho.pai !== id || novas.has(filho.id)) continue;
         ops.push({ op: "upsert", tipo: "no", item: { ...filho, x: filho.x + dx, y: filho.y + dy, rev: agora } });
       }
@@ -306,7 +386,7 @@ export function Canvas({ projeto }: { projeto: string }) {
 
   const aoRotular = (id: string, rotulo: string) => {
     if (bloqueado) return;
-    const atual = estado.arestas.find((a) => a.id === id);
+    const atual = modelo.arestas.find((a) => a.id === id);
     if (!atual) return;
     const limpo = rotulo.trim();
     enviar([{ op: "upsert", tipo: "aresta", item: { ...atual, rotulo: limpo || undefined, rev: Date.now() } }]);
@@ -334,7 +414,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   /** Cria uma regiao ao redor dos nos escolhidos e os torna filhos dela. */
   const agruparSelecao = (ids: string[]) => {
     if (bloqueado || ids.length === 0) return;
-    const escolhidos = estado.nos.filter((n) => ids.includes(n.id));
+    const escolhidos = modelo.nos.filter((n) => ids.includes(n.id));
     if (escolhidos.length === 0) return;
     const pad = 24;
     const minX = Math.min(...escolhidos.map((n) => n.x)) - pad;
@@ -357,7 +437,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   /** Duplica os nos de `ids` (+ filhos de grupos e arestas internas) com `desloc` px; upsert. */
   const duplicarCom = (ids: string[], desloc: number): boolean => {
     if (bloqueado || ids.length === 0) return false;
-    const copia = duplicarNos({ nos: estado.nos, arestas: estado.arestas }, ids, () => novoId("d"), desloc);
+    const copia = duplicarNos({ nos: modelo.nos, arestas: modelo.arestas }, ids, () => novoId("d"), desloc);
     if (copia.nos.length === 0 && copia.arestas.length === 0) return false;
     const rev = Date.now();
     const ops: Op[] = [
@@ -392,7 +472,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   /** Traz/envia um no' pra frente/tras (ordemZ -> upsert com dados.z). */
   const mudarOrdem = (id: string, onde: "frente" | "tras") => {
     if (bloqueado) return;
-    const alterados = ordemZ(estado.nos, [id], onde);
+    const alterados = ordemZ(modelo.nos, [id], onde);
     if (alterados.length) enviar(alterados.map((n): Op => ({ op: "upsert", tipo: "no", item: n })));
   };
 
@@ -462,8 +542,8 @@ export function Canvas({ projeto }: { projeto: string }) {
     // Regiao: os nos inteiramente dentro dela viram filhos (o menor grupo que contem vence).
     if (f === "regiao") {
       const agora = Date.now();
-      const grupos = [...estado.nos.filter((n) => n.tipo === "grupo"), no];
-      for (const n of estado.nos) {
+      const grupos = [...modelo.nos.filter((n) => n.tipo === "grupo"), no];
+      for (const n of modelo.nos) {
         if (n.tipo === "grupo" || n.pai === no.id) continue;
         if (paiDoNo(n, grupos) === no.id) ops.push({ op: "upsert", tipo: "no", item: { ...n, pai: no.id, rev: agora } });
       }
@@ -564,7 +644,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   }, []);
 
   const ctx = {
-    nos: estado.nos,
+    nos: modelo.nos,
     bloquear: bloqueado,
     editar: aoEditar,
     removerNo: aoRemoverNo,
@@ -575,7 +655,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   };
 
   // Menu de contexto: no' do alvo (tipo/paleta) e as acoes que ele chama de volta.
-  const noDoMenu = alvoMenu?.tipo === "no" ? estado.nos.find((n) => n.id === alvoMenu.id) : undefined;
+  const noDoMenu = alvoMenu?.tipo === "no" ? modelo.nos.find((n) => n.id === alvoMenu.id) : undefined;
   const acoesMenu: MenuAcoes = {
     duplicar: (id) => { duplicarCom([id], 24); },
     mudarCor: (id, cor) => aoEditar(id, { cor }),
@@ -589,8 +669,84 @@ export function Canvas({ projeto }: { projeto: string }) {
   // Itens selecionados (modelo): o inspetor decide o painel a partir daqui.
   const idsNos = new Set(nos.filter((n) => n.selected).map((n) => n.id));
   const idsArestas = new Set(arestas.filter((a) => a.selected).map((a) => a.id));
-  const nosSelecionados = estado.nos.filter((n) => idsNos.has(n.id));
-  const arestasSelecionadas = estado.arestas.filter((a) => idsArestas.has(a.id));
+  const nosSelecionados = modelo.nos.filter((n) => idsNos.has(n.id));
+  const arestasSelecionadas = modelo.arestas.filter((a) => idsArestas.has(a.id));
+
+  // --- F2 S5d: controles do agente (ocultar/encerrar/reabrir), expandir run e diff ---
+
+  /** Upsert de um no' com dados extras (usado pelos controles das runs e dos agentes). */
+  const upsertNo = (no: No, dados: Record<string, unknown>) => {
+    if (bloqueado) return;
+    enviar([{ op: "upsert", tipo: "no", item: { ...no, dados: { ...no.dados, ...dados }, rev: Date.now() } }]);
+  };
+
+  /** Expandir/Recolher do card de run: alterna `dados.expandida` do no' run:<id> (upsert). */
+  const alternarRun = (runId: string) => {
+    const no = buscarNo(`run:${runId}`);
+    if (no) upsertNo(no, { expandida: no.dados.expandida !== true });
+  };
+
+  /** ✕ do card do agente: abre o dialog de ocultar/encerrar. */
+  const pedirFecharAgente = (noId: string, agenteId: string) => setFecharAgente({ noId, agenteId });
+
+  /** Ocultar: o no' sai do canvas (dados.oculto) e pode ser reaberto depois pelo menu. */
+  const ocultarAgente = () => {
+    const alvo = fecharAgente;
+    setFecharAgente(null);
+    const no = alvo ? buscarNo(alvo.noId) : undefined;
+    if (no) upsertNo(no, { oculto: true });
+  };
+
+  /** Encerrar: fala com o hub (useAgentes.encerrar) e some com o no' de vez. */
+  const encerrarAgente = () => {
+    const alvo = fecharAgente;
+    setFecharAgente(null);
+    if (!alvo || bloqueado) return;
+    encerrar(alvo.agenteId);
+    enviar([{ op: "remove", tipo: "no", item: { id: alvo.noId, rev: Date.now() } }]);
+  };
+
+  /** Reabrir pelo menu do canto superior direito: tira `dados.oculto` do no'. */
+  const reabrirAgente = (no: No) => upsertNo(no, { oculto: false });
+
+  /** Cria o no' `ag:<id>` (620x420) do agente recem-criado no hub, no centro visivel do canvas. */
+  const criarAgenteNo = (agenteId: string) => {
+    if (bloqueado) return;
+    const p = centro();
+    const w = 620;
+    const h = 420;
+    const no: No = {
+      id: `ag:${agenteId}`, tipo: "agente",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { agenteId }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
+  // Nos 'agente' escondidos (dados.oculto) deste projeto: conteudo do menu "Reabrir agente".
+  const agentesOcultos = estado.nos.filter((n) => n.tipo === "agente" && n.dados.oculto === true);
+  const nomeAgente = (no: No): string => {
+    const id = typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
+    return agentes.find((a) => a.id === id)?.nome ?? (id || "agente");
+  };
+
+  // Contextos dos cards de agente (S5b) e de run/worker/arquivo (S5c).
+  const agentesValor = {
+    agentes,
+    linhasPorId,
+    acoes: { carregarHistorico, mensagem, abortar, trocarModelo, modelos },
+    onFechar: pedirFecharAgente,
+  };
+  const runsValor = {
+    runs: runsEstado.runs,
+    agora,
+    alternar: alternarRun,
+    abrirDiff: (runId: string, arquivo: string) => setDiff({ runId, arquivo }),
+  };
+
+  // Diff aberto pelo card de arquivo (ModalDiff controlado por estado local).
+  const runDoDiff = diff ? runsEstado.runs[diff.runId] : undefined;
+  const patchDiff = diff && runDoDiff ? runDoDiff.diffs[diff.arquivo] ?? "" : "";
 
   return (
     <MenuContexto alvo={alvoMenu} no={noDoMenu} acoes={acoesMenu} onFechar={() => setAlvoMenu(null)}>
@@ -599,6 +755,8 @@ export function Canvas({ projeto }: { projeto: string }) {
       className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
     >
       <CanvasCtx.Provider value={ctx}>
+      <AgentesCtx.Provider value={agentesValor}>
+      <RunsCtx.Provider value={runsValor}>
         <ReactFlow
           nodes={nos}
           edges={arestas}
@@ -647,6 +805,29 @@ export function Canvas({ projeto }: { projeto: string }) {
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#303030" />
           <ControleZoom />
+          {agentesOcultos.length > 0 && (
+            <Panel position="top-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button" title="Reabrir agente"
+                    className="nodrag nopan rounded-md px-2 py-1 text-xs hover:bg-white/10"
+                    style={{ background: "#222", border: "1px solid #303030", color: "#b8b8b8" }}
+                  >
+                    Reabrir agente
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="cv-menu min-w-40">
+                  <DropdownMenuLabel>Reabrir agente</DropdownMenuLabel>
+                  {agentesOcultos.map((n) => (
+                    <DropdownMenuItem key={n.id} onSelect={() => reabrirAgente(n)}>
+                      {nomeAgente(n)}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </Panel>
+          )}
           {retArrasto && (
             <ViewportPortal>
               <div
@@ -663,6 +844,8 @@ export function Canvas({ projeto }: { projeto: string }) {
             </ViewportPortal>
           )}
         </ReactFlow>
+      </RunsCtx.Provider>
+      </AgentesCtx.Provider>
       </CanvasCtx.Provider>
 
       <Barra
@@ -671,6 +854,16 @@ export function Canvas({ projeto }: { projeto: string }) {
         onFerramenta={(f) => { setOrigemSeta(null); setFerramenta(f); }}
         onForma={(forma) => { setFormaPendente(forma); setOrigemSeta(null); setFerramenta("forma"); }}
         onImagem={(arquivo) => void criarImagem(arquivo)}
+        onAgente={() => setNovoAgenteAberto(true)}
+      />
+
+      <NovoAgente
+        aberto={novoAgenteAberto}
+        onAberto={setNovoAgenteAberto}
+        projeto={projeto}
+        agentes={agentes}
+        modelos={modelos}
+        onCriar={criarAgenteNo}
       />
 
       <Inspetor
@@ -697,6 +890,26 @@ export function Canvas({ projeto }: { projeto: string }) {
           <div className="rounded-md border border-destructive/40 bg-destructive/15 px-3 py-1.5 text-xs text-destructive">{aviso}</div>
         </div>
       )}
+
+      {/* ✕ do agente: ocultar (some do canvas) ou encerrar (fala com o hub e remove o no'). */}
+      <AlertDialog open={!!fecharAgente} onOpenChange={(o) => { if (!o) setFecharAgente(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Ocultar ou encerrar este agente?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ocultar tira o agente do canvas (dá para reabrir depois). Encerrar interrompe a sessão do OpenCode e remove o card.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={ocultarAgente}>Ocultar</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={encerrarAgente}>Encerrar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Diff do arquivo aberto pelo card de arquivo (controlado por estado local). */}
+      <ModalDiff aberto={!!diff} patch={patchDiff} arquivo={diff?.arquivo ?? ""} onFechar={() => setDiff(null)} />
     </div>
     </MenuContexto>
   );
