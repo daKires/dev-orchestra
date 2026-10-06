@@ -1,12 +1,13 @@
 // Inspetor do canvas no estilo Castor (F1.5 - S3): painel de propriedades flutuante no canto
-// superior direito. Abre quando ha EXATAMENTE 1 no' (ou 1 aresta) selecionado e mostra os campos do
-// tipo; com 2+ itens vira o painel de acoes (Agrupar / Apagar). Toda a logica de edicao vem pronta do
-// Canvas (upsert via enviar) — aqui so' montamos os campos e commitamos no blur/Enter (a cor e'
+// superior direito. Abre quando ha EXATAMENTE 1 no' INSPECIONAVEL (ou 1 aresta) selecionado e mostra
+// os campos do tipo; com 2+ itens vira o painel de acoes (Agrupar / Apagar). Nos automaticos (run,
+// worker, arquivo, agente, regiao/fluxo) nao abrem o painel (F2.1). Toda a logica de edicao vem pronta
+// do Canvas (upsert via enviar) — aqui so' montamos os campos e commitamos no blur/Enter (a cor e'
 // imediata). UI em PT-BR, so' tema escuro.
 import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { X } from "lucide-react";
 import {
-  CORES_FORMA, CORES_NOTA, CORES_REGIAO, estiloNota,
+  CORES_FORMA, CORES_NOTA, CORES_REGIAO, estiloNota, inspecionavel,
 } from "@/lib/canvas";
 import { cn } from "@/lib/utils";
 import type { Aresta, No } from "../../../../canvas.ts";
@@ -289,11 +290,14 @@ const BOTAO_BASE: CSSProperties = {
 };
 
 export function Inspetor({ nos, arestas, bloquear, editar, rotular, apagar, agrupar, fechar }: InspetorProps) {
-  const total = nos.length + arestas.length;
+  // So' nos EDITAVEIS (criados a mao) contam: selecionar um card automatico (run/worker/arquivo) ou
+  // de agente NAO abre o painel (antes caia no editor de NOTA por engano). Arestas seguem normais.
+  const editaveis = nos.filter(inspecionavel);
+  const total = editaveis.length + arestas.length;
   if (total === 0) return null;
 
-  const umNo = nos.length === 1 && arestas.length === 0 ? nos[0] : null;
-  const umaAresta = arestas.length === 1 && nos.length === 0 ? arestas[0] : null;
+  const umNo = editaveis.length === 1 && arestas.length === 0 ? editaveis[0] : null;
+  const umaAresta = arestas.length === 1 && editaveis.length === 0 ? arestas[0] : null;
   const titulo = umNo ? (TITULO_TIPO[umNo.tipo] ?? "Nó") : umaAresta ? "Aresta" : `${total} itens`;
 
   return (
@@ -344,7 +348,7 @@ export function Inspetor({ nos, arestas, bloquear, editar, rotular, apagar, agru
               <button
                 type="button"
                 disabled={bloquear}
-                onClick={() => agrupar(nos.map((n) => n.id))}
+                onClick={() => agrupar(editaveis.map((n) => n.id))}
                 style={{ ...BOTAO_BASE, background: "#2979ff", color: "#fff", border: "1px solid #2979ff" }}
               >
                 Agrupar
@@ -352,7 +356,7 @@ export function Inspetor({ nos, arestas, bloquear, editar, rotular, apagar, agru
               <button
                 type="button"
                 disabled={bloquear}
-                onClick={() => apagar({ nos: nos.map((n) => n.id), arestas: arestas.map((a) => a.id) })}
+                onClick={() => apagar({ nos: editaveis.map((n) => n.id), arestas: arestas.map((a) => a.id) })}
                 style={{ ...BOTAO_BASE, background: "#2a1516", color: "#ff7b72", border: "1px solid #5a2020" }}
               >
                 Apagar

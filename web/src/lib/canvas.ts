@@ -1,7 +1,7 @@
 // Logica pura do canvas no front (S3): a mesma base do modelo do hub (S1), mas reimplementada aqui
 // para rodar no browser. NUNCA importamos nada de RUNTIME do hub: o modulo do hub usa node:crypto e
 // nao vai pro bundle do browser — so' tipos entram, via `import type` (apagado na compilacao).
-import type { No, Aresta, Op, Snapshot } from "../../../canvas.ts";
+import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 
 // ---------------------------------------------------------------------------
 // Aplicacao de operacoes (mesma regra de conflito do hub)
@@ -91,6 +91,22 @@ export function mesclarNosRf<T extends { id: string; measured?: unknown; selecte
     if (antigo?.selected !== undefined) saida.selected = antigo.selected;
     return saida as unknown as T;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Inspetor (F2.1): so' nos criados a mao abrem o painel de propriedades
+// ---------------------------------------------------------------------------
+
+/** Tipos que tem editor proprio no inspetor (os cards automaticos ficam de fora). */
+const TIPOS_INSPECIONAVEIS = new Set<TipoNo>(["nota", "forma", "imagem", "grupo", "texto"]);
+
+/**
+ * true SO' para os nos criados a mao dos tipos com editor (nota/forma/imagem/grupo/texto). Nos do
+ * layout automatico (dados.auto, ex.: cards de run/regiao/fluxo) e tipos sem editor (agente, run,
+ * worker, arquivo, explorador, navegador) NAO sao inspecionaveis: seleciona-los nao abre o editor.
+ */
+export function inspecionavel(no: { tipo: TipoNo; dados: Record<string, unknown> }): boolean {
+  return TIPOS_INSPECIONAVEIS.has(no.tipo) && no.dados?.auto !== true;
 }
 
 // ---------------------------------------------------------------------------

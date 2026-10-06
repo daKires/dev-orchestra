@@ -58,8 +58,10 @@ const VERMELHO = "#e5534b"; // falhou / encerrado / tool erro
 const CINZA = "#b8b8b8"; // tool rodando/pendente
 const MONO = "400 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-const corStatus = (status: string): string =>
-  status === "ocupado" ? AZUL : status === "falhou" || status === "encerrado" ? VERMELHO : VERDE;
+// Cor do ponto de status: azul quando ocupado (o resumo traz `ocupado`), vermelho em falha/encerrado
+// e verde (ocioso) no resto. O campo `ocupado` e' a fonte de verdade do pulso do card (CA-4a).
+const corStatus = (status: string, ocupado: boolean): string =>
+  ocupado ? AZUL : status === "falhou" || status === "encerrado" ? VERMELHO : VERDE;
 
 /** Uma linha da transcricao: usuario (fundo #2a2a2a), texto (paragrafo) ou tool (✓/✗/→). */
 function LinhaTxt({ l }: { l: Linha }) {
@@ -162,8 +164,8 @@ export function NoAgente({ id, data, selected }: NodeProps) {
   };
 
   const status = agente?.status ?? "ocioso";
-  const ocupado = status === "ocupado";
-  const cor = corStatus(status);
+  const ocupado = agente?.ocupado === true;
+  const cor = corStatus(status, ocupado);
 
   return (
     <div className={cn("cv-card relative flex h-full w-full flex-col overflow-hidden", !!selected && "cv-sel")}>

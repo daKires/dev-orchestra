@@ -737,7 +737,10 @@ function statusDe(id) {
     return fila.estados.get(id)?.ocupado ? "ocupado" : "ocioso";
 }
 function resumoAgente(a) {
-    return { id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem, status: statusDe(a.id) };
+    return {
+        id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem,
+        status: statusDe(a.id), ocupado: fila.estados.get(a.id)?.ocupado === true,
+    };
 }
 // Agentes do canvas daquele projeto + os derivados dos planejadores (agenteDePlanejador).
 function listarAgentes(projeto) {
@@ -793,6 +796,7 @@ function abrirPonte(base) {
 }
 async function loopPonte(base, ctrl) {
     const papeis = new Map();
+    const partes = new Map(); // por ponte (por base): acumula os deltas de texto
     while (!ctrl.signal.aborted) {
         try {
             const r = await fetch(base + "/event", { signal: ctrl.signal, headers: { Accept: "text/event-stream" } });
@@ -823,7 +827,7 @@ async function loopPonte(base, ctrl) {
                         catch {
                             continue;
                         }
-                        tratarEvento(base, ev, papeis);
+                        tratarEvento(base, ev, papeis, partes);
                     }
                 }
             }
@@ -850,8 +854,8 @@ function agenteDaSessao(base, sessao) {
             return a;
     return undefined;
 }
-function tratarEvento(base, ev, papeis) {
-    const r = normalizarEvento(ev, papeis);
+function tratarEvento(base, ev, papeis, partes) {
+    const r = normalizarEvento(ev, papeis, partes);
     if (!r)
         return;
     const ag = agenteDaSessao(base, r.sessao);
@@ -1071,7 +1075,8 @@ function sincronizarContexto(projeto, snap) {
         }
         gravarManifest(a, atual);
         ctxAssinaturas.set(aid, atual);
-        const nomes = [...d.gravar, ...d.remover];
+        // README.md NAO entra nos nomes do aviso: mudanca so do README (ou sem itens) nao avisa.
+        const nomes = [...d.gravar, ...d.remover].filter((n) => n !== "README.md");
         if (nomes.length) {
             fila.adicionar(aid, nomes);
             tentarLiberarAviso(aid);
@@ -1459,7 +1464,7 @@ function criarServidor() {
             const def = PAPEIS[papel];
             const id = "ag-" + randomUUID().slice(0, 8);
             const nome = j && typeof j.nome === "string" && j.nome.trim() ? j.nome.trim() : def.nome;
-            const modelo = j && typeof j.modelo === "string" ? j.modelo.trim() : "";
+            const modelo = (j && typeof j.modelo === "string" ? j.modelo.trim() : "") || "opencode-go/glm-5.2";
             const instrucao = j && typeof j.instrucao === "string" ? j.instrucao : def.instrucao;
             let serve = serves.get(cwd);
             let erro = "";
