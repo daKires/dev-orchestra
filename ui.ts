@@ -654,9 +654,12 @@ async function subirServeReal(cwd: string, env?: Record<string, string | undefin
   // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
   const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: env ?? process.env, detached: true });
   p.unref();
+  let falha: Error | null = null;
+  p.once("error", (e) => { falha = e; }); // cwd inexistente/opencode ausente: sem isso o hub inteiro cai
   const base = `http://127.0.0.1:${porta}`;
   for (let i = 0; i < 60; i++) {
     await new Promise((ok) => setTimeout(ok, 500));
+    if (falha) throw new Error("não foi possível iniciar o OpenCode: " + (falha as Error).message);
     try { const r = await fetch(base + "/doc", { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, pid: p.pid ?? 0 }; } catch {}
   }
   try { if (p.pid) process.kill(p.pid); } catch {}
