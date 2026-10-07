@@ -1,12 +1,12 @@
 // Vista Canvas (S4): o grafo do projeto renderizado com @xyflow/react. O modelo do hub (No/Aresta)
 // vira nodes/edges, e as edicoes (mover, redimensionar, editar, conectar, apagar, imagem) voltam como
 // operacoes pro hub (useCanvas). UI em PT-BR, so' tema escuro.
-import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow, ViewportPortal,
   applyEdgeChanges, applyNodeChanges,
   useReactFlow, useViewport,
-  type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type ReactFlowInstance,
+  type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
@@ -25,11 +25,14 @@ import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 import { Barra } from "./canvas/Barra";
 import { Inspetor } from "./canvas/Inspetor";
 import { NovoAgente } from "./canvas/NovoAgente";
+import { NovoNavegador } from "./canvas/NovoNavegador";
 import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContexto";
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
-import { AgentesCtx, nodeTypes as agenteNodeTypes } from "./canvas/Agente";
+import { AgentesCtx, NoAgente } from "./canvas/Agente";
+import { NoClaude } from "./canvas/Claude";
 import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes } from "./canvas/Run";
 import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
+import { ProjetoCtx, nodeTypes as navegadorNodeTypes } from "./canvas/Navegador";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -38,16 +41,34 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b) + run/worker/arquivo (S5c)
-// + o explorador de arquivos (F3 S5).
-const nodeTypes = { ...nosNodeTypes, ...agenteNodeTypes, ...runNodeTypes, ...exploradorNodeTypes };
+/**
+ * No' 'agente' (F4 S6): despacha pro card do Claude Code quando o agente e' tipo 'claude' e pro card
+ * do OpenCode no resto. O tipo vem do resumo do hub (useAgentes) pelo AgentesCtx.
+ */
+function NoAgenteTipo(props: NodeProps) {
+  const { agentes } = useContext(AgentesCtx);
+  const no = (props.data as { no?: No }).no;
+  const agenteId = no && typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
+  const agente = agentes.find((a) => a.id === agenteId);
+  return agente?.tipo === "claude" ? <NoClaude {...props} /> : <NoAgente {...props} />;
+}
+
+// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b, F4 S6) + run/worker/arquivo
+// (S5c) + o explorador de arquivos (F3 S5) + o navegador (F4 S6).
+const nodeTypes = {
+  ...nosNodeTypes,
+  agente: NoAgenteTipo,
+  ...runNodeTypes,
+  ...exploradorNodeTypes,
+  ...navegadorNodeTypes,
+};
 
 // ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 // ---------------------------------------------------------------------------
 
-// Tipos que tem render proprio; os demais (navegador…) caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador"]);
+// Tipos que tem render proprio; os demais caem no card de nota como fallback.
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -115,6 +136,15 @@ function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<stri
 
 const novoId = (prefixo: string) => prefixo + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+/** Slug de um nome (minusculas, sem acento, separador '-'): mesmo slugNome do hub, sem node:path. */
+const slugDe = (nome: string): string =>
+  nome
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
 // dataURL -> so' a parte base64 (o hub espera dadosB64 puro).
 function lerBase64(arquivo: Blob): Promise<string> {
   return new Promise((ok, falha) => {
@@ -176,11 +206,12 @@ export function Canvas({ projeto }: { projeto: string }) {
   const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
 
   // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
-  const { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos } = useAgentes(projeto);
+  const { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos, assinarPty } = useAgentes(projeto);
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
   const [novoAgenteAberto, setNovoAgenteAberto] = useState(false);
+  const [novoNavegadorAberto, setNovoNavegadorAberto] = useState(false);
   const [diff, setDiff] = useState<{ runId: string; arquivo: string } | null>(null);
   // Agentes de planejador JA' persistidos uma vez (nao re-upsertamos a cada render).
   const agentesUpsertados = useRef<Set<string>>(new Set());
@@ -294,6 +325,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.toLowerCase() === "a") { if (!bloqueadoRef.current) setNovoAgenteAberto(true); return; }
+      if (e.key.toLowerCase() === "b") { if (!bloqueadoRef.current) setNovoNavegadorAberto(true); return; }
       const f = ferramentaDoAtalho(e.key);
       if (f) { setOrigemSeta(null); setFerramenta(f); }
     };
@@ -762,6 +794,24 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /** "+ Navegador" (atalho B): no' `nav:<slug>` (900x620) no centro visivel, com a url do dialog. */
+  const criarNavegadorNo = (nome: string, url: string) => {
+    if (bloqueado) return;
+    const p = centro();
+    const w = 900;
+    const h = 620;
+    const base = "nav:" + slugDe(nome);
+    let id = base;
+    let k = 1;
+    while (modelo.nos.some((n) => n.id === id)) { k++; id = base + "-" + k; }
+    const no: No = {
+      id, tipo: "navegador",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { nome, url }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
   /** "+ Explorador" do menu do agente: cria o no' `exp:<agenteId>` (320x460) a esquerda do agente, ligado a ele. */
   const abrirExplorador = (agenteId: string) => {
     if (bloqueado) return;
@@ -793,6 +843,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     linhasPorId,
     acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos, explorador: abrirExplorador },
     onFechar: pedirFecharAgente,
+    assinarPty,
   };
   const runsValor = {
     runs: runsEstado.runs,
@@ -812,6 +863,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
     >
       <CanvasCtx.Provider value={ctx}>
+      <ProjetoCtx.Provider value={projeto}>
       <AgentesCtx.Provider value={agentesValor}>
       <RunsCtx.Provider value={runsValor}>
         <ReactFlow
@@ -903,6 +955,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         </ReactFlow>
       </RunsCtx.Provider>
       </AgentesCtx.Provider>
+      </ProjetoCtx.Provider>
       </CanvasCtx.Provider>
 
       <Barra
@@ -912,6 +965,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         onForma={(forma) => { setFormaPendente(forma); setOrigemSeta(null); setFerramenta("forma"); }}
         onImagem={(arquivo) => void criarImagem(arquivo)}
         onAgente={() => setNovoAgenteAberto(true)}
+        onNavegador={() => setNovoNavegadorAberto(true)}
       />
 
       <NovoAgente
@@ -921,6 +975,12 @@ export function Canvas({ projeto }: { projeto: string }) {
         agentes={agentes}
         modelos={modelos}
         onCriar={criarAgenteNo}
+      />
+
+      <NovoNavegador
+        aberto={novoNavegadorAberto}
+        onAberto={setNovoNavegadorAberto}
+        onCriar={criarNavegadorNo}
       />
 
       <Inspetor

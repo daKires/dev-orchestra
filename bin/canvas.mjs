@@ -13,6 +13,13 @@ comandos:
   flow link <a> <b> [rótulo]
   file <caminho> <status>
   note <título> <corpo>
+  browser create <nome> <url>
+  browser read [nav]
+  browser click [nav] <alvo>
+  browser type [nav] <alvo> <valor> [--enter]
+  browser nav [nav] <ação>
+  browser shot [nav]
+  status <estado>
 
 a identidade também pode vir da variável de ambiente HERMES_EU.`;
 
@@ -106,6 +113,61 @@ switch (cmd) {
     } else {
       erroUso();
     }
+    break;
+  }
+  case "browser": {
+    const sub = args[1];
+    if (sub === "create") {
+      const rest = args.slice(2);
+      if (rest.length !== 2) erroUso();
+      corpo = { nome: rest[0], url: rest[1] };
+      rota = "browser-create";
+    } else if (sub === "read") {
+      const rest = args.slice(2);
+      if (rest.length > 1) erroUso();
+      corpo = {};
+      if (rest.length === 1) corpo.nav = rest[0];
+      rota = "browser-read";
+    } else if (sub === "click") {
+      const rest = args.slice(2);
+      if (rest.length === 1) corpo = { alvo: rest[0] };
+      else if (rest.length === 2) corpo = { nav: rest[0], alvo: rest[1] };
+      else erroUso();
+      rota = "browser-click";
+    } else if (sub === "type") {
+      const rest = args.slice(2);
+      let enter = false;
+      const pos = [];
+      for (const a of rest) {
+        if (a === "--enter") enter = true;
+        else pos.push(a);
+      }
+      if (pos.length === 2) corpo = { alvo: pos[0], valor: pos[1] };
+      else if (pos.length === 3) corpo = { nav: pos[0], alvo: pos[1], valor: pos[2] };
+      else erroUso();
+      if (enter) corpo.enter = true;
+      rota = "browser-type";
+    } else if (sub === "nav") {
+      const rest = args.slice(2);
+      if (rest.length === 1) corpo = { acao: rest[0] };
+      else if (rest.length === 2) corpo = { nav: rest[0], acao: rest[1] };
+      else erroUso();
+      rota = "browser-nav";
+    } else if (sub === "shot") {
+      const rest = args.slice(2);
+      if (rest.length > 1) erroUso();
+      corpo = {};
+      if (rest.length === 1) corpo.nav = rest[0];
+      rota = "browser-shot";
+    } else {
+      erroUso();
+    }
+    break;
+  }
+  case "status": {
+    if (args.length !== 2) erroUso();
+    rota = "status";
+    corpo = { estado: args[1] };
     break;
   }
   default:

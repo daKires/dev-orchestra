@@ -35,6 +35,16 @@ type Papel = keyof typeof PAPEIS;
 const ORDEM: readonly Papel[] = ["lider", "designer", "dev", "revisor", "livre"];
 const MODELO_PADRAO = "opencode-go/glm-5.2";
 
+// Tipo do agente (F4 S6): OpenCode (padrao, modelos da cwd) ou Claude Code (PTY do app desktop).
+type TipoAgente = "opencode" | "claude";
+const TIPOS: readonly { id: TipoAgente; nome: string }[] = [
+  { id: "opencode", nome: "OpenCode" },
+  { id: "claude", nome: "Claude Code" },
+];
+// Modelos do Claude: "" e' o padrao do proprio Claude Code (sem --model).
+const MODELO_CLAUDE_PADRAO = "Padrão";
+const MODELOS_CLAUDE: readonly string[] = [MODELO_CLAUDE_PADRAO, "opus", "sonnet", "haiku"];
+
 const FUNDO = "#1c1c1c";
 const CABECALHO = "#222";
 const BORDA = "#414141";
@@ -80,6 +90,7 @@ export function NovoAgente({ aberto, onAberto, projeto, agentes, modelos, onCria
   }, [agentes, projeto]);
   const padraoCwd = agentes.length ? (agentes[agentes.length - 1].cwd || projeto) : projeto;
 
+  const [tipo, setTipo] = useState<TipoAgente>("opencode");
   const [papel, setPapel] = useState<Papel>("lider");
   const [nome, setNome] = useState<string>(PAPEIS.lider.nome);
   const [instrucao, setInstrucao] = useState<string>(PAPEIS.lider.instrucao);
@@ -93,6 +104,7 @@ export function NovoAgente({ aberto, onAberto, projeto, agentes, modelos, onCria
   // Reabrir sempre comeca do zero (Líder; pasta = ultimo agente; modelo padrao).
   useEffect(() => {
     if (!aberto) return;
+    setTipo("opencode");
     setPapel("lider"); setNome(PAPEIS.lider.nome); setInstrucao(PAPEIS.lider.instrucao);
     setModelo(MODELO_PADRAO); setCwd(padraoCwd); setLista([]); setErro(""); setEnviando(false);
     nomeTocado.current = false;
@@ -100,12 +112,20 @@ export function NovoAgente({ aberto, onAberto, projeto, agentes, modelos, onCria
   }, [aberto]);
 
   // Modelos da pasta escolhida (GET /agentes/modelos?cwd=), recarregados ao trocar a pasta.
+  // So' faz sentido pro OpenCode: o Claude tem a lista fixa (Padrão/opus/sonnet/haiku).
   useEffect(() => {
-    if (!aberto || !cwd) return;
+    if (!aberto || !cwd || tipo !== "opencode") return;
     let vivo = true;
     void modelos(cwd).then((ms) => { if (vivo) setLista(ms); });
     return () => { vivo = false; };
-  }, [aberto, cwd, modelos]);
+  }, [aberto, cwd, tipo, modelos]);
+
+  /** Troca o tipo do agente e ajusta o modelo pro padrao daquele tipo. */
+  const escolherTipo = (t: TipoAgente) => {
+    setTipo(t);
+    setModelo(t === "claude" ? MODELO_CLAUDE_PADRAO : MODELO_PADRAO);
+    if (t === "claude") setLista([]);
+  };
 
   const escolherPapel = (p: Papel) => {
     setPapel(p);
@@ -113,18 +133,25 @@ export function NovoAgente({ aberto, onAberto, projeto, agentes, modelos, onCria
     if (!nomeTocado.current) setNome(PAPEIS[p].nome);
   };
 
-  const opcoesModelo = useMemo(() => [...new Set([modelo, ...lista].filter(Boolean))], [modelo, lista]);
+  const opcoesModelo = useMemo(
+    () => (tipo === "claude" ? [...MODELOS_CLAUDE] : [...new Set([modelo, ...lista].filter(Boolean))]),
+    [tipo, modelo, lista],
+  );
   const pode = !!projeto && !!cwd && !!nome.trim() && !enviando;
 
-  // Confirma: POST /agentes {projeto,cwd,papel,nome,modelo,instrucao}; avisa o Canvas com o id criado.
+  // Confirma: POST /agentes {projeto,cwd,papel,nome,modelo,instrucao}; com o Claude vai tambem
+  // tipo:'claude' e o modelo e' o da lista fixa (Padrão = "" -> o Claude escolhe). Avisa o Canvas.
   const confirmar = async () => {
     if (!pode) return;
     setEnviando(true); setErro("");
     try {
+      const modeloEnviado = tipo === "claude" ? (modelo === MODELO_CLAUDE_PADRAO ? "" : modelo) : modelo;
+      const corpo: Record<string, unknown> = { projeto, cwd, papel, nome: nome.trim(), modelo: modeloEnviado, instrucao };
+      if (tipo === "claude") corpo.tipo = "claude";
       const r = await fetch("/agentes", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Hermes": "1" },
-        body: JSON.stringify({ projeto, cwd, papel, nome: nome.trim(), modelo, instrucao }),
+        body: JSON.stringify(corpo),
       });
       if (!r.ok) {
         setErro(r.status === 400 ? "O hub recusou o pedido." : `O hub recusou (HTTP ${r.status}).`);
@@ -153,6 +180,23 @@ export function NovoAgente({ aberto, onAberto, projeto, agentes, modelos, onCria
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          <Campo rotulo="Tipo">
+            <div className="flex flex-wrap gap-1.5">
+              {TIPOS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  aria-pressed={tipo === t.id}
+                  onClick={() => escolherTipo(t.id)}
+                  className={cn("cv-insp-seg", tipo === t.id && "cv-insp-seg-on")}
+                  style={{ font: "500 12px/1 ui-sans-serif, system-ui, sans-serif", padding: "7px 12px" }}
+                >
+                  {t.nome}
+                </button>
+              ))}
+            </div>
+          </Campo>
+
           <Campo rotulo="Papel">
             <div className="flex flex-wrap gap-1.5">
               {ORDEM.map((p) => (

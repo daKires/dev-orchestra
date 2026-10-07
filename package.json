@@ -34,6 +34,9 @@
     "test:browser-hub": "tsc && node --test dist/ui-browser.test.js",
     "test:claude-hub": "tsc && node --test dist/ui-claude.test.js",
     "test:cli-browser": "node --experimental-strip-types --test cli-browser.test.ts",
+    "desktop:build": "tsc -p desktop/tsconfig.json",
+    "desktop:dev": "npm run build && npm run desktop:build && electron dist-desktop/main.js",
+    "desktop:dist": "npm run build && npm run desktop:build && electron-builder --config desktop/electron-builder.yml",
     "desktop:check": "tsc -p desktop/tsconfig.json --noEmit"
   },
   "dependencies": {
