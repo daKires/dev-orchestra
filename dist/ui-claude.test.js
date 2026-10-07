@@ -201,6 +201,7 @@ test("agente Claude: spawn com identidade/hooks/PATH, teclas, saida no SSE, stat
     assert.equal(pty.procs[1].morto, true);
 });
 test("agente Claude: claude ausente -> falhou; sem driver de PTY -> 'abra o app Hermes' (CA-4d, 16d)", async (t) => {
+    await new Promise((r) => setTimeout(r, 500)); // o hub do caso anterior ainda solta a porta (close espera o SSE)
     t.after(() => ui.pararUI()); // sempre derruba o hub, mesmo se um assert falhar
     await ui.iniciarUI({ subirServe: async () => ({ base: "http://127.0.0.1:1", pid: 9 }), matarProcesso: () => { }, pty: ptyFalso(true) });
     const cwd = await fs.mkdtemp(path.join(TMP, "wt-"));
