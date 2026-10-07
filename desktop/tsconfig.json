@@ -10,5 +10,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", "*.cts"]
 }

@@ -1,4 +1,5 @@
 // Preload (F4 S5): ponte minima entre a UI (renderer) e o main.
+// .cts -> CommonJS: preload em sandbox (padrao do Electron) nao roda ESM.
 // A pagina usa window.hermesDesktop para registrar/desregistrar webviews e limpar dados de particao.
 import { contextBridge, ipcRenderer } from "electron";
 

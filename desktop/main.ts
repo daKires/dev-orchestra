@@ -59,7 +59,7 @@ async function criarJanela(): Promise<void> {
     height: 900,
     backgroundColor: "#111111",
     webPreferences: {
-      preload: path.join(DIR_DESKTOP, "preload.js"),
+      preload: path.join(DIR_DESKTOP, "preload.cjs"),
       webviewTag: true,
       contextIsolation: true,
       nodeIntegration: false,
