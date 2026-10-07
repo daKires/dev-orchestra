@@ -7,8 +7,12 @@ import type { Conversa } from "@/lib/colab";
 /** Resumo de um agente como o hub devolve em GET /agentes e no SSE {agentes}. */
 export type AgenteVisivel = {
   id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string;
+  /** 'opencode' (padrao) ou 'claude': decide qual card do canvas renderiza o agente (F4/S6). */
+  tipo: string;
   /** true enquanto o agente esta trabalhando (busy do OpenCode); base do ponto pulsante do card. */
   ocupado: boolean;
+  /** true quando o Claude esta esperando uma resposta/permissao sua (hooks do Claude Code). */
+  aguardando: boolean;
 };
 
 /** Linha da transcricao do chat do agente (mesma forma da Linha do hub). */
@@ -26,6 +30,11 @@ export type Agentes = {
   reiniciar: (id: string) => void;
   trocarModelo: (id: string, modelo: string) => void;
   modelos: (cwd: string) => Promise<string[]>;
+  /**
+   * Assina a saida do PTY ({pty}) de UM agente: o callback recebe os bytes em base64, na ordem do
+   * SSE, e a funcao devolvida cancela a assinatura. Usado pelo card Claude (F4/S6).
+   */
+  assinarPty: (id: string, cb: (dados: string) => void) => () => void;
 };
 
 /** Chave canonica de projeto: separadores '/', sem barra final, minusculo (mesma regra do hub). */
@@ -58,6 +67,8 @@ export function useAgentes(projeto: string): Agentes {
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const atual = useRef(projeto); // pro handler do SSE (o stream nao e' reaberto ao trocar de projeto)
   atual.current = projeto;
+  // Assinantes da saida do PTY por id (card Claude, F4/S6): o SSE {pty} entrega so' pra quem assinou.
+  const ouvintesPty = useRef(new Map<string, Set<(dados: string) => void>>());
 
   // Snapshot inicial: a lista do SSE so' chega quando algo muda no hub.
   useEffect(() => {
@@ -77,8 +88,19 @@ export function useAgentes(projeto: string): Agentes {
   useEffect(() => {
     const es = new EventSource("/events");
     es.onmessage = (m) => {
-      let d: { agentes?: AgenteVisivel[]; agenteLinhas?: { id: string; linhas: Linha[] }; conversas?: Conversa[] } | null = null;
+      let d: {
+        agentes?: AgenteVisivel[];
+        agenteLinhas?: { id: string; linhas: Linha[] };
+        conversas?: Conversa[];
+        pty?: { id: string; dados: string };
+      } | null = null;
       try { d = JSON.parse(m.data); } catch { return; }
+      // Saida do PTY de um agente Claude: entrega aos assinantes daquele id (card Claude).
+      const pty = d?.pty;
+      if (pty && typeof pty.id === "string" && typeof pty.dados === "string") {
+        const assinantes = ouvintesPty.current.get(pty.id);
+        if (assinantes) for (const cb of assinantes) { try { cb(pty.dados); } catch {} }
+      }
       if (Array.isArray(d?.agentes)) {
         setAgentes(d.agentes.filter((a) => a && typeof a.id === "string" && doProjeto(a, atual.current)));
       }
@@ -144,6 +166,20 @@ export function useAgentes(projeto: string): Agentes {
     setAgentes((a) => a.map((x) => (x.id === id ? { ...x, modelo } : x)));
   }, []);
 
+
+  // Assinatura da saida do PTY de um agente (SSE {pty}): devolve o cancelamento da assinatura.
+  const assinarPty = useCallback((id: string, cb: (dados: string) => void) => {
+    if (!id) return () => {};
+    const mapa = ouvintesPty.current;
+    let conjunto = mapa.get(id);
+    if (!conjunto) { conjunto = new Set(); mapa.set(id, conjunto); }
+    conjunto.add(cb);
+    return () => {
+      conjunto!.delete(cb);
+      if (conjunto!.size === 0) mapa.delete(id);
+    };
+  }, []);
+
   // Modelos disponiveis na cwd (GET /agentes/modelos?cwd=): [] quando o serve ainda nao subiu.
   const modelos = useCallback(async (cwd: string): Promise<string[]> => {
     try {
@@ -154,5 +190,5 @@ export function useAgentes(projeto: string): Agentes {
     } catch { return []; }
   }, []);
 
-  return { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos };
+  return { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos, assinarPty };
 }

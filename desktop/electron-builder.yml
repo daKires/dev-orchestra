@@ -1,0 +1,21 @@
+appId: dev.hermes.orchestra
+productName: Hermes
+files:
+  - dist-desktop/**
+  - node_modules/@lydell/**
+  - package.json
+extraMetadata:
+  main: dist-desktop/main.js
+directories:
+  output: release
+asar: true
+asarUnpack:
+  - node_modules/@lydell/**
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  createStartMenuShortcut: true

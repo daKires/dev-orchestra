@@ -44,6 +44,8 @@ export type AgentesValor = {
   linhasPorId: Record<string, Linha[]>;
   acoes: AcoesAgente;
   onFechar: (noId: string, agenteId: string) => void;
+  /** Assina a saida do PTY ({pty}) de um agente; devolve o cancelamento (card Claude, F4/S6). */
+  assinarPty: (id: string, cb: (dados: string) => void) => () => void;
 };
 
 export const AgentesCtx = createContext<AgentesValor>({
@@ -51,6 +53,7 @@ export const AgentesCtx = createContext<AgentesValor>({
   linhasPorId: {},
   acoes: { carregarHistorico: () => {}, mensagem: () => {}, abortar: () => {}, reiniciar: () => {}, trocarModelo: () => {}, modelos: async () => [] },
   onFechar: () => {},
+  assinarPty: () => () => {},
 });
 
 // ---------------------------------------------------------------------------
