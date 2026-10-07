@@ -114,20 +114,19 @@ export function criarDriverCDP(repo: string): DriverCDP {
   async function digitar(noId: string, n: number, valor: string, enter: boolean): Promise<void> {
     const wc = wcDe(noId);
     await anexar(wc);
-    // Foca o elemento N e limpa o valor antes de inserir o texto.
+    // Input.* do CDP nao chega numa <webview> dentro do canvas; execCommand('insertText') gera os
+    // eventos de input reais (React/contenteditable ok). Enter: eventos de tecla + submit do form.
     const expr =
       `(()=>{const e=document.querySelector('[data-hermes-n="${n}"]');` +
       ` if(!e) throw new Error('elemento ${n} não encontrado');` +
       ` e.scrollIntoView({block:'center'}); e.focus();` +
-      ` if('value' in e) e.value='';` +
-      ` e.dispatchEvent(new Event('input',{bubbles:true})); return true})()`;
+      ` if(typeof e.select==='function') e.select(); else document.execCommand('selectAll');` +
+      ` document.execCommand('insertText', false, ${JSON.stringify(valor)});` +
+      ` if(${enter}){const o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};` +
+      ` const livre=e.dispatchEvent(new KeyboardEvent('keydown',o)); e.dispatchEvent(new KeyboardEvent('keypress',o)); e.dispatchEvent(new KeyboardEvent('keyup',o));` +
+      ` if(livre && e.form) e.form.requestSubmit();}` +
+      ` return true})()`;
     await avaliar(wc, expr);
-    await wc.debugger.sendCommand("Input.insertText", { text: valor });
-    if (enter) {
-      const tecla = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
-      await wc.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", ...tecla });
-      await wc.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", ...tecla });
-    }
   }
 
   async function navegar(noId: string, acao: string): Promise<void> {
@@ -140,9 +139,13 @@ export function criarDriverCDP(repo: string): DriverCDP {
 
   async function capturar(noId: string): Promise<Buffer> {
     const wc = wcDe(noId);
-    await anexar(wc);
-    const r = await wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" });
-    return Buffer.from(String(r?.data ?? ""), "base64");
+    // capturePage (nativo) em vez do Page.captureScreenshot do CDP, que trava esperando um frame
+    // quando a webview nao esta pintando; o teto de 10s vira erro em vez de request pendurada.
+    const img = await Promise.race([
+      wc.capturePage(),
+      new Promise<never>((_, nao) => setTimeout(() => nao(new Error("captura não respondeu (o card está visível no canvas?)")), ESPERA_CARREGAR_MS)),
+    ]);
+    return img.toPNG();
   }
 
   return { ler, clicar, digitar, navegar, capturar };

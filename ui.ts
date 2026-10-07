@@ -1798,6 +1798,7 @@ function criarServidor(): http.Server {
       // ---- navegador (F4/S2): create/read/click/type/nav/shot ----
       if (cmd.startsWith("browser-")) {
         if (!navegadorAtual) { responderTexto(res, 400, "navegador indisponível: abra o app Hermes"); return; }
+        try { // erro do driver (webview fechada, pagina carregando...) vira 400, nunca request pendurada
         if (cmd === "browser-create") {
           const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
           const url = typeof j?.url === "string" ? j.url : "";
@@ -1886,6 +1887,7 @@ function criarServidor(): http.Server {
           responderTexto(res, 200, `captura de ${nome} salva\n${destino}`);
           return;
         }
+        } catch (e) { responderTexto(res, 400, (e as Error)?.message ?? String(e)); return; }
         responderTexto(res, 400, "comando desconhecido: " + cmd);
         return;
       }
@@ -2010,7 +2012,8 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   if (servidor) void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
   iniciarExpiracao(); // F3/S2: varre as conversas pendentes (expira -> avisa a origem)
   // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
-  if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar(); }, 10_000);
+  // Com sempreAssumir (app), perder a corrida pra um hub stdio nao e' definitivo: pede pra ele ceder de novo.
+  if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar().then((ok) => { if (!ok && sempreAssumir) void tentarAssumir(); }); }, 10_000);
   reassumir.unref();
 }
 

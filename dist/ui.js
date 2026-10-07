@@ -2308,131 +2308,137 @@ function criarServidor() {
                     responderTexto(res, 400, "navegador indisponível: abra o app Hermes");
                     return;
                 }
-                if (cmd === "browser-create") {
-                    const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
-                    const url = typeof j?.url === "string" ? j.url : "";
-                    if (!nome) {
-                        responderTexto(res, 400, "nome obrigatório");
-                        return;
-                    }
-                    if (!urlPermitida(url)) {
-                        responderTexto(res, 400, "url inválida");
-                        return;
-                    }
-                    // no' `nav:<slugNome(nome)>`, com sufixo -2, -3... se o id ja existir no projeto.
-                    const base = "nav:" + slugNome(nome);
-                    let noId = base;
-                    let k = 1;
-                    while (snap.nos.some((n) => n.id === noId)) {
-                        k++;
-                        noId = base + "-" + k;
-                    }
-                    const agora = Date.now();
-                    const navNo = { id: noId, tipo: "navegador", x: agNo.x + agNo.w + 40, y: agNo.y, w: 900, h: 620, dados: { nome, url, criador: c.id }, rev: agora };
-                    const aresta = { id: `${agNo.id}->${noId}`, de: agNo.id, para: noId, rev: agora };
-                    aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: navNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
-                    responderTexto(res, 200, `navegador ${nome} aberto (${noId})`);
-                    return;
-                }
-                if (cmd === "browser-read") {
-                    const nav = resolverNavegador(snap, c.id, j?.nav);
-                    if ("erro" in nav) {
-                        responderTexto(res, 400, nav.erro);
-                        return;
-                    }
-                    const l = await navegadorAtual.ler(nav.ok.id);
-                    browserCache.set(chaveElementos(c.projeto, nav.ok.id), l.elementos);
-                    responderTexto(res, 200, formatarLeitura(l));
-                    return;
-                }
-                if (cmd === "browser-click" || cmd === "browser-type") {
-                    const nav = resolverNavegador(snap, c.id, j?.nav);
-                    if ("erro" in nav) {
-                        responderTexto(res, 400, nav.erro);
-                        return;
-                    }
-                    const alvo = typeof j?.alvo === "string" ? j.alvo : "";
-                    if (!alvo) {
-                        responderTexto(res, 400, "alvo obrigatório");
-                        return;
-                    }
-                    const els = await elementosDoNavegador(c.projeto, nav.ok.id);
-                    const el = resolverElemento(els, alvo);
-                    if ("erro" in el) {
-                        responderTexto(res, 400, el.erro);
-                        return;
-                    }
-                    if (cmd === "browser-click") {
-                        await navegadorAtual.clicar(nav.ok.id, el.ok.n);
-                        responderTexto(res, 200, `clique em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
-                    }
-                    else {
-                        const valor = typeof j?.valor === "string" ? j.valor : "";
-                        const enter = j?.enter === true;
-                        await navegadorAtual.digitar(nav.ok.id, el.ok.n, valor, enter);
-                        responderTexto(res, 200, `digitação em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
-                    }
-                    return;
-                }
-                if (cmd === "browser-nav") {
-                    const nav = resolverNavegador(snap, c.id, j?.nav);
-                    if ("erro" in nav) {
-                        responderTexto(res, 400, nav.erro);
-                        return;
-                    }
-                    const acao = typeof j?.acao === "string" ? j.acao : "";
-                    const ehControle = acao === "back" || acao === "forward" || acao === "reload";
-                    if (!ehControle && !urlPermitida(acao)) {
-                        responderTexto(res, 400, "ação inválida");
-                        return;
-                    }
-                    await navegadorAtual.navegar(nav.ok.id, acao);
-                    if (!ehControle) {
-                        // url nova: atualiza dados.url do no (back/forward/reload nao revelam a url resultante).
-                        const no = snap.nos.find((n) => n.id === nav.ok.id);
-                        if (no)
-                            aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: { ...no, dados: { ...no.dados, url: acao }, rev: Date.now() } }]);
-                    }
-                    responderTexto(res, 200, "navegador navegou");
-                    return;
-                }
-                if (cmd === "browser-shot") {
-                    const nav = resolverNavegador(snap, c.id, j?.nav);
-                    if ("erro" in nav) {
-                        responderTexto(res, 400, nav.erro);
-                        return;
-                    }
-                    const png = await navegadorAtual.capturar(nav.ok.id);
-                    const nome = String(nav.ok.dados.nome ?? "");
-                    garantirExclude(c.cwd); // .orchestra/ no info/exclude do repo do agente
-                    const dir = path.join(c.cwd, ".orchestra", "shots");
-                    try {
-                        fs.mkdirSync(dir, { recursive: true });
-                    }
-                    catch { }
-                    const destino = path.join(dir, nomeShot(nome, new Date()));
-                    try {
-                        fs.writeFileSync(destino, png);
-                    }
-                    catch { }
-                    // asset do canvas + no' imagem ligado ao navegador
-                    const id = idProjeto(c.projeto);
-                    const arq = randomUUID() + ".png";
-                    let url = "";
-                    try {
-                        fs.mkdirSync(path.join(CANVAS_DIR, id, "assets"), { recursive: true });
-                        fs.writeFileSync(path.join(CANVAS_DIR, id, "assets", arq), png);
-                        url = `/canvas/asset/${id}/${arq}`;
-                    }
-                    catch { }
-                    if (url) {
+                try { // erro do driver (webview fechada, pagina carregando...) vira 400, nunca request pendurada
+                    if (cmd === "browser-create") {
+                        const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
+                        const url = typeof j?.url === "string" ? j.url : "";
+                        if (!nome) {
+                            responderTexto(res, 400, "nome obrigatório");
+                            return;
+                        }
+                        if (!urlPermitida(url)) {
+                            responderTexto(res, 400, "url inválida");
+                            return;
+                        }
+                        // no' `nav:<slugNome(nome)>`, com sufixo -2, -3... se o id ja existir no projeto.
+                        const base = "nav:" + slugNome(nome);
+                        let noId = base;
+                        let k = 1;
+                        while (snap.nos.some((n) => n.id === noId)) {
+                            k++;
+                            noId = base + "-" + k;
+                        }
                         const agora = Date.now();
-                        const imgId = `img:${nav.ok.id}:${agora}`;
-                        const imgNo = { id: imgId, tipo: "imagem", x: nav.ok.x + nav.ok.w + 40, y: nav.ok.y, w: 480, h: 360, dados: { url, nome }, rev: agora };
-                        const aresta = { id: `${nav.ok.id}->${imgId}`, de: nav.ok.id, para: imgId, rev: agora };
-                        aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: imgNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
+                        const navNo = { id: noId, tipo: "navegador", x: agNo.x + agNo.w + 40, y: agNo.y, w: 900, h: 620, dados: { nome, url, criador: c.id }, rev: agora };
+                        const aresta = { id: `${agNo.id}->${noId}`, de: agNo.id, para: noId, rev: agora };
+                        aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: navNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
+                        responderTexto(res, 200, `navegador ${nome} aberto (${noId})`);
+                        return;
                     }
-                    responderTexto(res, 200, `captura de ${nome} salva\n${destino}`);
+                    if (cmd === "browser-read") {
+                        const nav = resolverNavegador(snap, c.id, j?.nav);
+                        if ("erro" in nav) {
+                            responderTexto(res, 400, nav.erro);
+                            return;
+                        }
+                        const l = await navegadorAtual.ler(nav.ok.id);
+                        browserCache.set(chaveElementos(c.projeto, nav.ok.id), l.elementos);
+                        responderTexto(res, 200, formatarLeitura(l));
+                        return;
+                    }
+                    if (cmd === "browser-click" || cmd === "browser-type") {
+                        const nav = resolverNavegador(snap, c.id, j?.nav);
+                        if ("erro" in nav) {
+                            responderTexto(res, 400, nav.erro);
+                            return;
+                        }
+                        const alvo = typeof j?.alvo === "string" ? j.alvo : "";
+                        if (!alvo) {
+                            responderTexto(res, 400, "alvo obrigatório");
+                            return;
+                        }
+                        const els = await elementosDoNavegador(c.projeto, nav.ok.id);
+                        const el = resolverElemento(els, alvo);
+                        if ("erro" in el) {
+                            responderTexto(res, 400, el.erro);
+                            return;
+                        }
+                        if (cmd === "browser-click") {
+                            await navegadorAtual.clicar(nav.ok.id, el.ok.n);
+                            responderTexto(res, 200, `clique em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
+                        }
+                        else {
+                            const valor = typeof j?.valor === "string" ? j.valor : "";
+                            const enter = j?.enter === true;
+                            await navegadorAtual.digitar(nav.ok.id, el.ok.n, valor, enter);
+                            responderTexto(res, 200, `digitação em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
+                        }
+                        return;
+                    }
+                    if (cmd === "browser-nav") {
+                        const nav = resolverNavegador(snap, c.id, j?.nav);
+                        if ("erro" in nav) {
+                            responderTexto(res, 400, nav.erro);
+                            return;
+                        }
+                        const acao = typeof j?.acao === "string" ? j.acao : "";
+                        const ehControle = acao === "back" || acao === "forward" || acao === "reload";
+                        if (!ehControle && !urlPermitida(acao)) {
+                            responderTexto(res, 400, "ação inválida");
+                            return;
+                        }
+                        await navegadorAtual.navegar(nav.ok.id, acao);
+                        if (!ehControle) {
+                            // url nova: atualiza dados.url do no (back/forward/reload nao revelam a url resultante).
+                            const no = snap.nos.find((n) => n.id === nav.ok.id);
+                            if (no)
+                                aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: { ...no, dados: { ...no.dados, url: acao }, rev: Date.now() } }]);
+                        }
+                        responderTexto(res, 200, "navegador navegou");
+                        return;
+                    }
+                    if (cmd === "browser-shot") {
+                        const nav = resolverNavegador(snap, c.id, j?.nav);
+                        if ("erro" in nav) {
+                            responderTexto(res, 400, nav.erro);
+                            return;
+                        }
+                        const png = await navegadorAtual.capturar(nav.ok.id);
+                        const nome = String(nav.ok.dados.nome ?? "");
+                        garantirExclude(c.cwd); // .orchestra/ no info/exclude do repo do agente
+                        const dir = path.join(c.cwd, ".orchestra", "shots");
+                        try {
+                            fs.mkdirSync(dir, { recursive: true });
+                        }
+                        catch { }
+                        const destino = path.join(dir, nomeShot(nome, new Date()));
+                        try {
+                            fs.writeFileSync(destino, png);
+                        }
+                        catch { }
+                        // asset do canvas + no' imagem ligado ao navegador
+                        const id = idProjeto(c.projeto);
+                        const arq = randomUUID() + ".png";
+                        let url = "";
+                        try {
+                            fs.mkdirSync(path.join(CANVAS_DIR, id, "assets"), { recursive: true });
+                            fs.writeFileSync(path.join(CANVAS_DIR, id, "assets", arq), png);
+                            url = `/canvas/asset/${id}/${arq}`;
+                        }
+                        catch { }
+                        if (url) {
+                            const agora = Date.now();
+                            const imgId = `img:${nav.ok.id}:${agora}`;
+                            const imgNo = { id: imgId, tipo: "imagem", x: nav.ok.x + nav.ok.w + 40, y: nav.ok.y, w: 480, h: 360, dados: { url, nome }, rev: agora };
+                            const aresta = { id: `${nav.ok.id}->${imgId}`, de: nav.ok.id, para: imgId, rev: agora };
+                            aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: imgNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
+                        }
+                        responderTexto(res, 200, `captura de ${nome} salva\n${destino}`);
+                        return;
+                    }
+                }
+                catch (e) {
+                    responderTexto(res, 400, e?.message ?? String(e));
                     return;
                 }
                 responderTexto(res, 400, "comando desconhecido: " + cmd);
@@ -2608,9 +2614,11 @@ export async function iniciarUI(opts = {}) {
         void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
     iniciarExpiracao(); // F3/S2: varre as conversas pendentes (expira -> avisa a origem)
     // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
+    // Com sempreAssumir (app), perder a corrida pra um hub stdio nao e' definitivo: pede pra ele ceder de novo.
     if (!reassumir)
         reassumir = setInterval(() => { if (!servidor)
-            void escutar(); }, 10_000);
+            void escutar().then((ok) => { if (!ok && sempreAssumir)
+                void tentarAssumir(); }); }, 10_000);
     reassumir.unref();
 }
 // Encerra o servidor/watcher e limpa TODOS os intervalos (rescan, reassumir, limpeza). Usado nos testes.
