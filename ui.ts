@@ -10,7 +10,9 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
-import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type No, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type Aresta, type No, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import { urlPermitida, formatarLeitura, resolverElemento, nomeShot } from "./navegador.js";
+import type { Elemento, Leitura } from "./navegador.js";
 import { randomBytes } from "node:crypto";
 import {
   conectados, resolverAlvo, slugNome, Conversas, FilaEntregas,
@@ -23,6 +25,8 @@ import {
   aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos,
   type Agente, type AssinaturaArquivo, type Linha, type Papel, type ParteRegistrada,
 } from "./agentes.js";
+// Agentes Claude Code via PTY (F4/S3): logica pura importada AQUI (os modulos puros nao importam em runtime).
+import { argsClaude, settingsHooks, textoParaPty } from "./claude-pty.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
@@ -241,6 +245,9 @@ const clientes = new Set<Cliente>();
 const estado = new Map<string, Evento[]>();
 const vistos = new Map<string, string>(); // arquivo -> "size:mtime" (so rele o que mudou)
 let servidor: http.Server | null = null;
+// Promessa do fechamento do ultimo servidor: o proximo escutar() espera o socket ser liberado de fato
+// (sem isso, um iniciarUI imediatamente apos pararUI liga numa porta ainda presa pelo socket antigo).
+let servidorFechando: Promise<void> | null = null;
 let intervalo: NodeJS.Timeout | null = null;
 let watcher: fs.FSWatcher | null = null;
 let limpeza: NodeJS.Timeout | null = null;   // poda os registros de planejadores orfaos
@@ -570,6 +577,26 @@ let reconectando = false;                                     // serializa o rec
 const ctxAssinaturas = new Map<string, AssinaturaArquivo[]>(); // id -> assinaturas do contexto em disco
 const fila = new FilaAvisos();
 let agentesCarregados = false;
+
+// ---- agentes Claude Code via PTY (F4/S3) ----
+// Driver de PTY injetado pelo app desktop (electron). Sem ele, POST /agentes tipo 'claude' responde
+// 'falhou' com "abra o app Hermes para usar agentes Claude". O hub nunca abre PTY por conta propria.
+type PtyProc = {
+  pid: number;
+  write(d: string): void;
+  kill(): void;
+  onData(cb: (d: string) => void): void;
+  onExit(cb: (c: number) => void): void;
+};
+export type PtyDriver = {
+  spawn(opts: { comando: string; args: string[]; cwd: string; env: Record<string, string | undefined>; cols?: number; rows?: number }): PtyProc;
+};
+let ptyAtual: PtyDriver | undefined;
+const ptyProcs = new Map<string, PtyProc>();   // id -> processo do `claude`
+const ptyBuffers = new Map<string, string>();  // id -> ultimas ~200KB de saida do PTY (GET /agentes/:id/pty)
+const aguardandoSet = new Set<string>();       // ids aguardando permissao (aguardando = ocupado na fila)
+const LIMITE_BUFFER_PTY = 200 * 1024;          // ~200KB de buffer por agente
+
 let subirServeAtual: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }> = subirServeReal;
 let matarProcessoAtual: (pid: number) => void = (pid) => { try { process.kill(pid); } catch {} };
 
@@ -650,6 +677,8 @@ function carregarAgentes(): void {
       if (!a) continue; // nao e' um agente do canvas (ex.: registro {id,token} de planejador): ignora
       if (!a.token) { a.token = novoToken(); gravarAgente(a); } // agente antigo sem token ganha um ao carregar
       else agentes.set(a.id, a);
+      // Agente Claude nao sobrevive ao restart do hub (PTY morre junto): entra como 'encerrado'.
+      if (a.tipo === "claude") a.status = "encerrado";
     } catch {}
   }
 }
@@ -679,12 +708,12 @@ function statusDe(id: string, base = ""): string {
   return a.status ?? "ocioso";
 }
 
-type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string; ocupado: boolean };
+type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; tipo: string; status: string; ocupado: boolean; aguardando: boolean };
 
 function resumoAgente(a: Agente): ResumoAgente {
   return {
-    id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem,
-    status: statusDe(a.id, a.base), ocupado: fila.estados.get(a.id)?.ocupado === true,
+    id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem, tipo: a.tipo,
+    status: statusDe(a.id, a.base), ocupado: fila.estados.get(a.id)?.ocupado === true, aguardando: aguardandoSet.has(a.id),
   };
 }
 
@@ -869,6 +898,8 @@ async function enviarTexto(base: string, sessao: string, texto: string, sistema?
 }
 
 async function enviarPrompt(a: RegistroAgente, texto: string): Promise<void> {
+  // Agentes Claude Code (F4/S3): a entrega e' digitada no PTY (nao ha' OpenCode/sessao).
+  if (a.tipo === "claude") { escreverPty(a.id, textoParaPty(texto)); return; }
   await enviarTexto(a.base, a.sessao, texto, instrucaoDe(a), separarModelo(a.modelo));
 }
 
@@ -877,6 +908,82 @@ function tentarLiberarAviso(id: string): void {
   if (!a) return;
   const msg = fila.liberar(id, Date.now());
   if (msg) void enviarPrompt(a, msg);
+}
+
+// Escreve no PTY do agente (teclas do xterm ou texto de uma entrega); sem processo, ignora.
+function escreverPty(id: string, dados: string): void {
+  const p = ptyProcs.get(id);
+  if (!p) return;
+  try { p.write(dados); } catch {}
+}
+
+// Mata o PTY do agente e descarta o buffer (usado no encerrar/reiniciar).
+function matarPty(id: string): void {
+  const p = ptyProcs.get(id);
+  if (p) { try { p.kill(); } catch {} }
+  ptyProcs.delete(id);
+  ptyBuffers.delete(id);
+}
+
+// Prompt de sistema do Claude: instrucao do papel (id substituido) + identidade + leitura do contexto.
+function promptClaude(instrucao: string, id: string, nome: string, token: string): string {
+  const comId = instrucao.replace(/<id>/g, id).trim();
+  return [
+    comId,
+    linhaIdentidade(nome, id, token),
+    `Antes de responder, leia .orchestra/contexto/${id}/README.md se existir.`,
+  ].filter(Boolean).join(" ");
+}
+
+// Sobe o PTY do Claude: grava os hooks de status, monta os args e liga a saida ao SSE + buffer.
+// Lanca se o driver de PTY nao estiver disponivel (sem app desktop) ou se o spawn falhar.
+function subirPtyClaude(a: RegistroAgente, continuar: boolean): void {
+  const settingsPath = path.join(AGENTES_DIR, a.id + ".settings.json");
+  try {
+    fs.mkdirSync(AGENTES_DIR, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settingsHooks(a.id, a.token ?? "")));
+  } catch {}
+  if (!ptyAtual) throw new Error("abra o app Hermes para usar agentes Claude");
+  const prompt = promptClaude(a.instrucao ?? "", a.id, a.nome, a.token ?? "");
+  const proc = ptyAtual.spawn({
+    comando: "claude",
+    args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
+    cwd: a.cwd,
+    env: envServe(), // mesmo PATH com bin/ na frente usado no serve (o CLI `canvas` fica la)
+    cols: 120,
+    rows: 32,
+  });
+  ptyProcs.set(a.id, proc);
+  ptyBuffers.set(a.id, "");
+  proc.onData((d) => {
+    const atual = ptyBuffers.get(a.id) ?? "";
+    const novo = atual + d;
+    ptyBuffers.set(a.id, novo.length > LIMITE_BUFFER_PTY ? novo.slice(novo.length - LIMITE_BUFFER_PTY) : novo);
+    broadcast({ pty: { id: a.id, dados: Buffer.from(d, "utf8").toString("base64") } });
+  });
+  proc.onExit(() => {
+    ptyProcs.delete(a.id);
+    const reg = agentes.get(a.id);
+    if (!reg) return; // ja' encerrado/removido: nao ressuscita o registro
+    reg.status = "encerrado";
+    gravarAgente(reg);
+    broadcast({ agentes: listarAgentes(reg.projeto) });
+  });
+}
+
+// Cria um agente Claude: registro em disco, PTY e broadcast. Falha vira status 'falhou' (com a mensagem).
+function criarAgenteClaude(projeto: string, cwd: string, papel: Papel, nome: string, modelo: string, instrucao: string): { id: string; ok: boolean; erro: string } {
+  const id = "ag-" + randomUUID().slice(0, 8);
+  const reg: RegistroAgente = {
+    id, projeto, cwd, base: "", sessao: "", nome, papel, modelo, instrucao,
+    tipo: "claude", origem: "canvas", token: novoToken(),
+  };
+  let erro = "";
+  try { subirPtyClaude(reg, false); }
+  catch (e: any) { erro = String(e?.message ?? e); reg.erro = erro; }
+  gravarAgente(reg);
+  broadcast({ agentes: listarAgentes(projeto) });
+  return { id, ok: !erro, erro };
 }
 
 // ---------------------------------------------------------------------------
@@ -924,6 +1031,26 @@ function statusColab(id: string): string {
 }
 
 function estaOcupado(id: string): boolean { return fila.estados.get(id)?.ocupado === true; }
+
+// /cli/status (F4/S3): os hooks do Claude marcam ocupado/ocioso/aguardando. 'aguardando' conta como
+// ocupado na fila de entregas; 'ocioso' libera os avisos e as entregas pendentes.
+function marcarStatusAgente(id: string, estado: "ocupado" | "ocioso" | "aguardando"): void {
+  if (estado === "ocioso") {
+    fila.marcarOcioso(id);
+    filaEntregas.marcarOcioso(id);
+    aguardandoSet.delete(id);
+    tentarLiberarAviso(id);
+    tentarLiberarEntregas(id);
+  } else {
+    fila.marcarOcupado(id);
+    filaEntregas.marcarOcupado(id);
+    if (estado === "aguardando") aguardandoSet.add(id);
+    else aguardandoSet.delete(id);
+  }
+  const a = agentes.get(id);
+  if (a) broadcast({ agentes: listarAgentes(a.projeto) });
+  else broadcastAgentes();
+}
 
 // Envia agora (ocioso) ou enfileira (ocupado). Devolve true se entregou na hora.
 async function entregarColab(id: string, texto: string): Promise<boolean> {
@@ -993,6 +1120,61 @@ function aplicarOpsProjeto(projeto: string, ops: Op[]): void {
   try { sincronizarContexto(projeto, snapNovo); } catch {}
 }
 
+// ---- navegador controlado por agentes (F4/S2): rotas /cli/browser-* ----
+// Driver injetado pelo app desktop. Sem ele, toda rota browser-* responde 400 (abra o app Hermes).
+type Navegador = {
+  ler(noId: string): Promise<Leitura>;
+  clicar(noId: string, n: number): Promise<void>;
+  digitar(noId: string, n: number, valor: string, enter: boolean): Promise<void>;
+  navegar(noId: string, acao: string): Promise<void>;
+  capturar(noId: string): Promise<Buffer>;
+};
+
+let navegadorAtual: Navegador | undefined;
+const browserCache = new Map<string, Elemento[]>(); // "<idProjeto>\\n<noId>" -> elementos lidos
+
+function chaveElementos(projeto: string, noId: string): string { return idProjeto(projeto) + "\\n" + noId; }
+
+// Navegadores do projeto acessiveis ao agente: criados por ele ou ligados por aresta (qualquer direcao).
+function navegadoresAcessiveis(snap: Snapshot, agenteId: string): No[] {
+  const noAg = "ag:" + agenteId;
+  return snap.nos.filter((n) => n.tipo === "navegador" && (
+    n.dados.criador === agenteId ||
+    snap.arestas.some((a) => (a.de === noAg && a.para === n.id) || (a.para === noAg && a.de === n.id))
+  ));
+}
+
+// Resolve por noId exato ou pelo slug do nome (case-insensitive); o primeiro que casar.
+function acharNavegador(navs: No[], alvo: string): No | undefined {
+  const exato = navs.find((n) => n.id === alvo);
+  if (exato) return exato;
+  const slug = slugNome(alvo);
+  return navs.find((n) => slugNome(String(n.dados.nome ?? "")) === slug);
+}
+
+// Sem `nav`, usa o unico acessivel; com `nav`, so' entre os acessiveis. Inacessivel -> erro do contrato.
+function resolverNavegador(snap: Snapshot, agenteId: string, bruto: unknown): { ok: No } | { erro: string } {
+  const navs = navegadoresAcessiveis(snap, agenteId);
+  if (bruto === undefined || bruto === null || bruto === "") {
+    if (navs.length === 1) return { ok: navs[0] };
+    return { erro: navs.length === 0 ? "nenhum navegador conectado a você" : "navegador não especificado (há mais de um conectado a você)" };
+  }
+  const s = String(bruto);
+  const achado = acharNavegador(navs, s);
+  if (!achado) return { erro: `navegador ${s} não está conectado a você` };
+  return { ok: achado };
+}
+
+// Elementos na cache do noId; sem cache, faz uma leitura antes (mesmo contrato do read).
+async function elementosDoNavegador(projeto: string, noId: string): Promise<Elemento[]> {
+  const k = chaveElementos(projeto, noId);
+  const emCache = browserCache.get(k);
+  if (emCache) return emCache;
+  const l = await navegadorAtual!.ler(noId);
+  browserCache.set(k, l.elementos);
+  return l.elementos;
+}
+
 // Arvore do worktree do agente: `git ls-files` + nao rastreados (exclui ignorados), barras '/', ate 5000.
 function listarArvore(cwd: string): string[] {
   const opcoes = { cwd, encoding: "utf8" as const, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] as ("ignore" | "pipe")[] };
@@ -1040,6 +1222,7 @@ async function encerrarAgente(a: RegistroAgente): Promise<void> {
   if (base && a.sessao) {
     try { await fetch(`${base}/session/${a.sessao}`, { method: "DELETE" }); } catch {}
   }
+  matarPty(a.id); // agente Claude: encerra o PTY antes de sumir com o registro
   removerAgenteDoDisco(a.id);
   if (base && ![...agentes.values()].some((x) => x.base === base)) {
     for (const [cwd, s] of serves) if (s.base === base) { if (s.pid > 0) matarProcessoAtual(s.pid); serves.delete(cwd); }
@@ -1174,9 +1357,10 @@ function ceder(): void {
   descarregarCanvas(); // grava ops pendentes antes de ceder a porta
   for (const ctrl of pontes.values()) { try { ctrl.abort(); } catch {} }
   pontes.clear();
-  servidor?.closeAllConnections(); // derruba as conexoes keep-alive do servidor antigo (nao reusa socket morto)
-  servidor?.close();
-  servidor = null;
+  for (const p of ptyProcs.values()) { try { p.kill(); } catch {} } // F4/S3: PTYs dos agentes Claude morrem com o hub
+  ptyProcs.clear();
+  ptyBuffers.clear();
+  fecharServidor(); // derruba as conexoes keep-alive e guarda a promessa do socket do servidor antigo
   onCeder?.();
 }
 
@@ -1352,10 +1536,18 @@ function criarServidor(): http.Server {
       const papel = j && typeof j.papel === "string" ? j.papel : "";
       if (!projeto || !cwd || !Object.prototype.hasOwnProperty.call(PAPEIS, papel)) { res.writeHead(400); res.end(); return; }
       const def = PAPEIS[papel as Papel];
-      const id = "ag-" + randomUUID().slice(0, 8);
       const nome = j && typeof j.nome === "string" && j.nome.trim() ? j.nome.trim() : def.nome;
-      const modelo = (j && typeof j.modelo === "string" ? j.modelo.trim() : "") || "opencode-go/glm-5.2";
       const instrucao = j && typeof j.instrucao === "string" ? j.instrucao : def.instrucao;
+      // Agentes Claude Code (F4/S3): PTY gerenciado pelo app desktop, sem OpenCode/ponte.
+      if (j && j.tipo === "claude") {
+        const modelo = j && typeof j.modelo === "string" ? j.modelo.trim() : "";
+        const r = criarAgenteClaude(projeto, cwd, papel as Papel, nome, modelo, instrucao);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(r.ok ? { id: r.id, status: "ok" } : { id: r.id, status: "falhou", erro: r.erro }));
+        return;
+      }
+      const id = "ag-" + randomUUID().slice(0, 8);
+      const modelo = (j && typeof j.modelo === "string" ? j.modelo.trim() : "") || "opencode-go/glm-5.2";
       let serve = serves.get(cwd);
       let erro = "";
       if (!serve) {
@@ -1399,6 +1591,14 @@ function criarServidor(): http.Server {
         res.end(JSON.stringify(await buscarHistorico(a)));
         return;
       }
+      if (acao === "pty" && req.method === "GET") {
+        // Ultimas ~200KB de saida do PTY do agente Claude (base64), para reidratar o terminal na UI.
+        const a = agentes.get(id);
+        if (!a) { res.writeHead(404); res.end(); return; }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ id, dados: Buffer.from(ptyBuffers.get(id) ?? "", "utf8").toString("base64") }));
+        return;
+      }
       if (req.method === "POST") {
         // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
         const corpo = await lerCorpo(req, LIMITE_BODY);
@@ -1408,6 +1608,13 @@ function criarServidor(): http.Server {
         if (!a) { res.writeHead(404); res.end(); return; }
         let j: any = null;
         try { j = JSON.parse(corpo); } catch {}
+        if (acao === "teclas") {
+          // Teclas do xterm (F4/S3): digitadas cruas no PTY do agente Claude.
+          const dados = j && typeof j.dados === "string" ? j.dados : "";
+          if (!dados) { res.writeHead(400); res.end(); return; }
+          escreverPty(a.id, dados);
+          res.writeHead(204); res.end(); return;
+        }
         if (acao === "mensagem") {
           const texto = j && typeof j.texto === "string" ? j.texto : "";
           if (!texto) { res.writeHead(400); res.end(); return; }
@@ -1431,6 +1638,27 @@ function criarServidor(): http.Server {
           res.writeHead(204); res.end(); return;
         }
         if (acao === "reiniciar") {
+          // Agente Claude (F4/S3): retoma a conversa no PTY (--continue), sem OpenCode/ponte.
+          if (a.tipo === "claude") {
+            try {
+              matarPty(a.id);
+              delete a.erro;
+              subirPtyClaude(a, true);
+              a.status = "ok";
+              gravarAgente(a);
+              broadcast({ agentes: listarAgentes(a.projeto) });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ id: a.id, status: "ok" }));
+            } catch (e: any) {
+              const motivo = String(e?.message ?? e);
+              a.erro = motivo;
+              gravarAgente(a);
+              broadcast({ agentes: listarAgentes(a.projeto) });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ id: a.id, status: "falhou", erro: motivo }));
+            }
+            return;
+          }
           // Reabre a sessao do agente: reaproveita um serve VIVO da mesma cwd (o serve destacado
           // sobrevive ao hub) ou sobe um novo com subirServe(cwd), cria uma sessao limpa e reabre a
           // ponte do /event. Sucesso -> 200 {id,status:'ok'}; falha ao subir -> 200 {id,status:'falhou',erro}.
@@ -1499,6 +1727,14 @@ function criarServidor(): http.Server {
         if (!alvo) return { erro: "alvo obrigatório" };
         return resolverAlvo(refs(), alvo);
       };
+      if (cmd === "status") {
+        // Hooks do Claude Code (F4/S3) marcam o estado do agente; estado invalido -> 400.
+        const estado = typeof j?.estado === "string" ? j.estado : "";
+        if (estado !== "ocupado" && estado !== "ocioso" && estado !== "aguardando") { responderTexto(res, 400, "estado inválido"); return; }
+        marcarStatusAgente(c.id, estado);
+        responderTexto(res, 200, "status atualizado");
+        return;
+      }
       if (cmd === "list") {
         const lista = refs();
         responderTexto(res, 200, lista.length ? lista.map((a) => `${slugNome(a.nome)} (${a.id}) — ${a.nome}, ${statusColab(a.id)}`).join("\n") : "nenhum agente conectado a você");
@@ -1559,6 +1795,100 @@ function criarServidor(): http.Server {
         responderTexto(res, 200, "nota atualizada");
         return;
       }
+      // ---- navegador (F4/S2): create/read/click/type/nav/shot ----
+      if (cmd.startsWith("browser-")) {
+        if (!navegadorAtual) { responderTexto(res, 400, "navegador indisponível: abra o app Hermes"); return; }
+        if (cmd === "browser-create") {
+          const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
+          const url = typeof j?.url === "string" ? j.url : "";
+          if (!nome) { responderTexto(res, 400, "nome obrigatório"); return; }
+          if (!urlPermitida(url)) { responderTexto(res, 400, "url inválida"); return; }
+          // no' `nav:<slugNome(nome)>`, com sufixo -2, -3... se o id ja existir no projeto.
+          const base = "nav:" + slugNome(nome);
+          let noId = base;
+          let k = 1;
+          while (snap.nos.some((n) => n.id === noId)) { k++; noId = base + "-" + k; }
+          const agora = Date.now();
+          const navNo: No = { id: noId, tipo: "navegador", x: agNo.x + agNo.w + 40, y: agNo.y, w: 900, h: 620, dados: { nome, url, criador: c.id }, rev: agora };
+          const aresta: Aresta = { id: `${agNo.id}->${noId}`, de: agNo.id, para: noId, rev: agora };
+          aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: navNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
+          responderTexto(res, 200, `navegador ${nome} aberto (${noId})`);
+          return;
+        }
+        if (cmd === "browser-read") {
+          const nav = resolverNavegador(snap, c.id, j?.nav);
+          if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
+          const l = await navegadorAtual.ler(nav.ok.id);
+          browserCache.set(chaveElementos(c.projeto, nav.ok.id), l.elementos);
+          responderTexto(res, 200, formatarLeitura(l));
+          return;
+        }
+        if (cmd === "browser-click" || cmd === "browser-type") {
+          const nav = resolverNavegador(snap, c.id, j?.nav);
+          if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
+          const alvo = typeof j?.alvo === "string" ? j.alvo : "";
+          if (!alvo) { responderTexto(res, 400, "alvo obrigatório"); return; }
+          const els = await elementosDoNavegador(c.projeto, nav.ok.id);
+          const el = resolverElemento(els, alvo);
+          if ("erro" in el) { responderTexto(res, 400, el.erro); return; }
+          if (cmd === "browser-click") {
+            await navegadorAtual.clicar(nav.ok.id, el.ok.n);
+            responderTexto(res, 200, `clique em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
+          } else {
+            const valor = typeof j?.valor === "string" ? j.valor : "";
+            const enter = j?.enter === true;
+            await navegadorAtual.digitar(nav.ok.id, el.ok.n, valor, enter);
+            responderTexto(res, 200, `digitação em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
+          }
+          return;
+        }
+        if (cmd === "browser-nav") {
+          const nav = resolverNavegador(snap, c.id, j?.nav);
+          if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
+          const acao = typeof j?.acao === "string" ? j.acao : "";
+          const ehControle = acao === "back" || acao === "forward" || acao === "reload";
+          if (!ehControle && !urlPermitida(acao)) { responderTexto(res, 400, "ação inválida"); return; }
+          await navegadorAtual.navegar(nav.ok.id, acao);
+          if (!ehControle) {
+            // url nova: atualiza dados.url do no (back/forward/reload nao revelam a url resultante).
+            const no = snap.nos.find((n) => n.id === nav.ok.id);
+            if (no) aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: { ...no, dados: { ...no.dados, url: acao }, rev: Date.now() } }]);
+          }
+          responderTexto(res, 200, "navegador navegou");
+          return;
+        }
+        if (cmd === "browser-shot") {
+          const nav = resolverNavegador(snap, c.id, j?.nav);
+          if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
+          const png = await navegadorAtual.capturar(nav.ok.id);
+          const nome = String(nav.ok.dados.nome ?? "");
+          garantirExclude(c.cwd); // .orchestra/ no info/exclude do repo do agente
+          const dir = path.join(c.cwd, ".orchestra", "shots");
+          try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+          const destino = path.join(dir, nomeShot(nome, new Date()));
+          try { fs.writeFileSync(destino, png); } catch {}
+          // asset do canvas + no' imagem ligado ao navegador
+          const id = idProjeto(c.projeto);
+          const arq = randomUUID() + ".png";
+          let url = "";
+          try {
+            fs.mkdirSync(path.join(CANVAS_DIR, id, "assets"), { recursive: true });
+            fs.writeFileSync(path.join(CANVAS_DIR, id, "assets", arq), png);
+            url = `/canvas/asset/${id}/${arq}`;
+          } catch {}
+          if (url) {
+            const agora = Date.now();
+            const imgId = `img:${nav.ok.id}:${agora}`;
+            const imgNo: No = { id: imgId, tipo: "imagem", x: nav.ok.x + nav.ok.w + 40, y: nav.ok.y, w: 480, h: 360, dados: { url, nome }, rev: agora };
+            const aresta: Aresta = { id: `${nav.ok.id}->${imgId}`, de: nav.ok.id, para: imgId, rev: agora };
+            aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "no", item: imgNo }, { op: "upsert", tipo: "aresta", item: aresta }]);
+          }
+          responderTexto(res, 200, `captura de ${nome} salva\n${destino}`);
+          return;
+        }
+        responderTexto(res, 400, "comando desconhecido: " + cmd);
+        return;
+      }
       responderTexto(res, 400, "comando desconhecido: " + cmd);
       return;
     }
@@ -1614,7 +1944,18 @@ async function tentarAssumir(): Promise<void> {
   }
 }
 
-function escutar(): Promise<boolean> {
+// Fecha o servidor atual e guarda a promessa do fechamento (callback do close): quem for reabrir a
+// porta (escutar) espera essa promessa, garantindo que o socket antigo ja' foi liberado.
+function fecharServidor(): void {
+  const s = servidor;
+  servidor = null;
+  if (!s) return;
+  try { s.closeAllConnections(); } catch {}
+  servidorFechando = new Promise<void>((ok) => { try { s.close(() => ok()); } catch { ok(); } });
+}
+
+async function escutar(): Promise<boolean> {
+  if (servidorFechando) { await servidorFechando; servidorFechando = null; }
   return new Promise((ok) => {
     const srv = criarServidor();
     srv.once("error", () => ok(false));
@@ -1630,7 +1971,10 @@ function escutar(): Promise<boolean> {
       try { watcher = fs.watch(RUNS_DIR, () => rescan()); } catch {}
       intervalo = setInterval(rescan, 1000);
       intervalo.unref();
-      ok(true);
+      // Cede um tick ao event loop: o cliente (mesmo processo) processa o FIN/RST dos sockets do
+      // servidor anterior antes de reusar a pool — sem isso, o 1o POST apos um restart reusa um
+      // socket morto e leva ECONNRESET.
+      setTimeout(() => ok(true), 0);
     });
     srv.listen(PORT, "127.0.0.1");
   });
@@ -1647,6 +1991,8 @@ export type OpcoesUI = {
   limiteBodyNovaFeature?: number; // teto proprio do corpo de /nova-feature (default 350MB)
   subirServe?: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
   matarProcesso?: (pid: number) => void; // encerra o serve (injetavel)
+  navegador?: Navegador; // driver do navegador embutido (F4/S2): liga as rotas /cli/browser-*
+  pty?: PtyDriver; // driver de PTY (F4/S3): liga os agentes Claude Code; sem ele, POST /agentes tipo 'claude' falha
 };
 
 export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
@@ -1657,6 +2003,8 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
   subirServeAtual = opts.subirServe ?? subirServeReal;
   matarProcessoAtual = opts.matarProcesso ?? ((pid: number) => { try { process.kill(pid); } catch {} });
+  navegadorAtual = opts.navegador; // F4/S2: sem driver, toda rota browser-* responde 400
+  ptyAtual = opts.pty; // F4/S3: sem driver, POST /agentes tipo 'claude' responde 'falhou'
   carregarAgentes();
   if (!(await escutar())) await tentarAssumir();
   if (servidor) void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
@@ -1679,9 +2027,14 @@ export function pararUI(): void {
   serves.clear();
   for (const c of clientes) { try { c.res.end(); } catch {} }
   clientes.clear();
-  servidor?.closeAllConnections(); // fecha conexoes abertas antes do close: o proximo servidor nao herda socket morto
-  servidor?.close();
-  servidor = null;
+  fecharServidor(); // fecha conexoes abertas e guarda a promessa: o proximo escutar espera o socket liberar
   onCeder = null;
   sempreAssumir = false;
+  navegadorAtual = undefined; // F4/S2: solta o driver do navegador entre sessoes de teste
+  browserCache.clear();
+  for (const p of ptyProcs.values()) { try { p.kill(); } catch {} } // F4/S3: encerra os PTYs dos agentes Claude
+  ptyProcs.clear();
+  ptyBuffers.clear();
+  ptyAtual = undefined;
+  aguardandoSet.clear();
 }
