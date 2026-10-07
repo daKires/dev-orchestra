@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+[Environment]::SetEnvironmentVariable('HERMES_REPO', $PSScriptRoot, 'User')
+
 npm ci; if ($LASTEXITCODE) { throw 'npm ci falhou' }
 npm --prefix web ci; if ($LASTEXITCODE) { throw 'npm ci (web) falhou' }
 npm run build; if ($LASTEXITCODE) { throw 'build falhou' }
@@ -20,3 +22,7 @@ if (-not (Select-String -Path $PROFILE -SimpleMatch $linha -Quiet)) { Add-Conten
 
 Write-Host "`nPronto. Falta so a chave do swarm (uma delas), depois reabra o terminal:" -ForegroundColor Green
 Write-Host '  setx OPENCODE_GO_API_KEY "..."   |   setx DEEPSEEK_API_KEY "sk-..."   |   setx OPENROUTER_API_KEY "sk-or-v1-..."'
+
+Write-Host "`nPra gerar o instalador do app desktop rode:" -ForegroundColor Green
+Write-Host '  npm run desktop:dist'
+Write-Host '  (gera release\Hermes Setup *.exe)'
