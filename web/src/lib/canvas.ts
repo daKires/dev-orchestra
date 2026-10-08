@@ -1,7 +1,7 @@
 // Logica pura do canvas no front (S3): a mesma base do modelo do hub (S1), mas reimplementada aqui
 // para rodar no browser. NUNCA importamos nada de RUNTIME do hub: o modulo do hub usa node:crypto e
 // nao vai pro bundle do browser — so' tipos entram, via `import type` (apagado na compilacao).
-import type { No, Aresta, Op, Snapshot } from "../../../canvas.ts";
+import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 
 // ---------------------------------------------------------------------------
 // Aplicacao de operacoes (mesma regra de conflito do hub)
@@ -64,6 +64,49 @@ export function paiDoNo(no: No, grupos: No[]): string | undefined {
     }
   }
   return melhor?.id;
+}
+
+// ---------------------------------------------------------------------------
+// Nos do react-flow: medidas/selecao (S5 - F1.5, fix das arestas invisiveis)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mescla os nos RECONSTRUIDOS do modelo (`novos`) com os nos antigos do react-flow (`antigos`).
+ * Pura (nunca muta a entrada, sempre devolve objetos novos): de cada antigo de mesmo id copia o
+ * `measured` que o xyflow preencheu via onNodesChange (mudancas "dimensions") e o `selected`;
+ * posicao, dados e todo o resto vem do novo. No' sem antigo fica sem `measured`/`selected`.
+ * Sem `measured` o xyflow nao calcula a posicao das alcas e nao desenha as arestas.
+ */
+export function mesclarNosRf<T extends { id: string; measured?: unknown; selected?: boolean }>(
+  novos: T[],
+  antigos: T[],
+): T[] {
+  const porId = new Map(antigos.map((a) => [a.id, a]));
+  return novos.map((novo) => {
+    const antigo = porId.get(novo.id);
+    const saida: Record<string, unknown> = { ...novo };
+    delete saida.measured;
+    delete saida.selected;
+    if (antigo?.measured !== undefined) saida.measured = antigo.measured;
+    if (antigo?.selected !== undefined) saida.selected = antigo.selected;
+    return saida as unknown as T;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Inspetor (F2.1): so' nos criados a mao abrem o painel de propriedades
+// ---------------------------------------------------------------------------
+
+/** Tipos que tem editor proprio no inspetor (os cards automaticos ficam de fora). */
+const TIPOS_INSPECIONAVEIS = new Set<TipoNo>(["nota", "forma", "imagem", "grupo", "texto"]);
+
+/**
+ * true SO' para os nos criados a mao dos tipos com editor (nota/forma/imagem/grupo/texto). Nos do
+ * layout automatico (dados.auto, ex.: cards de run/regiao/fluxo) e tipos sem editor (agente, run,
+ * worker, arquivo, explorador, navegador) NAO sao inspecionaveis: seleciona-los nao abre o editor.
+ */
+export function inspecionavel(no: { tipo: TipoNo; dados: Record<string, unknown> }): boolean {
+  return TIPOS_INSPECIONAVEIS.has(no.tipo) && no.dados?.auto !== true;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,21 +267,326 @@ export function checarImagem(nome: string, bytes: number): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Paletas (cores CSS, pastel nas notas como o Castor)
+// Ferramentas e criacao de nos (S2 - F1.5)
 // ---------------------------------------------------------------------------
 
+/** Ferramentas da barra flutuante do canvas. */
+export type Ferramenta = "selecionar" | "mao" | "nota" | "forma" | "imagem" | "regiao" | "seta" | "texto";
+
+/** Atalho de teclado -> ferramenta (V/H/N/R/C/T, maiuscula ou minuscula); o resto -> null. */
+export function ferramentaDoAtalho(tecla: string): Ferramenta | null {
+  switch (tecla.toLowerCase()) {
+    case "v": return "selecionar";
+    case "h": return "mao";
+    case "n": return "nota";
+    case "r": return "regiao";
+    case "c": return "seta";
+    case "t": return "texto";
+    default: return null;
+  }
+}
+
+/** Tamanhos padrao (px) dos cards criados por clique (sem arrasto). */
+export const TAMANHO_PADRAO = {
+  nota: { w: 300, h: 260 },
+  forma: { w: 160, h: 80 },
+  regiao: { w: 480, h: 320 },
+  texto: { w: 240, h: 48 },
+} as const;
+
+export type Retangulo = { x: number; y: number; w: number; h: number };
+
+/**
+ * Geometrica do clique/arrasto: um clique (< 4px em cada eixo) usa o tamanho padrao na ancora `a`;
+ * um arrasto normaliza pelo canto minimo e nunca tem lado menor que 40px.
+ */
+export function retanguloDeArrasto(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  padrao: { w: number; h: number },
+): Retangulo {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return { x: a.x, y: a.y, w: padrao.w, h: padrao.h };
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.max(40, Math.abs(dx)), h: Math.max(40, Math.abs(dy)) };
+}
+
+export type NomeForma = "elipse" | "retangulo" | "losango";
+
+/** Cor padrao de uma forma nova (Castor): elipse verde, losango amarelo, retangulo cinza. */
+function corDaForma(forma: NomeForma): string {
+  return forma === "elipse" ? "verde" : forma === "losango" ? "amarelo" : "cinza";
+}
+
+/**
+ * No' resultante de uma ferramenta de criacao; `null` para as que nao criam (selecionar/mao/seta/
+ * imagem). `rev = Date.now()` garante a ultima-escrita-vence na proxima sincronizacao.
+ */
+export function noNovo(
+  ferramenta: Ferramenta,
+  ret: Retangulo,
+  id: string,
+  extra?: { forma?: NomeForma },
+): No | null {
+  const base = { id, x: ret.x, y: ret.y, w: ret.w, h: ret.h, rev: Date.now() };
+  switch (ferramenta) {
+    case "nota":
+      return { ...base, tipo: "nota", dados: { titulo: "Nota", corpo: "", cor: "amarelo" } };
+    case "forma": {
+      const forma: NomeForma = extra?.forma ?? "retangulo";
+      return { ...base, tipo: "forma", dados: { forma, texto: "", cor: corDaForma(forma) } };
+    }
+    case "regiao":
+      return { ...base, tipo: "grupo", dados: { titulo: "Região", cor: "cinza" } };
+    case "texto":
+      return { ...base, tipo: "texto", dados: { texto: "", tamanho: "m" } };
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Paletas / tokens visuais do Castor (puro, sem React)
+// ---------------------------------------------------------------------------
+
+/** Tokens de uma nota: fundo do card, borda, faixa de cabecalho e cor do texto. */
+export type EstiloNota = { fundo: string; borda: string; cabecalho: string; texto: string };
+
+const NOTA_AMARELO: EstiloNota = { fundo: "#ffe066", borda: "#e5c33f", cabecalho: "#fff0a8", texto: "#3d3312" };
+
+const NOTAS: Record<string, EstiloNota> = {
+  amarelo: NOTA_AMARELO,
+  rosa: { fundo: "#f5c4dc", borda: "#d99abb", cabecalho: "#fbe0ed", texto: "#512c40" },
+  azul: { fundo: "#aabaff", borda: "#919fe0", cabecalho: "#ccd5ff", texto: "#303953" },
+  lilas: { fundo: "#d6c8f5", borda: "#b5a3e0", cabecalho: "#e8defa", texto: "#3b2f5c" },
+  verde: { fundo: "#bfe8c8", borda: "#8fcc9c", cabecalho: "#dcf3e1", texto: "#1f4a2a" },
+};
+
+/** Tokens da nota para `cor`; cor desconhecida (ou ausente) cai no amarelo. */
+export function estiloNota(cor: unknown): EstiloNota {
+  return typeof cor === "string" && cor in NOTAS ? NOTAS[cor] : NOTA_AMARELO;
+}
+
+/** Tokens de uma forma: preenchimento solido e texto escuro fixo (#242326). */
+export type EstiloForma = { fundo: string; texto: string };
+
+const FORMA_CINZA: EstiloForma = { fundo: "#a4a1aa", texto: "#242326" };
+
+const FORMAS: Record<string, EstiloForma> = {
+  verde: { fundo: "#46bb94", texto: "#242326" },
+  amarelo: { fundo: "#c6be62", texto: "#242326" },
+  vermelho: { fundo: "#df7971", texto: "#242326" },
+  cinza: FORMA_CINZA,
+  lilas: { fundo: "#b9a8e6", texto: "#242326" },
+};
+
+/** Tokens da forma para `cor`; cor desconhecida (ou ausente) cai no cinza. */
+export function estiloForma(cor: unknown): EstiloForma {
+  return typeof cor === "string" && cor in FORMAS ? FORMAS[cor] : FORMA_CINZA;
+}
+
+/** Setas (markerEnd) so' aparecem entre duas formas; qualquer outra combinacao fica sem ponta. */
+export function pontaDaAresta(tipoOrigem: unknown, tipoDestino: unknown): boolean {
+  return tipoOrigem === "forma" && tipoDestino === "forma";
+}
+
+/** Cores de nota/forma (mesmas chaves de antes) derivadas do token de `fundo`. */
 export const CORES_NOTA = {
-  amarelo: "#FFF3C4",
-  rosa: "#FFD6E0",
-  lilas: "#E7D8FF",
-  azul: "#D6E8FF",
-  verde: "#D6F5D6",
+  amarelo: estiloNota("amarelo").fundo,
+  rosa: estiloNota("rosa").fundo,
+  lilas: estiloNota("lilas").fundo,
+  azul: estiloNota("azul").fundo,
+  verde: estiloNota("verde").fundo,
 } as const;
 
 export const CORES_FORMA = {
-  verde: "#22C55E",
-  cinza: "#64748B",
-  amarelo: "#EAB308",
-  vermelho: "#EF4444",
-  lilas: "#A78BFA",
+  verde: estiloForma("verde").fundo,
+  cinza: estiloForma("cinza").fundo,
+  amarelo: estiloForma("amarelo").fundo,
+  vermelho: estiloForma("vermelho").fundo,
+  lilas: estiloForma("lilas").fundo,
 } as const;
+
+/** Cores de região/grupo (moldura da zona): cinza ou lilás. */
+export const CORES_REGIAO = { cinza: "#858585", lilas: "#7966d6" } as const;
+
+// ---------------------------------------------------------------------------
+// Edicao: duplicar/colar e ordem z (S3 - F1.5, CA-E2/E3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Copia os nos de `ids` mais os filhos RECURSIVOS dos grupos copiados: cada copia ganha id novo e
+ * x/y + `desloc`. O `pai` e' remapeado quando o pai tambem foi copiado (senao e' mantido, como um
+ * filho que aponta pra um grupo de fora da copia). So' entram as arestas com as DUAS pontas
+ * copiadas, com id novo e pontas remapeadas. Nunca muta o snapshot; `ids` vazio devolve
+ * `{nos:[], arestas:[]}`.
+ */
+export function duplicarNos(s: Snapshot, ids: string[], novoId: () => string, desloc = 24): Snapshot {
+  if (ids.length === 0) return { nos: [], arestas: [] };
+  const porId = new Map(s.nos.map((n) => [n.id, n]));
+  const copiar = new Set<string>();
+  const fila: string[] = [];
+  for (const id of ids) if (porId.has(id) && !copiar.has(id)) { copiar.add(id); fila.push(id); }
+  // filhos recursivos dos grupos copiados (BFS na ordem do snapshot).
+  for (let i = 0; i < fila.length; i++) {
+    const pai = fila[i];
+    for (const n of s.nos) {
+      if (n.pai === pai && !copiar.has(n.id)) { copiar.add(n.id); fila.push(n.id); }
+    }
+  }
+  const mapa = new Map<string, string>();
+  for (const id of copiar) mapa.set(id, novoId());
+  const nos: No[] = [];
+  for (const id of copiar) {
+    const n = porId.get(id)!;
+    const pai = n.pai !== undefined && copiar.has(n.pai) ? mapa.get(n.pai) : n.pai;
+    nos.push({ ...n, id: mapa.get(id)!, x: n.x + desloc, y: n.y + desloc, pai });
+  }
+  const arestas: Aresta[] = [];
+  for (const a of s.arestas) {
+    if (copiar.has(a.de) && copiar.has(a.para)) {
+      arestas.push({ ...a, id: novoId(), de: mapa.get(a.de)!, para: mapa.get(a.para)! });
+    }
+  }
+  return { nos, arestas };
+}
+
+/** z de um no' em dados.z (numero finito); ausente/nao-numerico conta como 0. */
+function zDoNo(n: No): number {
+  const z = n.dados?.z;
+  return typeof z === "number" && Number.isFinite(z) ? z : 0;
+}
+
+/**
+ * Devolve SO' os nos de `ids`, cada um com `dados.z = maxZ + 1` ("frente") ou `minZ - 1` ("tras"),
+ * considerando o z atual de TODOS os nos. Nunca muta; preserva os demais dados de cada no'.
+ */
+export function ordemZ(nos: No[], ids: string[], onde: "frente" | "tras"): No[] {
+  const zs = nos.map(zDoNo);
+  const z = onde === "frente" ? (zs.length ? Math.max(...zs) + 1 : 1) : (zs.length ? Math.min(...zs) - 1 : -1);
+  const alvo = new Set(ids);
+  return nos.filter((n) => alvo.has(n.id)).map((n) => ({ ...n, dados: { ...n.dados, z } }));
+}
+
+// ---------------------------------------------------------------------------
+// Historico local por ops inversas (S4 - F1.5, CA-E4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ops que DESFAZEM `ops`, na ordem inversa. Criar -> remove; editar -> volta o item anterior com o
+ * `rev` dado; remover no' -> restaura o no' e as arestas ligadas a ele (do snapshot `antes`).
+ * Remover um item que nao existia em `antes` nao gera nada.
+ */
+export function inversoDe(antes: Snapshot, ops: Op[], rev: number): Op[] {
+  const nosAntes = new Map(antes.nos.map((n) => [n.id, n]));
+  const arestasAntes = new Map(antes.arestas.map((a) => [a.id, a]));
+  const out: Op[] = [];
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i];
+    if (op.op === "upsert") {
+      if (op.tipo === "no") {
+        const antigo = nosAntes.get(op.item.id);
+        out.push(antigo
+          ? { op: "upsert", tipo: "no", item: { ...antigo, rev } }
+          : { op: "remove", tipo: "no", item: { id: op.item.id, rev } });
+      } else {
+        const antigo = arestasAntes.get(op.item.id);
+        out.push(antigo
+          ? { op: "upsert", tipo: "aresta", item: { ...antigo, rev } }
+          : { op: "remove", tipo: "aresta", item: { id: op.item.id, rev } });
+      }
+    } else if (op.tipo === "no") {
+      const antigo = nosAntes.get(op.item.id);
+      if (!antigo) continue;
+      for (const a of antes.arestas) {
+        if (a.de === op.item.id || a.para === op.item.id) out.push({ op: "upsert", tipo: "aresta", item: { ...a, rev } });
+      }
+      out.push({ op: "upsert", tipo: "no", item: { ...antigo, rev } });
+    } else {
+      const antigo = arestasAntes.get(op.item.id);
+      if (antigo) out.push({ op: "upsert", tipo: "aresta", item: { ...antigo, rev } });
+    }
+  }
+  return out;
+}
+
+type PassoHistorico = { inverso: Op[]; refazer: Op[] };
+
+/** Pilha de desfazer/refazer (limite 100); registrar uma acao nova limpa o refazer. */
+export class Historico {
+  private desfeitos: PassoHistorico[] = [];
+  private refeitos: PassoHistorico[] = [];
+
+  registrar(inverso: Op[], refazer: Op[]): void {
+    this.desfeitos.push({ inverso, refazer });
+    if (this.desfeitos.length > 100) this.desfeitos.shift();
+    this.refeitos = [];
+  }
+
+  desfazer(): Op[] | null {
+    const passo = this.desfeitos.pop();
+    if (!passo) return null;
+    this.refeitos.push(passo);
+    return passo.inverso;
+  }
+
+  refazer(): Op[] | null {
+    const passo = this.refeitos.pop();
+    if (!passo) return null;
+    this.desfeitos.push(passo);
+    return passo.refazer;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Miniatura do canvas (S5 - F1.5, CA-P1)
+// ---------------------------------------------------------------------------
+
+export type MiniRetangulo = { x: number; y: number; w: number; h: number; cor: string };
+export type MiniLinha = { x1: number; y1: number; x2: number; y2: number };
+export type Miniatura = { retangulos: MiniRetangulo[]; linhas: MiniLinha[] };
+
+/** Cor de um no' na miniatura: nota/forma pela paleta, o resto na cor do card. */
+function corMini(no: No): string {
+  if (no.tipo === "nota") return estiloNota(no.dados.cor).fundo;
+  if (no.tipo === "forma") return estiloForma(no.dados.cor).fundo;
+  return "#1c1c1c";
+}
+
+/**
+ * Projecao do grafo numa caixa `largura x altura`: escala uniforme pra caber com margem 4,
+ * centralizado, retangulos por no' e linhas entre centros (arestas com ponta inexistente sao
+ * ignoradas). Vazio -> `{retangulos:[], linhas:[]}`.
+ */
+export function miniatura(s: Snapshot, largura: number, altura: number): Miniatura {
+  if (s.nos.length === 0) return { retangulos: [], linhas: [] };
+  const margem = 4;
+  const minX = Math.min(...s.nos.map((n) => n.x));
+  const minY = Math.min(...s.nos.map((n) => n.y));
+  const maxX = Math.max(...s.nos.map((n) => n.x + n.w));
+  const maxY = Math.max(...s.nos.map((n) => n.y + n.h));
+  const larguraB = maxX - minX;
+  const alturaB = maxY - minY;
+  const escX = larguraB > 0 ? (largura - 2 * margem) / larguraB : Infinity;
+  const escY = alturaB > 0 ? (altura - 2 * margem) / alturaB : Infinity;
+  const bruta = Math.min(escX, escY);
+  const escala = Number.isFinite(bruta) ? bruta : 1;
+  const deslX = margem + (largura - 2 * margem - larguraB * escala) / 2;
+  const deslY = margem + (altura - 2 * margem - alturaB * escala) / 2;
+  const retangulos = s.nos.map((n) => ({
+    x: deslX + (n.x - minX) * escala,
+    y: deslY + (n.y - minY) * escala,
+    w: n.w * escala,
+    h: n.h * escala,
+    cor: corMini(n),
+  }));
+  const porId = new Map(retangulos.map((r, i) => [s.nos[i].id, r]));
+  const linhas: MiniLinha[] = [];
+  for (const a of s.arestas) {
+    const r1 = porId.get(a.de);
+    const r2 = porId.get(a.para);
+    if (!r1 || !r2) continue;
+    linhas.push({ x1: r1.x + r1.w / 2, y1: r1.y + r1.h / 2, x2: r2.x + r2.w / 2, y2: r2.y + r2.h / 2 });
+  }
+  return { retangulos, linhas };
+}

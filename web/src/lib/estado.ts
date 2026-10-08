@@ -231,6 +231,13 @@ function chaveRaiz(p: string): string {
   return raiz(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// Runs do projeto `projeto`: mesma RAIZ do caminho pedido (worktree conta como o projeto), com a
+// mesma canonizacao de chaveRaiz (grafias diferentes de "D:\x" e "d:/x" batem). Ordinal preservado.
+export function runsDoProjeto(runs: Run[], projeto: string): Run[] {
+  const alvo = chaveRaiz(projeto);
+  return runs.filter((r) => r.cwd !== "" && chaveRaiz(r.cwd) === alvo);
+}
+
 // Chats (planejadores) do projeto da run: mesma RAIZ do cwd da run — a run na raiz do projeto ou em
 // qualquer worktree dele ve os chats daquele projeto. Mais recente primeiro (ordem das abas).
 export function chatsDoProjeto(planejadores: Planejador[], cwdRun: string): Planejador[] {

@@ -1,7 +1,7 @@
 // Tela inicial do Canvas (S5): pilha de projetos no estilo Castor. GET /canvas/projetos enquanto os
-// cards ficam empilhados/levemente rotacionados (icone de pasta, nome e fundo pastel conforme a cor).
-// "+ Projeto" e o menu ⋯ (Renomear / Cor) falam com o mesmo POST /canvas/projetos (X-Hermes: 1).
-// Clicar num card chama onAbrir(raiz) e o App troca a tela de projetos pelo <Canvas projeto=...>.
+// cards claros mostram a miniatura do grafo; "+ Projeto" e o menu ⋯ (Renomear / Cor) falam com o
+// mesmo POST /canvas/projetos (X-Hermes: 1). Clicar num card chama onAbrir(raiz) e o App troca a
+// tela de projetos pelo <Canvas projeto=...>.
 import { useEffect, useState } from "react";
 import { Folder, MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,40 +14,93 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { Projeto } from "../../../../canvas.ts";
+import { miniatura } from "@/lib/canvas";
+import type { Projeto, Snapshot } from "../../../../canvas.ts";
 
-// Paleta pastel dos projetos (mesmas cores das notas + laranja, como no Castor).
+// Paleta das faixas de cabecalho dos projetos (mesmas cores das notas + laranja, como no Castor).
 export const CORES_PROJETO = {
-  laranja: "#FFD8B0",
-  amarelo: "#FFF3C4",
-  rosa: "#FFD6E0",
-  lilas: "#E7D8FF",
-  azul: "#D6E8FF",
-  verde: "#D6F5D6",
+  laranja: "#ffb27a",
+  amarelo: "#ffe066",
+  rosa: "#f5c4dc",
+  lilas: "#d6c8f5",
+  azul: "#aabaff",
+  verde: "#bfe8c8",
 } as const;
 
 export type NomeCorProjeto = keyof typeof CORES_PROJETO;
 
+/** Faixa neutra (creme) de um projeto que ainda nao tem cor salva. */
+export const COR_PADRAO = "#efeadd";
+
 // Ordem exibida no menu "Cor" (PT-BR, como o Castor).
 export const NOMES_COR: readonly NomeCorProjeto[] = ["laranja", "amarelo", "rosa", "lilas", "azul", "verde"];
 
-// Rotacao leve alternada: os cards parecem uma pilha colocada a mao (Castor).
-const ROTACOES = ["-rotate-1", "rotate-1", "-rotate-2", "rotate-2"] as const;
+// Rotacao leve alternada: os cards parecem uma pilha colocada a mao (Castor). Zera no hover/foco.
+const ROTACOES = ["-rotate-[1.5deg]", "rotate-[1deg]"] as const;
 
 const ehCor = (v: unknown): v is NomeCorProjeto =>
   typeof v === "string" && (NOMES_COR as readonly string[]).includes(v);
 
-// Cor deterministica quando o projeto ainda nao tem `cor`: sempre a mesma pra mesma raiz.
-function corPadrao(raiz: string): NomeCorProjeto {
-  let h = 0;
-  for (const ch of raiz) h = (h * 31 + ch.charCodeAt(0)) | 0;
-  return NOMES_COR[Math.abs(h) % NOMES_COR.length];
+/** Faixa do cabecalho do projeto: a cor salva quando conhecida; senao, o creme padrao. */
+export function corDoProjeto(p: Projeto): { nome: NomeCorProjeto | null; hex: string } {
+  const nome = ehCor(p.cor) ? p.cor : null;
+  return { nome, hex: nome ? CORES_PROJETO[nome] : COR_PADRAO };
 }
 
-/** Fundo pastel do projeto: usa a `cor` salva quando conhecida; senao, uma cor estavel pela raiz. */
-export function corDoProjeto(p: Projeto): { nome: NomeCorProjeto; hex: string } {
-  const nome = ehCor(p.cor) ? p.cor : corPadrao(p.raiz);
-  return { nome, hex: CORES_PROJETO[nome] };
+/** Dimensoes do corpo do card (px): a miniatura do grafo desenha dentro desta caixa. */
+export const MINI_LARGURA = 220;
+export const MINI_ALTURA = 130;
+
+// ---------------------------------------------------------------------------
+// Miniatura do grafo (CA-P1): busca o snapshot do projeto e projeta nos/arestas em SVG.
+// ---------------------------------------------------------------------------
+
+function Miniatura({ raiz }: { raiz: string }) {
+  const [snap, setSnap] = useState<Snapshot | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    setSnap(null);
+    fetch(`/canvas?projeto=${encodeURIComponent(raiz)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: Snapshot | null) => {
+        if (!vivo || !j) return;
+        if (Array.isArray(j.nos) && Array.isArray(j.arestas)) setSnap({ nos: j.nos, arestas: j.arestas });
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [raiz]);
+
+  const m = snap ? miniatura(snap, MINI_LARGURA, MINI_ALTURA) : null;
+  const vazio = !m || m.retangulos.length === 0;
+
+  return (
+    <svg
+      width={MINI_LARGURA} height={MINI_ALTURA}
+      viewBox={`0 0 ${MINI_LARGURA} ${MINI_ALTURA}`}
+      role="img" aria-label={`Miniatura do canvas de ${raiz}`}
+      className="block"
+    >
+      {vazio ? (
+        <text
+          x={MINI_LARGURA / 2} y={MINI_ALTURA / 2}
+          textAnchor="middle" dominantBaseline="middle"
+          fill="#9a9384" fontSize={13}
+        >
+          Canvas vazio
+        </text>
+      ) : (
+        <>
+          {m.linhas.map((l, i) => (
+            <line key={`l${i}`} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke="#606060" strokeWidth={1.5} />
+          ))}
+          {m.retangulos.map((r, i) => (
+            <rect key={`r${i}`} x={r.x} y={r.y} width={r.w} height={r.h} rx={3} fill={r.cor} />
+          ))}
+        </>
+      )}
+    </svg>
+  );
 }
 
 type Props = { onAbrir: (raiz: string) => void };
@@ -115,29 +168,34 @@ export function Projetos({ onAbrir }: Props) {
   const podeSalvar = !!dlg?.projeto || pasta.trim() !== "";
 
   return (
-    <div className="flex h-full flex-col overflow-auto">
-      <div className="flex shrink-0 items-center justify-between gap-3 px-6 py-4">
+    <div className="cv flex h-full flex-col overflow-auto" style={{ background: "#111" }}>
+      <div className="flex shrink-0 items-start justify-between gap-3 px-8 pt-7 pb-5">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">Projetos</h1>
-          <p className="text-xs text-muted-foreground">Escolha um projeto para abrir o canvas.</p>
+          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#eee", lineHeight: 1.2 }}>Projetos</h1>
+          <p style={{ marginTop: 4, fontSize: 13, color: "#858585" }}>Escolha um projeto para abrir o canvas.</p>
         </div>
-        <Button size="sm" className="gap-1.5" onClick={abrirNovo}>
+        <Button
+          size="sm"
+          className="gap-1.5"
+          style={{ backgroundColor: "#2979ff", color: "#fff" }}
+          onClick={abrirNovo}
+        >
           <Plus className="size-3.5" />Projeto
         </Button>
       </div>
 
       {carregando ? (
-        <p className="px-6 text-sm text-muted-foreground">Carregando projetos…</p>
+        <p className="px-8 text-sm" style={{ color: "#858585" }}>Carregando projetos…</p>
       ) : projetos.length === 0 ? (
         <div className="grid flex-1 place-items-center pb-12">
           <div className="text-center">
-            <Folder className="mx-auto mb-2 size-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">Nenhum projeto ainda.</p>
-            <p className="mt-1 text-xs text-muted-foreground/70">Crie um com "+ Projeto".</p>
+            <Folder className="mx-auto mb-2 size-8" style={{ color: "#858585" }} />
+            <p className="text-sm" style={{ color: "#858585" }}>Nenhum projeto ainda.</p>
+            <p className="mt-1 text-xs" style={{ color: "#6b6b6b" }}>Crie um com "+ Projeto".</p>
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap content-start gap-5 px-6 pb-8">
+        <div className="flex flex-wrap content-start gap-6 px-8 pb-10">
           {projetos.map((p, i) => {
             const { hex } = corDoProjeto(p);
             return (
@@ -150,15 +208,26 @@ export function Projetos({ onAbrir }: Props) {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onAbrir(p.raiz); }
                 }}
-                style={{ backgroundColor: hex }}
                 className={cn(
-                  "group relative flex w-44 cursor-pointer flex-col gap-2 rounded-xl p-3 text-slate-900 shadow-md ring-1 ring-black/10 transition-transform duration-150",
-                  "hover:z-10 hover:rotate-0 hover:shadow-lg focus-visible:rotate-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  "group flex w-fit cursor-pointer flex-col overflow-hidden transition-transform duration-150 ease-out",
+                  "hover:z-10 hover:rotate-0 focus-visible:rotate-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2979ff]",
                   ROTACOES[i % ROTACOES.length],
                 )}
+                style={{
+                  background: "#f7f4ec",
+                  border: "1px solid #e5e0d4",
+                  borderRadius: 12,
+                  boxShadow: "0 2px 5px #07132626, 0 18px 30px -8px #07132666",
+                }}
               >
-                <div className="flex items-start justify-between">
-                  <Folder className="size-7 text-slate-700" strokeWidth={1.75} />
+                <header className="flex items-center gap-2 px-3" style={{ height: 40, background: hex }}>
+                  <Folder className="size-4 shrink-0" style={{ color: "#2b2b2b" }} strokeWidth={1.9} />
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    style={{ color: "#2b2b2b", fontSize: 14, fontWeight: 600 }}
+                  >
+                    {p.nome}
+                  </span>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -166,7 +235,8 @@ export function Projetos({ onAbrir }: Props) {
                         title="Opções do projeto"
                         aria-label={`Opções de ${p.nome}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="rounded p-1 text-slate-700/70 hover:bg-black/10 hover:text-slate-900"
+                        className="grid size-6 shrink-0 place-items-center rounded hover:bg-black/10"
+                        style={{ color: "#2b2b2b" }}
                       >
                         <MoreHorizontal className="size-4" />
                       </button>
@@ -190,10 +260,9 @@ export function Projetos({ onAbrir }: Props) {
                       </DropdownMenuSub>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{p.nome}</p>
-                  <p className="truncate text-[11px] text-slate-700/80">{p.raiz}</p>
+                </header>
+                <div style={{ lineHeight: 0 }}>
+                  <Miniatura raiz={p.raiz} />
                 </div>
               </div>
             );
