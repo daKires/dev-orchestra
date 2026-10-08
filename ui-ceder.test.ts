@@ -150,3 +150,21 @@ test("corrida (pararUI): reconexao em voo nao abre ponte depois de pararUI", asy
   await new Promise((r) => setTimeout(r, 1500)); // o /doc lento responde aqui
   assert.deepEqual(eventos, [], "nenhuma ponte aberta depois de pararUI");
 });
+
+test("assumirPorta: o app reaberto toma a porta de volta de outro hub (hermes com o app aberto)", async (t) => {
+  await ui.iniciarUI({ sempreAssumir: true, subirServe: async () => ({ base: "http://127.0.0.1:1", pid: 1 }), matarProcesso: () => {} } as any);
+  t.after(() => ui.pararUI());
+  assert.equal((await post("/ceder", {})).status, 204); // um hub stdio pegou a porta (simulado abaixo)
+  await new Promise((r) => setTimeout(r, 200));
+  let cedeu = false;
+  const outro = http.createServer((req, res) => {
+    if (req.url === "/versao") { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ versao: 1 })); return; }
+    if (req.url === "/ceder") { res.writeHead(204); res.end(); cedeu = true; setTimeout(() => { outro.closeAllConnections(); outro.close(); }, 20); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((ok) => outro.listen(PORTA, "127.0.0.1", () => ok()));
+  await ui.assumirPorta();
+  assert.ok(cedeu, "pediu pro outro hub ceder");
+  const r = await fetch(BASE + "/versao");
+  assert.ok((await r.json() as { versao: number }).versao !== 1, "a porta voltou pro hub do app");
+});
