@@ -44,14 +44,15 @@ export type SettingsHooks = { hooks: Record<"UserPromptSubmit" | "Stop" | "Notif
  * prompt, ocioso ao parar e aguardando em Notification (CA-4e).
  */
 export function settingsHooks(id: string, token: string): SettingsHooks {
-  const ev = (status: string): HookMatcher[] => [
-    { matcher: "", hooks: [{ type: "command", command: `canvas --eu ${id}:${token} status ${status}` }] },
+  const ev = (status: string, matcher = ""): HookMatcher[] => [
+    { matcher, hooks: [{ type: "command", command: `canvas --eu ${id}:${token} status ${status}` }] },
   ];
   return {
     hooks: {
       UserPromptSubmit: ev("ocupado"),
       Stop: ev("ocioso"),
-      Notification: ev("aguardando"),
+      // So' o prompt de permissao: aviso de inatividade/login tambem e' Notification e travaria a fila.
+      Notification: ev("aguardando", "permission_prompt"),
     },
   };
 }

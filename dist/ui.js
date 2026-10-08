@@ -1111,7 +1111,7 @@ function subirPtyClaude(a, continuar) {
         comando: "claude",
         args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
         cwd: a.cwd,
-        env: envClaude(),
+        env: { ...envClaude(), HERMES_EU: `${a.id}:${a.token}` }, // um processo por agente: `canvas` ja' sai identificado
         cols: tamanhoPty.get(a.id)?.cols ?? 120,
         rows: tamanhoPty.get(a.id)?.rows ?? 32,
     });

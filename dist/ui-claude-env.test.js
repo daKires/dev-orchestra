@@ -28,6 +28,7 @@ test("tamanho do xterm vai pro PTY e e' reusado no retomar", async (t) => {
     const post = (u, b) => fetch(BASE + u, { method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify(b) });
     const { id } = await (await post("/agentes", { projeto: cwd, cwd, tipo: "claude", papel: "livre" })).json();
     assert.equal(spawns[0].env.CLAUDECODE, undefined, "spawn sem as variaveis da sessao");
+    assert.match(String(spawns[0].env.HERMES_EU), new RegExp("^" + id + ":"), "canvas do claude ja sai identificado");
     assert.equal((await post(`/agentes/${id}/tamanho`, { cols: 80, rows: 24 })).status, 204);
     assert.deepEqual(tamanhos, [[80, 24]]);
     assert.equal((await post(`/agentes/${id}/tamanho`, { cols: 2, rows: 24 })).status, 400);
