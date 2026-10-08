@@ -1,18 +1,21 @@
 // Electron main (F4 S5): janela do app Hermes, ponte do preload e protecao das webviews.
 // Compilado pra dist-desktop/ (ESM: o package.json do repo e' "type": "module").
-import { app, BrowserWindow, type Session, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, type Session, type WebContents } from "electron";
+import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { criarDriverCDP } from "./cdp.js";
 import { criarDriverPty } from "./pty.js";
 
 // dist-desktop/ (onde este arquivo compila) e o repo (pai de dist-desktop, ou HERMES_REPO).
 const DIR_DESKTOP = path.dirname(fileURLToPath(import.meta.url));
-const REPO = process.env.HERMES_REPO || path.resolve(DIR_DESKTOP, "..");
+// Empacotado, o pai de dist-desktop e' o app.asar: o repo vem do HERMES_REPO ou do dialogo (resolverRepo).
+let REPO = process.env.HERMES_REPO || (app.isPackaged ? "" : path.resolve(DIR_DESKTOP, ".."));
 const PORTA = process.env.HERMES_UI_PORT || "4123";
 
 // Drives injetados no hub (dist/ui.js -> iniciarUI): navegador por CDP e PTY dos agentes Claude.
-const navegador = criarDriverCDP(REPO);
+let navegador: ReturnType<typeof criarDriverCDP>; // criado depois do resolverRepo (precisa do repo)
 const pty = criarDriverPty();
 
 let janela: BrowserWindow | null = null;
@@ -23,7 +26,23 @@ let ui: any = null; // modulo dist/ui.js (para chamar pararUI antes de sair)
 const sessoesComDownload = new WeakSet<Session>();
 
 // Sobe o hub (dist/ui.js) na porta da UI, assumindo a porta de qualquer hub Hermes anterior.
+// Sem HERMES_REPO no app instalado: pede a pasta do mcp-hermes-bridge uma vez e grava (setx).
+async function resolverRepo(): Promise<boolean> {
+  const valido = (p: string) => !!p && fs.existsSync(path.join(p, "dist", "ui.js"));
+  if (valido(REPO)) return true;
+  const r = await dialog.showOpenDialog({ title: "Onde está a pasta do mcp-hermes-bridge?", properties: ["openDirectory"] });
+  const p = r.filePaths[0] ?? "";
+  if (r.canceled || !valido(p)) {
+    dialog.showErrorBox("Hermes", "Pasta do mcp-hermes-bridge não encontrada (precisa ter dist/ui.js). Rode o install.ps1 do repositório.");
+    return false;
+  }
+  REPO = p;
+  execFile("setx", ["HERMES_REPO", p], () => {});
+  return true;
+}
+
 async function subirHub(): Promise<void> {
+  navegador = criarDriverCDP(REPO);
   ui = await import(pathToFileURL(path.join(REPO, "dist", "ui.js")).href);
   await ui.iniciarUI({ sempreAssumir: true, navegador, pty });
 }
@@ -103,6 +122,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     try {
+      if (!(await resolverRepo())) { app.quit(); return; }
       await subirHub();
       await criarJanela();
     } catch (e) {
