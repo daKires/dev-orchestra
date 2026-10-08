@@ -31,6 +31,7 @@ export function tomStatus(st: string): { texto: string; ponto: string; rotulo: s
     case "COMPLETE": case "ok": return { texto: "text-ok", ponto: "bg-ok", rotulo: st === "ok" ? "ok" : "completa" };
     case "NEEDS-REVIEW": case "incompleta": return { texto: "text-warn", ponto: "bg-warn", rotulo: st === "incompleta" ? "incompleta" : "revisar" };
     case "GATE-FAILED": return { texto: "text-err", ponto: "bg-err", rotulo: "gate falhou" };
+    case "ENV-FAILED": return { texto: "text-err", ponto: "bg-err", rotulo: "ambiente" };
     case "FAILED": return { texto: "text-err", ponto: "bg-err", rotulo: "falhou" };
     case "CANCELED": return { texto: "text-muted-foreground", ponto: "bg-muted-foreground", rotulo: "cancelada" };
     case "INTERROMPIDA": return { texto: "text-err", ponto: "bg-err", rotulo: "interrompida" };
