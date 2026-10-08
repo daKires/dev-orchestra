@@ -304,6 +304,26 @@
   font: 400 12px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Balão de conversa (F3 S4): pilula azulada #19253a com texto #cfe0ff sobre a aresta animada. */
+.cv .cv-rotulo-conversa {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #19253a;
+  border: 1px solid var(--cv-aresta-ativa);
+  border-radius: 9999px;
+  padding: 1px 8px;
+  color: #cfe0ff;
+  font: 400 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Aresta em conversa no sentido reverso (F3 S4): inverte a animacao do tracejado azul. */
+.cv .react-flow .react-flow__edge.cv-anim-reversa.animated .react-flow__edge-path {
+  animation-direction: reverse;
+}
+
 /* Menu (Radix porta pro body, fora de `.cv`): escuro no mesmo tom do canvas. */
 .cv-menu {
   background: #222;

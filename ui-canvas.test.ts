@@ -23,6 +23,7 @@ const DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-canvas-"));
 process.env.HERMES_UI_PORT = String(PORTA);
 process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-planc-"));
 process.env.HERMES_CANVAS_DIR = DIR;
+process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("./ui.js");
 const canvas = await import("./canvas.js");
 

@@ -3,7 +3,7 @@
 // quando !conectado (bloquear). A criacao em si (clique/arrasto) mora no Canvas.
 import { useRef, type ChangeEvent, type ReactNode } from "react";
 import {
-  ArrowUpRight, Bot, Circle, Diamond, Frame, Hand, Image as ImageIcon,
+  ArrowUpRight, Bot, Circle, Diamond, Frame, Globe, Hand, Image as ImageIcon,
   MousePointer2, Square, StickyNote, Type,
 } from "lucide-react";
 import {
@@ -22,6 +22,8 @@ type Props = {
   onImagem: (arquivo: File) => void;
   /** Abre o dialog de criar um agente (atalho A). */
   onAgente: () => void;
+  /** Abre o dialog de criar um navegador (atalho B). */
+  onNavegador: () => void;
 };
 
 const TAM = 36; // icone de 36px (Castor)
@@ -56,7 +58,7 @@ function Botao({ titulo, ativo, disabled, onClick, children }: {
   );
 }
 
-export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente }: Props) {
+export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador }: Props) {
   const arquivo = useRef<HTMLInputElement | null>(null);
 
   const escolherArquivo = (e: ChangeEvent<HTMLInputElement>) => {
@@ -131,6 +133,9 @@ export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, o
       </Botao>
       <Botao titulo="+ Agente (A)" disabled={bloquear} onClick={onAgente}>
         <Bot className="size-4" />
+      </Botao>
+      <Botao titulo="+ Navegador (B)" disabled={bloquear} onClick={onNavegador}>
+        <Globe className="size-4" />
       </Botao>
     </div>
   );

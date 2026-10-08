@@ -1,3 +1,5 @@
 web/node_modules/
 node_modules/
 .claude/
+dist-desktop/
+release/

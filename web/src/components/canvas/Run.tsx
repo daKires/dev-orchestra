@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
 import { Alcas } from "./Nos";
+import { ModalArquivo } from "./Explorador";
 import type { No } from "../../../../canvas.ts";
 
 // ---------------------------------------------------------------------------
@@ -155,22 +156,38 @@ function NoWorker({ data, selected }: NodeProps) {
   );
 }
 
-/** Arquivo: card compacto (icone FileCode + nome + "alterado"); clique abre o diff. */
+/**
+ * Arquivo: card compacto (icone FileCode + nome + legenda). Quando o no' e' de uma run, o clique abre
+ * o diff. Quando o no' veio de um agente (dados.agenteId + dados.caminho, ex.: publicados por `canvas
+ * file` ou arrastados do Explorador), o clique abre a MESMA previa do Explorador.
+ */
 function NoArquivo({ data, selected }: NodeProps) {
   const { abrirDiff } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const arquivo = texto(no.dados.arquivo);
+  const agenteId = texto(no.dados.agenteId);
+  const caminho = texto(no.dados.caminho);
+  const status = texto(no.dados.status);
+  const doAgente = !!agenteId && !!caminho;
+  const nome = nomeDoArquivo(doAgente ? caminho : arquivo);
+  const [preview, setPreview] = useState(false);
+  const abrir = () => { if (doAgente) setPreview(true); else abrirDiff(runId, arquivo); };
   return (
-    <div className={cn("flex h-full w-full cursor-pointer items-center gap-2 overflow-hidden px-2.5", selected && "cv-sel")}
-      style={moldura} title={arquivo} onClick={() => abrirDiff(runId, arquivo)}>
-      <FileCode className="size-4 shrink-0" style={{ color: AZUL }} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-bold" style={{ color: "#eee", fontSize: 15 }}>{nomeDoArquivo(arquivo)}</div>
-        <div style={{ color: VERDE, fontSize: 12 }}>alterado</div>
+    <>
+      <div className={cn("flex h-full w-full cursor-pointer items-center gap-2 overflow-hidden px-2.5", selected && "cv-sel")}
+        style={moldura} title={doAgente ? caminho : arquivo} onClick={abrir}>
+        <FileCode className="size-4 shrink-0" style={{ color: AZUL }} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-bold" style={{ color: "#eee", fontSize: 15 }}>{nome}</div>
+          <div style={{ color: VERDE, fontSize: 12 }}>{doAgente ? (status || "referência") : "alterado"}</div>
+        </div>
+        <Alcas />
       </div>
-      <Alcas />
-    </div>
+      {doAgente && (
+        <ModalArquivo aberto={preview} agenteId={agenteId} caminho={caminho} onFechar={() => setPreview(false)} />
+      )}
+    </>
   );
 }
 
