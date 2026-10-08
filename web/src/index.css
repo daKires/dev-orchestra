@@ -134,3 +134,53 @@
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Tema do canvas (@xyflow/react) no mesmo escuro do app: fundo, pontos discretos, arestas cinza e
+   alcas pequenas/apagadas. As variaveis --xy-* sobrescrevem as *-default do pacote (que so' entram
+   como fallback), entao valem independente da ordem dos imports de CSS. */
+.react-flow {
+  --xy-background-color: var(--background);
+  /* cor dos pontos: o pacote resolve var(--xy-background-pattern-color) antes do *-dots-color-default */
+  --xy-background-pattern-color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-stroke-width: 1.25;
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-connectionline-stroke: var(--primary);
+  --xy-handle-background-color: var(--muted-foreground);
+  --xy-handle-border-color: var(--background);
+  --xy-selection-background-color: color-mix(in oklab, var(--primary) 12%, transparent);
+  --xy-selection-border: 1px dashed var(--primary);
+  --xy-edge-label-background-color: var(--popover);
+  --xy-edge-label-color: var(--popover-foreground);
+  --xy-resize-background-color: var(--primary);
+  background-color: var(--xy-background-color);
+}
+.react-flow__background {
+  background-color: var(--xy-background-color);
+}
+.react-flow .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+}
+.react-flow .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--primary);
+}
+.react-flow .react-flow__handle {
+  min-width: 6px;
+  min-height: 6px;
+  width: 6px;
+  height: 6px;
+  border-width: 1px;
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+.react-flow .react-flow__handle:hover,
+.react-flow .react-flow__handle.connectingfrom,
+.react-flow .react-flow__handle.connectionindicator {
+  opacity: 1;
+}
+.react-flow .react-flow__attribution {
+  background: transparent;
+}
+.react-flow .react-flow__attribution a {
+  color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+}

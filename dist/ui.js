@@ -9,10 +9,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
+import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps } from "./canvas.js";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
 export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
+// Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
+export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(os.tmpdir(), "hermes", "canvas");
 // Pasta onde os anexos de POST /nova-feature sao gravados (uma subpasta por pedido). Injetavel por env.
 export const ANEXOS_DIR = process.env.HERMES_ANEXOS_DIR || path.join(os.tmpdir(), "hermes", "anexos");
 // POST /nova-feature carrega anexos em base64 (inflam ~33%): teto proprio bem maior que o padrao de 64KB.
@@ -451,6 +454,177 @@ export function validarNovaFeature(body) {
 }
 function broadcast(dado) { for (const c of clientes)
     sse(c, dado); }
+// ---- canvas (S2): grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
+const LIMITE_BODY_CANVAS = 2 * 1024 * 1024; // 2MB: lotes de ops
+const LIMITE_BODY_CANVAS_ASSET = 40 * 1024 * 1024; // 40MB: imagem em base64 (infla ~33%)
+const CANVAS_DEBOUNCE_MS = 300; // gravacao em disco com debounce
+const canvasCache = new Map(); // idProjeto -> snapshot em memoria
+const canvasTimers = new Map(); // idProjeto -> gravacao pendente
+// Content-type das imagens servidas em GET /canvas/asset (so' imagem entra no canvas).
+const TIPOS_IMG = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp", ".svg": "image/svg+xml", ".avif": "image/avif", ".ico": "image/x-icon",
+};
+function arquivoCanvas(id) { return path.join(CANVAS_DIR, id, "canvas.json"); }
+// Cache por projeto: no primeiro acesso (ou apos restart) le do disco; projeto novo = vazio.
+function lerCanvas(id) {
+    const emCache = canvasCache.get(id);
+    if (emCache)
+        return emCache;
+    let s = { nos: [], arestas: [] };
+    try {
+        const j = JSON.parse(fs.readFileSync(arquivoCanvas(id), "utf8"));
+        if (j && Array.isArray(j.nos) && Array.isArray(j.arestas))
+            s = { nos: j.nos, arestas: j.arestas };
+    }
+    catch { }
+    canvasCache.set(id, s);
+    return s;
+}
+function gravarCanvasAgora(id) {
+    const s = canvasCache.get(id);
+    if (!s)
+        return;
+    try {
+        fs.mkdirSync(path.join(CANVAS_DIR, id), { recursive: true });
+        fs.writeFileSync(arquivoCanvas(id), JSON.stringify(s));
+    }
+    catch { }
+}
+// Debounce ~300ms: rajadas de ops (arrastar varios nos) viram UMA gravacao.
+function gravarCanvasDebounced(id) {
+    const t = canvasTimers.get(id);
+    if (t)
+        clearTimeout(t);
+    const timer = setTimeout(() => { canvasTimers.delete(id); gravarCanvasAgora(id); }, CANVAS_DEBOUNCE_MS);
+    timer.unref?.();
+    canvasTimers.set(id, timer);
+}
+// Grava o que estiver pendente (chamado no pararUI pra nao perder ops na janela do debounce).
+function descarregarCanvas() {
+    for (const [id, t] of canvasTimers) {
+        clearTimeout(t);
+        gravarCanvasAgora(id);
+    }
+    canvasTimers.clear();
+}
+// Raizes descobertas: cwd das runs EM MEMORIA + raiz dos planejadores.
+function raizesDescobertas() {
+    const out = [];
+    for (const evs of estado.values())
+        for (const ev of evs)
+            if (ev.t === "run" && ev.cwd)
+                out.push(ev.cwd);
+    for (const p of planejadores)
+        out.push(p.raiz);
+    return out;
+}
+function lerProjetosSalvos() {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(CANVAS_DIR, "projetos.json"), "utf8"));
+        if (!Array.isArray(j))
+            return [];
+        return j
+            .filter((p) => p && typeof p.raiz === "string" && typeof p.nome === "string")
+            .map((p) => (typeof p.cor === "string" ? { raiz: p.raiz, nome: p.nome, cor: p.cor } : { raiz: p.raiz, nome: p.nome }));
+    }
+    catch {
+        return [];
+    }
+}
+function gravarProjetosSalvos(salvos) {
+    try {
+        fs.mkdirSync(CANVAS_DIR, { recursive: true });
+        fs.writeFileSync(path.join(CANVAS_DIR, "projetos.json"), JSON.stringify(salvos));
+    }
+    catch { }
+}
+function nomeBase(raiz) {
+    const base = raiz.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
+    return base || raiz;
+}
+// Upsert por idProjeto: mesma raiz (grafias diferentes) nao duplica; campo ausente preserva o salvo.
+function salvarProjeto(raiz, nome, cor) {
+    const id = idProjeto(raiz);
+    const salvos = lerProjetosSalvos();
+    const i = salvos.findIndex((p) => idProjeto(p.raiz) === id);
+    const atual = i >= 0 ? salvos[i] : undefined;
+    const nomeLimpo = typeof nome === "string" ? nome.trim() : "";
+    const novo = { raiz: atual?.raiz ?? raiz, nome: nomeLimpo || atual?.nome || nomeBase(raiz) };
+    const corLimpa = typeof cor === "string" ? cor.trim() : "";
+    if (corLimpa)
+        novo.cor = corLimpa;
+    else if (atual?.cor !== undefined)
+        novo.cor = atual.cor;
+    if (i >= 0)
+        salvos[i] = novo;
+    else
+        salvos.push(novo);
+    gravarProjetosSalvos(salvos);
+}
+// Le o corpo de um POST com teto de bytes; null = estourou o limite (o chamador responde 400).
+function lerCorpo(req, limite) {
+    return new Promise((ok) => {
+        let corpo = "";
+        let cortou = false;
+        req.on("data", (d) => {
+            if (cortou)
+                return;
+            corpo += d.toString();
+            if (Buffer.byteLength(corpo) > limite) {
+                cortou = true;
+                ok(null);
+            }
+        });
+        req.on("end", () => { if (!cortou)
+            ok(corpo); });
+        req.on("error", () => { if (!cortou) {
+            cortou = true;
+            ok(null);
+        } });
+    });
+}
+// GET /canvas/asset/<idProjeto>/<arquivo>: so' imagem, id hex, recusa traversal e inexistente -> 404.
+function servirCanvasAsset(caminho, res) {
+    const resto = caminho.slice("/canvas/asset/".length);
+    const barra = resto.indexOf("/");
+    if (barra < 0) {
+        res.writeHead(404);
+        res.end();
+        return;
+    }
+    let id = resto.slice(0, barra);
+    let arquivo = resto.slice(barra + 1);
+    try {
+        id = decodeURIComponent(id);
+        arquivo = decodeURIComponent(arquivo);
+    }
+    catch {
+        res.writeHead(400);
+        res.end();
+        return;
+    }
+    if (!/^[0-9a-f]+$/i.test(id)) {
+        res.writeHead(400);
+        res.end();
+        return;
+    }
+    if (!arquivo || /[\\/]/.test(arquivo) || arquivo.includes("..")) {
+        res.writeHead(400);
+        res.end();
+        return;
+    }
+    const alvo = path.join(CANVAS_DIR, id, "assets", arquivo);
+    fs.readFile(alvo, (err, buf) => {
+        if (err) {
+            res.writeHead(404);
+            res.end();
+            return;
+        }
+        res.writeHead(200, { "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream" });
+        res.end(buf);
+    });
+}
 // Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
 const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
 const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
@@ -525,13 +699,16 @@ function ceder() {
         catch { }
         watcher = null;
     }
+    descarregarCanvas(); // grava ops pendentes antes de ceder a porta
+    servidor?.closeAllConnections(); // derruba as conexoes keep-alive do servidor antigo (nao reusa socket morto)
     servidor?.close();
     servidor = null;
     onCeder?.();
 }
 function criarServidor() {
-    return http.createServer((req, res) => {
+    return http.createServer(async (req, res) => {
         const url = req.url || "/";
+        const caminho = url.split("?")[0];
         if (url === "/events") {
             res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
             res.write(": conectado\n\n");
@@ -543,6 +720,10 @@ function criarServidor() {
             req.on("close", () => clientes.delete(c));
             return;
         }
+        // Toda resposta que NAO e' SSE sai SEM keep-alive: o socket morre junto com a resposta e o cliente
+        // (undici) nunca reaproveita uma conexao do servidor antigo depois de um restart/ceder de porta
+        // (evita ECONNRESET no primeiro pedido pos-restart).
+        res.shouldKeepAlive = false;
         if (url === "/versao") {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ versao: versaoUI() }));
@@ -642,6 +823,129 @@ function criarServidor() {
             });
             return;
         }
+        // ---- canvas (S2) ----
+        if (caminho === "/canvas/op") {
+            // Drena o corpo ANTES de responder 400: corpo sem ler deixa a conexao suja (reset no cliente).
+            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS);
+            if (corpo === null) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            if (!acaoValida(req)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            let j = null;
+            try {
+                j = JSON.parse(corpo);
+            }
+            catch { }
+            const projeto = j && typeof j.projeto === "string" ? j.projeto.trim() : "";
+            const ops = j ? validarOps(j.ops) : null;
+            if (!projeto || !ops) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            const id = idProjeto(projeto);
+            canvasCache.set(id, aplicarOps(lerCanvas(id), ops));
+            gravarCanvasDebounced(id);
+            broadcast({ canvasOp: { projeto, ops } });
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+        if (caminho === "/canvas/asset") {
+            // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+            const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS_ASSET);
+            if (corpo === null) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            if (!acaoValida(req)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            let j = null;
+            try {
+                j = JSON.parse(corpo);
+            }
+            catch { }
+            const projeto = j && typeof j.projeto === "string" ? j.projeto.trim() : "";
+            const v = j ? validarAsset(j.nome, j.dadosB64) : null;
+            if (!projeto || !v) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            const id = idProjeto(projeto);
+            const arquivo = randomUUID() + "." + v.ext;
+            try {
+                fs.mkdirSync(path.join(CANVAS_DIR, id, "assets"), { recursive: true });
+                fs.writeFileSync(path.join(CANVAS_DIR, id, "assets", arquivo), v.bytes);
+            }
+            catch {
+                res.writeHead(500);
+                res.end();
+                return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ url: `/canvas/asset/${id}/${arquivo}` }));
+            return;
+        }
+        if (caminho.startsWith("/canvas/asset/")) {
+            servirCanvasAsset(caminho, res);
+            return;
+        }
+        if (caminho === "/canvas/projetos") {
+            if (req.method === "POST") {
+                // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+                const corpo = await lerCorpo(req, LIMITE_BODY);
+                if (corpo === null) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
+                if (!acaoValida(req)) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
+                let j = null;
+                try {
+                    j = JSON.parse(corpo);
+                }
+                catch { }
+                const raiz = j && typeof j.raiz === "string" ? j.raiz.trim() : "";
+                if (!raiz) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
+                salvarProjeto(raiz, j.nome, j.cor);
+                res.writeHead(204);
+                res.end();
+                return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(mesclarProjetos(raizesDescobertas(), lerProjetosSalvos())));
+            return;
+        }
+        if (caminho === "/canvas") {
+            const projeto = new URL(url, "http://x").searchParams.get("projeto") || "";
+            if (!projeto) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(lerCanvas(idProjeto(projeto))));
+            return;
+        }
         servirEstatico(url, res);
     });
 }
@@ -733,6 +1037,7 @@ export function pararUI() {
         catch { }
         watcher = null;
     }
+    descarregarCanvas(); // grava ops pendentes do debounce antes de desligar
     for (const c of clientes) {
         try {
             c.res.end();
@@ -740,6 +1045,7 @@ export function pararUI() {
         catch { }
     }
     clientes.clear();
+    servidor?.closeAllConnections(); // fecha conexoes abertas antes do close: o proximo servidor nao herda socket morto
     servidor?.close();
     servidor = null;
     onCeder = null;

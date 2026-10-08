@@ -8,7 +8,7 @@ export function StatusIcon({ status, className }: { status: string; className?: 
     case "rodando": return <LoaderCircle className={cn(c, "animate-spin text-run")} />;
     case "ok": case "COMPLETE": return <CircleCheck className={cn(c, "text-ok")} />;
     case "incompleta": case "NEEDS-REVIEW": case "COMMIT-SKIP": return <TriangleAlert className={cn(c, "text-warn")} />;
-    case "GATE-FAILED": case "FAILED": case "INTERROMPIDA": return <CircleX className={cn(c, "text-err")} />;
+    case "GATE-FAILED": case "ENV-FAILED": case "FAILED": case "INTERROMPIDA": return <CircleX className={cn(c, "text-err")} />;
     case "CANCELED": return <Ban className={cn(c, "text-muted-foreground")} />;
     case "pulada": return <CircleMinus className={cn(c, "text-muted-foreground/60")} />;
     default: return <CircleDashed className={cn(c, "text-muted-foreground/50")} />;
