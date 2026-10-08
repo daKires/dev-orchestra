@@ -2652,6 +2652,13 @@ export async function iniciarUI(opts = {}) {
                 void tentarAssumir(); }); }, 10_000);
     reassumir.unref();
 }
+// App reaberto (`hermes` com o app ja' aberto): retoma a porta na hora se um hub stdio ficou com ela.
+export async function assumirPorta() {
+    if (servidor)
+        return;
+    if (!(await escutar()))
+        await tentarAssumir();
+}
 // Encerra o servidor/watcher e limpa TODOS os intervalos (rescan, reassumir, limpeza). Usado nos testes.
 export function pararUI() {
     if (intervalo) {
