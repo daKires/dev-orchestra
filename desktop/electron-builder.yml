@@ -19,3 +19,5 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: false
   createStartMenuShortcut: true
+npmRebuild: false
+nodeGypRebuild: false
