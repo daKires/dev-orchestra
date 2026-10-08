@@ -6,8 +6,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { Ellipsis, MessagesSquare, X } from "lucide-react";
-import { Alcas } from "./Nos";
+import { Ellipsis, MessagesSquare, Pin, X } from "lucide-react";
+import { Alcas, CanvasCtx } from "./Nos";
 import { cn } from "@/lib/utils";
 import { ehLinhaColab } from "@/lib/colab";
 import {
@@ -111,6 +111,9 @@ const idDoNo = (data: unknown): string => {
   return no && typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
 };
 
+/** No' do modelo guardado em props.data (o card le' dados.fixado daqui). */
+export const noDoDado = (data: unknown): No | undefined => (data as { no?: No }).no;
+
 /**
  * Select pequeno do modelo no rodape: a lista (GET /agentes/modelos?cwd=) e' carregada ao focar/abrir
  * (uma vez por cwd) e trocar chama acoes.trocarModelo. O modelo atual entra na lista pra nunca sumir.
@@ -151,7 +154,9 @@ function SelectModelo({ agenteId, modelo, cwd, acoes }: {
 /** No' do agente: cabecalho com status, banner do OpenCode, transcricao rolavel e input. */
 export function NoAgente({ id, data, selected }: NodeProps) {
   const { agentes, linhasPorId, acoes, onFechar } = useContext(AgentesCtx);
+  const { fixar } = useContext(CanvasCtx);
   const agenteId = idDoNo(data);
+  const fixado = noDoDado(data)?.dados.fixado === true;
   const agente = agentes.find((a) => a.id === agenteId);
   const linhas = linhasPorId[agenteId] ?? [];
   const [texto, setTexto] = useState("");
@@ -197,6 +202,7 @@ export function NoAgente({ id, data, selected }: NodeProps) {
       >
         <span className={cn("size-2 shrink-0 rounded-full", ocupado && "animate-pulse")} style={{ background: cor }} title={status} />
         <span className="truncate">{agente?.nome ?? (agenteId || "agente")}</span>
+        {fixado && <Pin className="size-3.5 shrink-0" style={{ color: "#74aaff" }} aria-label="Fixado" />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" title="Opções" className="nodrag ml-auto grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: "#858585" }}>
@@ -207,6 +213,10 @@ export function NoAgente({ id, data, selected }: NodeProps) {
             <DropdownMenuItem onSelect={() => { if (agenteId) acoes.carregarHistorico(agenteId); }}>Recarregar histórico</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => { if (agenteId) acoes.abortar(agenteId); }}>Interromper</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => { if (agenteId) acoes.explorador?.(agenteId); }}>+ Explorador</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => fixar(id)}>
+              <Pin className="size-3.5" style={{ color: "#74aaff" }} />
+              {fixado ? "Desafixar" : "Fixar"}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <button type="button" title="Fechar" onClick={() => onFechar(id, agenteId)} className="nodrag grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: "#858585" }}>

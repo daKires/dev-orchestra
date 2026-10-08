@@ -3,7 +3,7 @@
 // do preload) o card so' mostra o aviso "Abra no app Hermes para usar este card".
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { ArrowLeft, ArrowRight, Ellipsis, RotateCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Ellipsis, Pin, RotateCw, X } from "lucide-react";
 import { Alcas, CanvasCtx } from "./Nos";
 import { cn } from "@/lib/utils";
 import { emDesktop, idProjetoFront, particaoDoProjeto, type ElementoWebview } from "@/lib/desktop";
@@ -50,8 +50,9 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
   const acoes = useContext(CanvasCtx);
   const projeto = useContext(ProjetoCtx);
   const no = (data as { no?: No }).no;
-  const d = (no?.dados ?? {}) as { nome?: string; url?: string };
+  const d = (no?.dados ?? {}) as { nome?: string; url?: string; fixado?: boolean };
   const nome = d.nome ?? "Navegador";
+  const fixado = d.fixado === true;
   const desktop = emDesktop(typeof window === "undefined" ? undefined : window);
   const [url, setUrl] = useState(d.url ?? "");
   const [idProjeto, setIdProjeto] = useState("");
@@ -126,6 +127,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
       >
         <span className="size-2 shrink-0 rounded-full" style={{ background: VERMELHO }} title="navegador" />
         <span className="truncate">{nome}</span>
+        {fixado && <Pin className="size-3.5 shrink-0" style={{ color: "#74aaff" }} aria-label="Fixado" />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" title="Opções" className="nodrag ml-auto grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: CINZA }}>
@@ -135,6 +137,10 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
           <DropdownMenuContent align="end" className="cv-menu min-w-40">
             <DropdownMenuItem onSelect={() => { if (particao) window.hermesDesktop?.limparDados(particao); }}>
               Limpar dados
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => acoes.fixar(id)}>
+              <Pin className="size-3.5" style={{ color: "#74aaff" }} />
+              {fixado ? "Desafixar" : "Fixar"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

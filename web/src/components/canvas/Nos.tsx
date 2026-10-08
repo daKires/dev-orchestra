@@ -7,14 +7,15 @@ import {
   BaseEdge, EdgeLabelRenderer, Handle, NodeResizer, Position, getBezierPath,
   type EdgeProps, type NodeProps,
 } from "@xyflow/react";
-import { Check, Ellipsis, FileText, Image as ImageIcon, X } from "lucide-react";
+import { Check, Ellipsis, FileText, Image as ImageIcon, Pin, X } from "lucide-react";
 import {
   CORES_FORMA, CORES_NOTA, estiloForma, estiloNota, mdBlocos, type Trecho,
 } from "@/lib/canvas";
 import { cn } from "@/lib/utils";
 import type { EmConversa } from "@/lib/colab";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { No } from "../../../../canvas.ts";
 
@@ -30,13 +31,15 @@ export type CanvasAcoes = {
   removerNo: (id: string) => void;
   redimensionar: (id: string, largura: number, altura: number) => void;
   rotular: (id: string, rotulo: string) => void;
+  /** Alterna dados.fixado do no' (card fixado fica de fora do auto-organizar). */
+  fixar: (id: string) => void;
   arestaEditando: string | null;
   editarAresta: (id: string | null) => void;
 };
 
 export const CanvasCtx = createContext<CanvasAcoes>({
   nos: [], bloquear: true,
-  editar: () => {}, removerNo: () => {}, redimensionar: () => {}, rotular: () => {},
+  editar: () => {}, removerNo: () => {}, redimensionar: () => {}, rotular: () => {}, fixar: () => {},
   arestaEditando: null, editarAresta: () => {},
 });
 
@@ -61,8 +64,19 @@ const ROTULO_COR: Record<string, string> = {
 /** Cores de regiao/grupo no estilo das zonas do Castor. */
 const CORES_REGIAO = { cinza: "#858585", lilas: "#7966d6" } as const;
 
-/** Menu ⋯ com as cores de uma paleta (usado pela nota, pela forma e pelo grupo). */
-function MenuCores({ paleta, atual, onEscolher }: { paleta: Record<string, string>; atual: string; onEscolher: (cor: string) => void }) {
+/** Azul do alfinete (mesmo #74aaff das alcas ativas e das arestas em conversa). */
+const AZUL_ALFINETE = "#74aaff";
+
+/**
+ * Menu ⋯ com as cores de uma paleta (usado pela nota, pela forma e pelo grupo) e, quando o card passa
+ * o proprio `id`, o item que fixa/desafixa o no' (dados.fixado) — card fixado nao se move no
+ * auto-organizar. Fixar NAO trava o arrasto: so' marca o card pro organizar respeitar.
+ */
+function MenuCores({ paleta, atual, onEscolher, id, fixado }: {
+  paleta: Record<string, string>; atual: string; onEscolher: (cor: string) => void;
+  id?: string; fixado?: boolean;
+}) {
+  const acoes = useContext(CanvasCtx);
   return (
     <DropdownMenuContent align="end" className="cv-menu min-w-36">
       <DropdownMenuLabel>Cor</DropdownMenuLabel>
@@ -73,8 +87,22 @@ function MenuCores({ paleta, atual, onEscolher }: { paleta: Record<string, strin
           {c === atual ? <Check className="ml-auto size-3.5" /> : null}
         </DropdownMenuItem>
       ))}
+      {id && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => acoes.fixar(id)}>
+            <Pin className="size-3.5" style={{ color: AZUL_ALFINETE }} />
+            {fixado ? "Desafixar" : "Fixar"}
+          </DropdownMenuItem>
+        </>
+      )}
     </DropdownMenuContent>
   );
+}
+
+/** Alfinete do cabecalho: so' aparece quando o card esta' fixado (dados.fixado). */
+function Alfinete() {
+  return <Pin className="size-3.5 shrink-0" style={{ color: AZUL_ALFINETE }} aria-label="Fixado" />;
 }
 
 function BotaoOpcoes({ children, title, cor }: { children: ReactNode; title: string; cor?: string }) {
@@ -229,7 +257,7 @@ export function Md({ texto }: { texto: string }) {
 function NoNota({ id, data, selected }: NodeProps) {
   const { no } = lerDados(data);
   const acoes = useContext(CanvasCtx);
-  const d = no.dados as { titulo?: string; corpo?: string; cor?: string };
+  const d = no.dados as { titulo?: string; corpo?: string; cor?: string; fixado?: boolean };
   const chave = corDa(CORES_NOTA, d.cor, "amarelo");
   const t = estiloNota(chave);
   const [editando, setEditando] = useState(false);
@@ -249,8 +277,9 @@ function NoNota({ id, data, selected }: NodeProps) {
       <header className="cv-head shrink-0" style={{ background: t.cabecalho, borderColor: t.borda, color: t.texto }}>
         <FileText className="size-3.5 shrink-0 opacity-75" style={{ color: t.texto }} />
         <TituloEditavel valor={d.titulo ?? "Nota"} onCommit={(x) => acoes.editar(id, { titulo: x })} style={{ color: t.texto }} />
+        {d.fixado === true && <Alfinete />}
         <BotaoOpcoes title="Opções" cor={t.texto}>
-          <MenuCores paleta={CORES_NOTA} atual={chave} onEscolher={(c) => acoes.editar(id, { cor: c })} />
+          <MenuCores paleta={CORES_NOTA} atual={chave} onEscolher={(c) => acoes.editar(id, { cor: c })} id={id} fixado={d.fixado === true} />
         </BotaoOpcoes>
         <BotaoRemover id={id} cor={t.texto} />
       </header>
@@ -281,11 +310,14 @@ function NoNota({ id, data, selected }: NodeProps) {
   );
 }
 
-/** Forma: SVG solido (sem borda e sem botoes), texto #242326 centralizado; selecao = contorno azul. */
+/**
+ * Forma: SVG solido, texto #242326 centralizado; selecao = contorno azul. O ⋯ do canto (no hover)
+ * traz as cores e o Fixar/Desafixar; o alfinete aparece quando o card esta' fixado.
+ */
 function NoForma({ id, data, selected }: NodeProps) {
   const { no } = lerDados(data);
   const acoes = useContext(CanvasCtx);
-  const d = no.dados as { forma?: string; texto?: string; cor?: string };
+  const d = no.dados as { forma?: string; texto?: string; cor?: string; fixado?: boolean };
   const forma = d.forma === "elipse" || d.forma === "losango" ? d.forma : "retangulo";
   const chave = corDa(CORES_FORMA, d.cor, "cinza");
   const t = estiloForma(chave);
@@ -299,7 +331,7 @@ function NoForma({ id, data, selected }: NodeProps) {
   };
   const fonte = { color: t.texto, font: "500 15px/1.35 ui-sans-serif, system-ui, sans-serif" };
   return (
-    <div className={cn("relative h-full w-full", !!selected && "cv-forma-sel")}>
+    <div className={cn("group relative h-full w-full", !!selected && "cv-forma-sel")}>
       <NodeResizer minWidth={90} minHeight={70} isVisible={!!selected} color="var(--cv-selecao)" onResizeEnd={(_e, p) => acoes.redimensionar(id, p.width, p.height)} />
       <svg aria-hidden viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 block h-full w-full">
         {forma === "elipse"
@@ -321,6 +353,14 @@ function NoForma({ id, data, selected }: NodeProps) {
         ) : texto.trim() ? (
           <span className="max-h-full w-full overflow-hidden text-center break-words whitespace-pre-wrap" style={fonte}>{texto}</span>
         ) : null}
+      </div>
+      <div className="absolute top-1 right-1 flex items-center gap-0.5">
+        {d.fixado === true && <Alfinete />}
+        <span className="opacity-0 transition-opacity group-hover:opacity-100">
+          <BotaoOpcoes title="Opções" cor={t.texto}>
+            <MenuCores paleta={CORES_FORMA} atual={chave} onEscolher={(c) => acoes.editar(id, { cor: c })} id={id} fixado={d.fixado === true} />
+          </BotaoOpcoes>
+        </span>
       </div>
       <Alcas />
     </div>
@@ -353,7 +393,7 @@ function NoImagem({ id, data, selected }: NodeProps) {
 function NoGrupo({ id, data, selected }: NodeProps) {
   const { no } = lerDados(data);
   const acoes = useContext(CanvasCtx);
-  const d = no.dados as { titulo?: string; cor?: string };
+  const d = no.dados as { titulo?: string; cor?: string; fixado?: boolean };
   const chave = corDa(CORES_REGIAO, d.cor, "lilas");
   const cor = CORES_REGIAO[chave];
   return (
@@ -362,8 +402,9 @@ function NoGrupo({ id, data, selected }: NodeProps) {
       <div aria-hidden className="absolute inset-0" style={{ border: `1.5px solid ${cor}`, borderRadius: 18 }} />
       <div className="absolute -top-6 left-0.5 flex items-center gap-1">
         <TituloEditavel valor={d.titulo ?? "Região"} onCommit={(t) => acoes.editar(id, { titulo: t })} className="text-[16px] font-semibold" style={{ color: cor }} />
+        {d.fixado === true && <Alfinete />}
         <BotaoOpcoes title="Opções" cor={cor}>
-          <MenuCores paleta={CORES_REGIAO} atual={chave} onEscolher={(c) => acoes.editar(id, { cor: c })} />
+          <MenuCores paleta={CORES_REGIAO} atual={chave} onEscolher={(c) => acoes.editar(id, { cor: c })} id={id} fixado={d.fixado === true} />
         </BotaoOpcoes>
         <BotaoRemover id={id} cor={cor} />
       </div>
