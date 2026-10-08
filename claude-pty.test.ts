@@ -20,7 +20,8 @@ test("settingsHooks: UserPromptSubmit/Stop/Notification chamam canvas status com
   assert.deepEqual(cmd("UserPromptSubmit"), { type: "command", command: "canvas --eu ag-1:tok status ocupado" });
   assert.deepEqual(cmd("Stop"), { type: "command", command: "canvas --eu ag-1:tok status ocioso" });
   assert.deepEqual(cmd("Notification"), { type: "command", command: "canvas --eu ag-1:tok status aguardando" });
-  for (const ev of ["UserPromptSubmit", "Stop", "Notification"]) assert.equal((s.hooks as any)[ev][0].matcher, "");
+  for (const ev of ["UserPromptSubmit", "Stop"]) assert.equal((s.hooks as any)[ev][0].matcher, "");
+  assert.equal((s.hooks as any).Notification[0].matcher, "permission_prompt", "inatividade/login nao travam a fila");
   assert.deepEqual(Object.keys(s.hooks).sort(), ["Notification", "Stop", "UserPromptSubmit"]);
 });
 
