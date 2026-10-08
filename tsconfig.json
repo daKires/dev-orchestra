@@ -29,6 +29,11 @@
     "ui-agentes.test.ts",
     "ui-agentes-f21.test.ts",
     "ui-agentes-reconecta.test.ts",
-    "ui-agentes-reiniciar.test.ts"
+    "ui-agentes-reiniciar.test.ts",
+    "ui-cli.test.ts",
+    "ui-ceder.test.ts",
+    "ui-browser.test.ts",
+    "ui-claude.test.ts",
+    "ui-claude-env.test.ts"
   ]
 }

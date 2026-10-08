@@ -1,12 +1,12 @@
 // Vista Canvas (S4): o grafo do projeto renderizado com @xyflow/react. O modelo do hub (No/Aresta)
 // vira nodes/edges, e as edicoes (mover, redimensionar, editar, conectar, apagar, imagem) voltam como
 // operacoes pro hub (useCanvas). UI em PT-BR, so' tema escuro.
-import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow, ViewportPortal,
   applyEdgeChanges, applyNodeChanges,
   useReactFlow, useViewport,
-  type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type ReactFlowInstance,
+  type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
@@ -16,6 +16,7 @@ import {
 } from "@/lib/canvas";
 import { layoutAgentes, layoutRuns } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
+import { arestasEmConversa, type EmConversa } from "@/lib/colab";
 import { cn } from "@/lib/utils";
 import { useAgentes } from "@/hooks/useAgentes";
 import { useAgora, useRuns } from "@/hooks/useRuns";
@@ -24,10 +25,14 @@ import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 import { Barra } from "./canvas/Barra";
 import { Inspetor } from "./canvas/Inspetor";
 import { NovoAgente } from "./canvas/NovoAgente";
+import { NovoNavegador } from "./canvas/NovoNavegador";
 import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContexto";
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
-import { AgentesCtx, nodeTypes as agenteNodeTypes } from "./canvas/Agente";
+import { AgentesCtx, NoAgente } from "./canvas/Agente";
+import { NoClaude } from "./canvas/Claude";
 import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes } from "./canvas/Run";
+import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
+import { ProjetoCtx, nodeTypes as navegadorNodeTypes } from "./canvas/Navegador";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -36,15 +41,34 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b) + run/worker/arquivo (S5c).
-const nodeTypes = { ...nosNodeTypes, ...agenteNodeTypes, ...runNodeTypes };
+/**
+ * No' 'agente' (F4 S6): despacha pro card do Claude Code quando o agente e' tipo 'claude' e pro card
+ * do OpenCode no resto. O tipo vem do resumo do hub (useAgentes) pelo AgentesCtx.
+ */
+function NoAgenteTipo(props: NodeProps) {
+  const { agentes } = useContext(AgentesCtx);
+  const no = (props.data as { no?: No }).no;
+  const agenteId = no && typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
+  const agente = agentes.find((a) => a.id === agenteId);
+  return agente?.tipo === "claude" ? <NoClaude {...props} /> : <NoAgente {...props} />;
+}
+
+// nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b, F4 S6) + run/worker/arquivo
+// (S5c) + o explorador de arquivos (F3 S5) + o navegador (F4 S6).
+const nodeTypes = {
+  ...nosNodeTypes,
+  agente: NoAgenteTipo,
+  ...runNodeTypes,
+  ...exploradorNodeTypes,
+  ...navegadorNodeTypes,
+};
 
 // ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 // ---------------------------------------------------------------------------
 
-// Tipos que tem render proprio; os demais (explorador, navegador…) caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo"]);
+// Tipos que tem render proprio; os demais caem no card de nota como fallback.
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -93,19 +117,38 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
 }
 
 // A seta (markerEnd ArrowClosed) so' aparece quando as duas pontas sao formas (pontaDaAresta).
-function arestaParaRf(a: Aresta, porId: Map<string, No>): Edge {
+// Aresta em conversa (F3 S4): tracejado azul animado (#74aaff) com o balao como rotulo; sentido
+// reverso inverte a animacao pela classe CSS `cv-anim-reversa` (sem trocar source/target).
+function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<string, EmConversa>): Edge {
   const comSeta = pontaDaAresta(porId.get(a.de)?.tipo, porId.get(a.para)?.tipo);
+  // Agente <-> agente/navegador: ligacao de mao dupla (os dois conversam/controlam), seta nas duas pontas.
+  const ehAtor = (t?: string) => t === "agente" || t === "navegador";
+  const maoDupla = !comSeta && ehAtor(porId.get(a.de)?.tipo) && ehAtor(porId.get(a.para)?.tipo);
+  const seta = { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 };
+  const conv = emConversa[a.id];
   return {
     id: a.id,
     source: a.de,
     target: a.para,
     type: "rotulo",
-    data: { rotulo: a.rotulo ?? "" },
-    markerEnd: comSeta ? { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 } : undefined,
+    data: { rotulo: a.rotulo ?? "", conversa: conv },
+    animated: !!conv,
+    className: conv?.sentido === "reverso" ? "cv-anim-reversa" : undefined,
+    markerStart: maoDupla ? seta : undefined,
+    markerEnd: comSeta || maoDupla ? seta : undefined,
   };
 }
 
 const novoId = (prefixo: string) => prefixo + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/** Slug de um nome (minusculas, sem acento, separador '-'): mesmo slugNome do hub, sem node:path. */
+const slugDe = (nome: string): string =>
+  nome
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
 // dataURL -> so' a parte base64 (o hub espera dadosB64 puro).
 function lerBase64(arquivo: Blob): Promise<string> {
@@ -168,11 +211,12 @@ export function Canvas({ projeto }: { projeto: string }) {
   const atalhos = useRef<(e: KeyboardEvent) => boolean>(() => false);
 
   // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
-  const { agentes, linhasPorId, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos } = useAgentes(projeto);
+  const { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos, assinarPty } = useAgentes(projeto);
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
   const [novoAgenteAberto, setNovoAgenteAberto] = useState(false);
+  const [novoNavegadorAberto, setNovoNavegadorAberto] = useState(false);
   const [diff, setDiff] = useState<{ runId: string; arquivo: string } | null>(null);
   // Agentes de planejador JA' persistidos uma vez (nao re-upsertamos a cada render).
   const agentesUpsertados = useRef<Set<string>>(new Set());
@@ -208,6 +252,12 @@ export function Canvas({ projeto }: { projeto: string }) {
     const arestas = [...estado.arestas, ...arestasExtras].filter((a) => idsNos.has(a.de) && idsNos.has(a.para));
     return { nos, arestas };
   }, [estado, agentes, runsProjeto]);
+
+  // Arestas em conversa (F3 S4): mapa edgeId -> {sentido, balao} a partir de {conversas} do SSE.
+  const emConversa = useMemo(
+    () => arestasEmConversa(conversas, modelo.arestas),
+    [conversas, modelo.arestas],
+  );
 
   // Agente de planejador novo: persistido UMA vez, quando aparece no canvas (id novo no `ag:<id>`).
   useEffect(() => {
@@ -252,12 +302,12 @@ export function Canvas({ projeto }: { projeto: string }) {
     setArestas((antigas) => {
       const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
       return modelo.arestas.map((a) => {
-        const rf = arestaParaRf(a, porId);
+        const rf = arestaParaRf(a, porId, emConversa);
         if (sel.has(a.id)) rf.selected = true;
         return rf;
       });
     });
-  }, [modelo]);
+  }, [modelo, emConversa]);
 
   useEffect(() => {
     if (!aviso) return;
@@ -280,6 +330,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.toLowerCase() === "a") { if (!bloqueadoRef.current) setNovoAgenteAberto(true); return; }
+      if (e.key.toLowerCase() === "b") { if (!bloqueadoRef.current) setNovoNavegadorAberto(true); return; }
       const f = ferramentaDoAtalho(e.key);
       if (f) { setOrigemSeta(null); setFerramenta(f); }
     };
@@ -617,8 +668,33 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /** Card 'arquivo' solto no canvas a partir do Explorador: guarda o agente + caminho (previa no clique). */
+  const criarArquivoNo = (agenteId: string, caminho: string, cliente?: { x: number; y: number }) => {
+    if (bloqueado) return;
+    const p = centro(cliente);
+    const w = 240;
+    const h = 56;
+    const no: No = {
+      id: novoId("arq"), tipo: "arquivo",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { agenteId, caminho, status: "referência" }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
   const aoSoltarArquivo = (e: DragEvent) => {
     e.preventDefault();
+    // Arrasto de um arquivo do Explorador: vira um no' 'arquivo' com dados {agenteId, caminho, status}.
+    const bruto = e.dataTransfer?.getData(MIME_ARQUIVO);
+    if (bruto) {
+      try {
+        const j = JSON.parse(bruto) as { agenteId?: unknown; caminho?: unknown };
+        if (typeof j.agenteId === "string" && j.agenteId && typeof j.caminho === "string" && j.caminho) {
+          criarArquivoNo(j.agenteId, j.caminho, { x: e.clientX, y: e.clientY });
+          return;
+        }
+      } catch {}
+    }
     const arquivo = e.dataTransfer?.files?.[0];
     if (arquivo) void criarImagem(arquivo, { x: e.clientX, y: e.clientY });
   };
@@ -723,6 +799,42 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /** "+ Navegador" (atalho B): no' `nav:<slug>` (900x620) no centro visivel, com a url do dialog. */
+  const criarNavegadorNo = (nome: string, url: string) => {
+    if (bloqueado) return;
+    const p = centro();
+    const w = 900;
+    const h = 620;
+    const base = "nav:" + slugDe(nome);
+    let id = base;
+    let k = 1;
+    while (modelo.nos.some((n) => n.id === id)) { k++; id = base + "-" + k; }
+    const no: No = {
+      id, tipo: "navegador",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { nome, url }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
+  /** "+ Explorador" do menu do agente: cria o no' `exp:<agenteId>` (320x460) a esquerda do agente, ligado a ele. */
+  const abrirExplorador = (agenteId: string) => {
+    if (bloqueado) return;
+    const agNo = buscarNo(`ag:${agenteId}`);
+    const w = 320;
+    const h = 460;
+    const x = agNo ? Math.round(agNo.x - w - 40) : 0;
+    const y = agNo ? Math.round(agNo.y) : 0;
+    const idExp = `exp:${agenteId}`;
+    const rev = Date.now();
+    const no: No = { id: idExp, tipo: "explorador", x, y, w, h, dados: { agenteId }, rev };
+    const aresta: Aresta = { id: `${idExp}->ag:${agenteId}`, de: idExp, para: `ag:${agenteId}`, rev };
+    enviar([
+      { op: "upsert", tipo: "no", item: no },
+      { op: "upsert", tipo: "aresta", item: aresta },
+    ]);
+  };
+
   // Nos 'agente' escondidos (dados.oculto) deste projeto: conteudo do menu "Reabrir agente".
   const agentesOcultos = estado.nos.filter((n) => n.tipo === "agente" && n.dados.oculto === true);
   const nomeAgente = (no: No): string => {
@@ -734,8 +846,9 @@ export function Canvas({ projeto }: { projeto: string }) {
   const agentesValor = {
     agentes,
     linhasPorId,
-    acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos },
+    acoes: { carregarHistorico, mensagem, abortar, reiniciar, trocarModelo, modelos, explorador: abrirExplorador },
     onFechar: pedirFecharAgente,
+    assinarPty,
   };
   const runsValor = {
     runs: runsEstado.runs,
@@ -755,6 +868,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
     >
       <CanvasCtx.Provider value={ctx}>
+      <ProjetoCtx.Provider value={projeto}>
       <AgentesCtx.Provider value={agentesValor}>
       <RunsCtx.Provider value={runsValor}>
         <ReactFlow
@@ -846,6 +960,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         </ReactFlow>
       </RunsCtx.Provider>
       </AgentesCtx.Provider>
+      </ProjetoCtx.Provider>
       </CanvasCtx.Provider>
 
       <Barra
@@ -855,6 +970,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         onForma={(forma) => { setFormaPendente(forma); setOrigemSeta(null); setFerramenta("forma"); }}
         onImagem={(arquivo) => void criarImagem(arquivo)}
         onAgente={() => setNovoAgenteAberto(true)}
+        onNavegador={() => setNovoNavegadorAberto(true)}
       />
 
       <NovoAgente
@@ -864,6 +980,12 @@ export function Canvas({ projeto }: { projeto: string }) {
         agentes={agentes}
         modelos={modelos}
         onCriar={criarAgenteNo}
+      />
+
+      <NovoNavegador
+        aberto={novoNavegadorAberto}
+        onAberto={setNovoNavegadorAberto}
+        onCriar={criarNavegadorNo}
       />
 
       <Inspetor

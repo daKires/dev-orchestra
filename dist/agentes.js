@@ -31,7 +31,7 @@ const CAMPOS_TEXTO = [
     "modelo",
     "instrucao",
 ];
-/** id so' com [a-z0-9-] e nao vazio; strings obrigatorias; papel/origem validos; senao null. */
+/** id so' com [a-z0-9-] e nao vazio; strings obrigatorias; papel/origem/tipo validos; senao null. */
 export function validarAgente(x) {
     if (!x || typeof x !== "object")
         return null;
@@ -45,7 +45,7 @@ export function validarAgente(x) {
         return null;
     if (a.origem !== "canvas" && a.origem !== "planejador")
         return null;
-    if (a.tipo !== "opencode")
+    if (a.tipo !== "opencode" && a.tipo !== "claude")
         return null;
     return x;
 }

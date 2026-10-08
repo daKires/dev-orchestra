@@ -20,6 +20,7 @@ function portaLivre() {
 const PORTA = await portaLivre();
 process.env.HERMES_UI_PORT = String(PORTA);
 process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-planf-"));
+process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("./ui.js");
 test("validarNovaFeature: aceita {projeto, feature} (trim) e rejeita o resto (CA-8)", () => {
     assert.deepEqual(ui.validarNovaFeature({ projeto: " D:\\p ", feature: " f " }), { projeto: "D:\\p", feature: "f" });
