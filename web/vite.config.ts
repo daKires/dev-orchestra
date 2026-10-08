@@ -13,6 +13,7 @@ export default defineConfig({
       "/events": "http://127.0.0.1:4123",
       "/cancel": "http://127.0.0.1:4123",
       "/canvas": "http://127.0.0.1:4123",
+      "/agentes": "http://127.0.0.1:4123",
     },
   },
 });

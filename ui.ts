@@ -3,13 +3,19 @@
 // proprio numa pasta compartilhada; QUEM pega a porta vira o "hub", le TODOS os arquivos e empurra
 // pro browser. Varias sessoes do Claude aparecem juntas. Unica acao pela UI: cancelar uma run.
 import http from "node:http";
+import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
 import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import {
+  PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas,
+  aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos,
+  type Agente, type AssinaturaArquivo, type Linha, type Papel, type ParteRegistrada,
+} from "./agentes.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
@@ -19,6 +25,8 @@ export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join
 export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(os.tmpdir(), "hermes", "canvas");
 // Pasta onde os anexos de POST /nova-feature sao gravados (uma subpasta por pedido). Injetavel por env.
 export const ANEXOS_DIR = process.env.HERMES_ANEXOS_DIR || path.join(os.tmpdir(), "hermes", "anexos");
+// Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
+export const AGENTES_DIR = process.env.HERMES_AGENTES_DIR || path.join(os.tmpdir(), "hermes", "agentes");
 // POST /nova-feature carrega anexos em base64 (inflam ~33%): teto proprio bem maior que o padrao de 64KB.
 // Injetavel em iniciarUI (opcao limiteBodyNovaFeature) pra testar sem trafegar centenas de MB.
 export const LIMITE_BODY_NOVA_FEATURE = 350 * 1024 * 1024; // 350MB
@@ -260,6 +268,7 @@ function atualizarPlanejadores(): void {
   planejadoresAssinatura = assinatura;
   planejadores = lista;
   for (const c of clientes) sse(c, { planejadores: lista });
+  void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
 }
 
 // Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
@@ -535,6 +544,419 @@ function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Agentes (F2/S3, CA-4a/4c/5/9): registros em disco, ponte do /event do OpenCode,
+// rotas /agentes e sincronizacao do contexto do canvas.
+// ---------------------------------------------------------------------------
+
+// Registro em disco de um agente: o Agente do modelo + campos de runtime (erro do ultimo start,
+// pid do serve e status explicito marcado pelo reiniciar, que destaca o serve como saudavel).
+type RegistroAgente = Agente & { erro?: string; pid?: number; status?: string };
+
+const agentes = new Map<string, RegistroAgente>();             // id -> registro
+const serves = new Map<string, { base: string; pid: number }>(); // cwd -> serve do OpenCode (reaproveitado)
+const agenteLinhas = new Map<string, Linha[]>();               // id -> transcricao (linhas do chat)
+const pontes = new Map<string, AbortController>();             // base -> ponte do /event
+const basesMortas = new Set<string>();                         // base -> serve inacessivel (status 'encerrado')
+let reconectando = false;                                     // serializa o reconectar das pontes (sem sobrepor)
+const ctxAssinaturas = new Map<string, AssinaturaArquivo[]>(); // id -> assinaturas do contexto em disco
+const fila = new FilaAvisos();
+let agentesCarregados = false;
+let subirServeAtual: (cwd: string) => Promise<{ base: string; pid: number }> = subirServeReal;
+let matarProcessoAtual: (pid: number) => void = (pid) => { try { process.kill(pid); } catch {} };
+
+// Porta livre escolhida pelo SO (mesma ideia do TcpListener do orchestra-go.ps1).
+function portaLivre(): Promise<number> {
+  return new Promise((ok, falha) => {
+    const s = net.createServer();
+    s.once("error", falha);
+    s.listen(0, "127.0.0.1", () => { const p = (s.address() as net.AddressInfo).port; s.close(() => ok(p)); });
+  });
+}
+
+// Caminho do exe do OpenCode (mesmo esquema do orchestra-go.ps1: exe direto, nao o shim .cmd/.ps1).
+function caminhoOpencode(): string {
+  try {
+    const cmd = process.platform === "win32" ? "where opencode" : "which opencode";
+    const linhas = execSync(cmd, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    for (const l of linhas) if (/\.exe$/i.test(l)) return l;
+    for (const l of linhas) {
+      const exe = path.join(path.dirname(l), "node_modules", "opencode-ai", "bin", "opencode.exe");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {}
+  return "opencode";
+}
+
+// Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
+async function subirServeReal(cwd: string): Promise<{ base: string; pid: number }> {
+  const porta = await portaLivre();
+  // detached + unref: o serve vira processo independente (novo grupo no Windows) e SOBREVIVE ao hub
+  // (mesmo efeito do Start-Process do orchestra-go.ps1). Sem isso ele e' filho do processo do hub e
+  // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
+  const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: process.env, detached: true });
+  p.unref();
+  const base = `http://127.0.0.1:${porta}`;
+  for (let i = 0; i < 60; i++) {
+    await new Promise((ok) => setTimeout(ok, 500));
+    try { const r = await fetch(base + "/doc", { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, pid: p.pid ?? 0 }; } catch {}
+  }
+  try { if (p.pid) process.kill(p.pid); } catch {}
+  throw new Error("o servidor do OpenCode nao subiu na porta " + porta);
+}
+
+function arquivoAgente(id: string): string { return path.join(AGENTES_DIR, id + ".json"); }
+
+// Le (uma vez) os registros do disco. JSON corrompido/invalido e' ignorado; pasta inexistente vira vazio.
+function carregarAgentes(): void {
+  if (agentesCarregados) return;
+  agentesCarregados = true;
+  let files: string[] = [];
+  try { files = fs.readdirSync(AGENTES_DIR).filter((f) => f.endsWith(".json")); } catch { return; }
+  for (const f of files) {
+    try {
+      const a = validarAgente(JSON.parse(fs.readFileSync(path.join(AGENTES_DIR, f), "utf8")));
+      if (a) agentes.set(a.id, a as RegistroAgente);
+    } catch {}
+  }
+}
+
+function gravarAgente(a: RegistroAgente): void {
+  agentes.set(a.id, a);
+  try { fs.mkdirSync(AGENTES_DIR, { recursive: true }); fs.writeFileSync(arquivoAgente(a.id), JSON.stringify(a)); } catch {}
+}
+
+function removerAgenteDoDisco(id: string): void {
+  agentes.delete(id);
+  agenteLinhas.delete(id);
+  fila.estados.delete(id);
+  try { fs.unlinkSync(arquivoAgente(id)); } catch {}
+}
+
+// status de um agente: 'falhou' quando o serve/sessao nao subiu; 'encerrado' quando a base nao
+// responde mais (serve morto); senao ocupado/ocioso pela fila de avisos.
+function statusDe(id: string, base = ""): string {
+  const a = agentes.get(id);
+  const b = base || a?.base || "";
+  if (b && basesMortas.has(b)) return "encerrado";
+  if (!a) return "ocioso";
+  if (a.erro) return "falhou";
+  if (fila.estados.get(id)?.ocupado) return "ocupado";
+  // Agente reiniciado com sucesso grava status 'ok' (serve/sessao novos); os demais ficam 'ocioso'.
+  return a.status ?? "ocioso";
+}
+
+type ResumoAgente = { id: string; nome: string; papel: string; modelo: string; cwd: string; origem: string; status: string; ocupado: boolean };
+
+function resumoAgente(a: Agente): ResumoAgente {
+  return {
+    id: a.id, nome: a.nome, papel: a.papel, modelo: a.modelo, cwd: a.cwd, origem: a.origem,
+    status: statusDe(a.id, a.base), ocupado: fila.estados.get(a.id)?.ocupado === true,
+  };
+}
+
+// Agentes do canvas daquele projeto + os derivados dos planejadores (agenteDePlanejador).
+function listarAgentes(projeto: string): ResumoAgente[] {
+  const out: ResumoAgente[] = [];
+  for (const a of agentes.values()) if (a.projeto === projeto) out.push(resumoAgente(a));
+  for (const p of planejadores) {
+    if (p.projeto !== projeto && idProjeto(p.raiz) !== idProjeto(projeto)) continue;
+    out.push(resumoAgente(agenteDePlanejador(p)));
+  }
+  return out;
+}
+
+function serveDoCwd(cwd: string): { base: string; pid: number } | undefined {
+  const s = serves.get(cwd);
+  if (s) return s;
+  for (const a of agentes.values()) if (a.cwd === cwd && a.base) return { base: a.base, pid: 0 };
+  return undefined;
+}
+
+// ['provider/modelo', ...] a partir de GET {base}/config/providers.
+async function listarModelos(base: string): Promise<string[]> {
+  try {
+    const r = await fetch(base + "/config/providers");
+    if (!r.ok) return [];
+    const j: any = await r.json();
+    const out: string[] = [];
+    if (Array.isArray(j?.providers)) {
+      for (const p of j.providers) {
+        if (!p || typeof p.id !== "string" || !p.models || typeof p.models !== "object") continue;
+        for (const m of Object.keys(p.models)) out.push(p.id + "/" + m);
+      }
+    }
+    return out;
+  } catch { return []; }
+}
+
+// ---- ponte do /event (uma por base): le o stream SSE e empurra linhas/status pros clientes ----
+function abrirPonte(base: string): void {
+  if (!base || pontes.has(base)) return;
+  const ctrl = new AbortController();
+  pontes.set(base, ctrl);
+  void loopPonte(base, ctrl);
+}
+
+async function loopPonte(base: string, ctrl: AbortController): Promise<void> {
+  const papeis = new Map<string, string>();
+  const partes = new Map<string, ParteRegistrada>(); // por ponte (por base): acumula os deltas de texto
+  while (!ctrl.signal.aborted) {
+    try {
+      const r = await fetch(base + "/event", { signal: ctrl.signal, headers: { Accept: "text/event-stream" } });
+      if (!r.ok || !r.body) throw new Error("evento indisponivel");
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const bloco = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          for (const l of bloco.split("\n")) {
+            if (!l.startsWith("data:")) continue;
+            const dados = l.slice(5).trim();
+            if (!dados) continue;
+            let ev: unknown = null;
+            try { ev = JSON.parse(dados); } catch { continue; }
+            tratarEvento(base, ev, papeis, partes);
+          }
+        }
+      }
+    } catch {}
+    if (ctrl.signal.aborted) break;
+    await new Promise((ok) => setTimeout(ok, 1000)); // reconecta sem loop agressivo
+  }
+}
+
+function fecharPonte(base: string): void {
+  const ctrl = pontes.get(base);
+  if (!ctrl) return;
+  try { ctrl.abort(); } catch {}
+  pontes.delete(base);
+}
+
+// O serve do OpenCode responde? GET {base}/doc com timeout curto (~1.5s), usado ANTES de abrir a
+// ponte de um agente recarregado do disco (nao adianta assinar /event de um serve que morreu).
+async function serveVivo(base: string): Promise<boolean> {
+  try {
+    const r = await fetch(base + "/doc", { signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch { return false; }
+}
+
+// Empurra a lista de agentes de cada projeto conhecido (canvas + raiz dos planejadores).
+function broadcastAgentes(): void {
+  const projetos = new Set<string>();
+  for (const a of agentes.values()) projetos.add(a.projeto);
+  for (const p of planejadores) projetos.add(p.raiz);
+  for (const projeto of projetos) broadcast({ agentes: listarAgentes(projeto) });
+}
+
+// Reabre as pontes de /event dos agentes conhecidos (canvas recarregado do disco + derivados dos
+// planejadores do orchestra-go): para cada base distinta testa o serve com GET /doc e so' entao abre
+// a ponte (abrirPonte ja ignora base repetida). Base inacessivel NAO abre ponte e fica marcada como
+// morta (status 'encerrado' no GET /agentes e no broadcast {agentes}); e' retentada de forma espacada
+// (no intervalo de limpeza), nunca em loop agressivo.
+async function reconectarPontes(): Promise<void> {
+  if (reconectando) return;
+  reconectando = true;
+  try {
+    const bases = new Set<string>();
+    for (const a of agentes.values()) if (a.base) bases.add(a.base);
+    for (const p of planejadores) { const b = agenteDePlanejador(p).base; if (b) bases.add(b); }
+    let mudou = false;
+    for (const base of bases) {
+      if (!servidor) return; // hub parou durante a checagem: nao abre ponte orfa
+      if (pontes.has(base)) continue; // ja conectado
+      if (await serveVivo(base)) {
+        if (basesMortas.delete(base)) mudou = true;
+        abrirPonte(base);
+      } else if (!basesMortas.has(base)) {
+        basesMortas.add(base);
+        mudou = true;
+      }
+    }
+    for (const base of [...basesMortas]) if (!bases.has(base)) { basesMortas.delete(base); mudou = true; }
+    if (mudou) broadcastAgentes();
+  } finally { reconectando = false; }
+}
+
+function agenteDaSessao(base: string, sessao: string): RegistroAgente | undefined {
+  for (const a of agentes.values()) if (a.base === base && a.sessao === sessao) return a;
+  return undefined;
+}
+
+function tratarEvento(base: string, ev: unknown, papeis: Map<string, string>, partes: Map<string, ParteRegistrada>): void {
+  const r = normalizarEvento(ev, papeis, partes);
+  if (!r) return;
+  const ag = agenteDaSessao(base, r.sessao);
+  if (!ag) return;
+  if (r.linha) {
+    const novas = aplicarLinhas(agenteLinhas.get(ag.id) ?? [], [r.linha]);
+    agenteLinhas.set(ag.id, novas);
+    broadcast({ agenteLinhas: { id: ag.id, linhas: novas } });
+  }
+  if (r.status) {
+    if (r.status === "ocupado") fila.marcarOcupado(ag.id);
+    else { fila.marcarOcioso(ag.id); tentarLiberarAviso(ag.id); }
+    broadcast({ agentes: listarAgentes(ag.projeto) });
+  }
+}
+
+// system do prompt: instrucao do papel (com o <id> substituido); garante a linha do README de contexto.
+function instrucaoDe(a: RegistroAgente): string {
+  const comId = (a.instrucao ?? "").replace(/<id>/g, a.id).trim();
+  if (/README\.md/.test(comId)) return comId;
+  const linha = "Antes de responder, leia .orchestra/contexto/" + a.id + "/README.md se existir.";
+  return comId ? comId + " " + linha : linha;
+}
+
+async function enviarPrompt(a: RegistroAgente, texto: string): Promise<void> {
+  if (!a.base || !a.sessao) return;
+  const corpo: Record<string, unknown> = { parts: [{ type: "text", text: texto }] };
+  const m = separarModelo(a.modelo);
+  if (m) corpo.model = m;
+  const sistema = instrucaoDe(a);
+  if (sistema) corpo.system = sistema;
+  try {
+    await fetch(`${a.base}/session/${a.sessao}/prompt_async`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo),
+    });
+  } catch {}
+}
+
+function tentarLiberarAviso(id: string): void {
+  const a = agentes.get(id);
+  if (!a) return;
+  const msg = fila.liberar(id, Date.now());
+  if (msg) void enviarPrompt(a, msg);
+}
+
+async function criarSessao(base: string, nome: string): Promise<string | null> {
+  try {
+    const r = await fetch(base + "/session", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: nome }),
+    });
+    if (!r.ok) return null;
+    const j: any = await r.json();
+    return typeof j?.id === "string" && j.id ? j.id : null;
+  } catch { return null; }
+}
+
+async function buscarHistorico(a: RegistroAgente): Promise<Linha[]> {
+  if (!a.base || !a.sessao) return [];
+  try {
+    const r = await fetch(`${a.base}/session/${a.sessao}/message?limit=50`);
+    if (!r.ok) return [];
+    return historicoParaLinhas(await r.json());
+  } catch { return []; }
+}
+
+async function abortarSessao(a: RegistroAgente): Promise<void> {
+  if (!a.base || !a.sessao) return;
+  try { await fetch(`${a.base}/session/${a.sessao}/abort`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch {}
+}
+
+// Encerra: apaga a sessao, remove o registro e mata o serve se nao sobrou nenhum agente no mesmo base.
+async function encerrarAgente(a: RegistroAgente): Promise<void> {
+  const base = a.base;
+  if (base && a.sessao) {
+    try { await fetch(`${base}/session/${a.sessao}`, { method: "DELETE" }); } catch {}
+  }
+  removerAgenteDoDisco(a.id);
+  if (base && ![...agentes.values()].some((x) => x.base === base)) {
+    for (const [cwd, s] of serves) if (s.base === base) { if (s.pid > 0) matarProcessoAtual(s.pid); serves.delete(cwd); }
+    fecharPonte(base);
+  }
+}
+
+// ---- contexto em disco: <cwd>/.orchestra/contexto/<agenteId>/ (CA-9) ----
+function hashDe(s: string): string { return createHash("sha1").update(s, "utf8").digest("hex"); }
+
+function dirContexto(a: Agente): string { return path.join(a.cwd, ".orchestra", "contexto", a.id); }
+
+function lerManifest(a: Agente): AssinaturaArquivo[] {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dirContexto(a), ".manifest.json"), "utf8"));
+    if (Array.isArray(j)) return j.filter((x: any) => x && typeof x.nome === "string" && typeof x.assinatura === "string");
+  } catch {}
+  return [];
+}
+
+function gravarManifest(a: Agente, as: AssinaturaArquivo[]): void {
+  try { fs.writeFileSync(path.join(dirContexto(a), ".manifest.json"), JSON.stringify(as)); } catch {}
+}
+
+// Garante `.orchestra/` no <git common dir>/info/exclude (mesmo esquema do .claude/worktrees/).
+function garantirExclude(cwd: string): void {
+  try {
+    const comum = execSync("git rev-parse --path-format=absolute --git-common-dir", { cwd, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (!comum) return;
+    const info = path.join(comum, "info");
+    const arq = path.join(info, "exclude");
+    let atual = "";
+    try { atual = fs.readFileSync(arq, "utf8"); } catch {}
+    if (atual.split(/\r?\n/).includes(".orchestra/")) return;
+    fs.mkdirSync(info, { recursive: true });
+    fs.appendFileSync(arq, (atual && !atual.endsWith("\n") ? "\n" : "") + ".orchestra/\n");
+  } catch {}
+}
+
+// Caminho local da imagem referenciada por /canvas/asset/<idProjeto>/<arquivo>.
+function assetLocal(url: string): string | null {
+  const marca = "/canvas/asset/";
+  const i = url.indexOf(marca);
+  if (i < 0) return null;
+  const partes = url.slice(i + marca.length).split(/[?#]/)[0].split("/").filter(Boolean);
+  if (partes.length < 2) return null;
+  const arquivo = partes.pop() as string;
+  const id = partes.join("/");
+  if (!/^[0-9a-f]+$/i.test(id) || arquivo.includes("..")) return null;
+  return path.join(CANVAS_DIR, id, "assets", arquivo);
+}
+
+// Apos cada /canvas/op: sincroniza o contexto dos nos 'agente' do projeto e enfileira os avisos.
+function sincronizarContexto(projeto: string, snap: Snapshot): void {
+  for (const no of snap.nos) {
+    if (no.tipo !== "agente") continue;
+    const aid = typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
+    const a = aid ? agentes.get(aid) : undefined;
+    if (!a || !a.cwd) continue;
+    const plano = planoArquivos(itensDeContexto(snap, no.id));
+    const atual: AssinaturaArquivo[] = [{ nome: "README.md", assinatura: hashDe(plano.readme) }];
+    for (const f of plano.arquivos) {
+      atual.push({ nome: f.nome, assinatura: f.conteudo !== undefined ? hashDe(f.conteudo) : "url:" + (f.url ?? "") });
+    }
+    const anterior = ctxAssinaturas.get(aid) ?? lerManifest(a);
+    const d = diffContexto(atual, anterior);
+    const dir = dirContexto(a);
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    garantirExclude(a.cwd);
+    for (const nome of d.remover) { try { fs.unlinkSync(path.join(dir, nome)); } catch {} }
+    for (const nome of d.gravar) {
+      const alvo = path.join(dir, nome);
+      if (nome === "README.md") { try { fs.writeFileSync(alvo, plano.readme); } catch {} continue; }
+      const f = plano.arquivos.find((x) => x.nome === nome);
+      if (!f) continue;
+      if (f.conteudo !== undefined) { try { fs.writeFileSync(alvo, f.conteudo); } catch {} }
+      else if (f.url) {
+        const local = assetLocal(f.url);
+        if (local) { try { fs.copyFileSync(local, alvo); } catch {} }
+      }
+    }
+    gravarManifest(a, atual);
+    ctxAssinaturas.set(aid, atual);
+    // README.md NAO entra nos nomes do aviso: mudanca so do README (ou sem itens) nao avisa.
+    const nomes = [...d.gravar, ...d.remover].filter((n) => n !== "README.md");
+    if (nomes.length) { fila.adicionar(aid, nomes); tentarLiberarAviso(aid); }
+  }
+}
+
 // Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
 const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
 const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
@@ -577,6 +999,8 @@ function ceder(): void {
   if (limpeza) { clearInterval(limpeza); limpeza = null; }
   if (watcher) { try { watcher.close(); } catch {} watcher = null; }
   descarregarCanvas(); // grava ops pendentes antes de ceder a porta
+  for (const ctrl of pontes.values()) { try { ctrl.abort(); } catch {} }
+  pontes.clear();
   servidor?.closeAllConnections(); // derruba as conexoes keep-alive do servidor antigo (nao reusa socket morto)
   servidor?.close();
   servidor = null;
@@ -674,9 +1098,11 @@ function criarServidor(): http.Server {
       const ops = j ? validarOps(j.ops) : null;
       if (!projeto || !ops) { res.writeHead(400); res.end(); return; }
       const id = idProjeto(projeto);
-      canvasCache.set(id, aplicarOps(lerCanvas(id), ops));
+      const snapNovo = aplicarOps(lerCanvas(id), ops);
+      canvasCache.set(id, snapNovo);
       gravarCanvasDebounced(id);
       broadcast({ canvasOp: { projeto, ops } });
+      try { sincronizarContexto(projeto, snapNovo); } catch {}
       res.writeHead(204); res.end();
       return;
     }
@@ -726,6 +1152,152 @@ function criarServidor(): http.Server {
       res.end(JSON.stringify(lerCanvas(idProjeto(projeto))));
       return;
     }
+    // ---- agentes (F2/S3) ----
+    if (caminho === "/agentes/modelos") {
+      const cwd = new URL(url, "http://x").searchParams.get("cwd") || "";
+      const s = cwd ? serveDoCwd(cwd) : undefined;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(s ? await listarModelos(s.base) : []));
+      return;
+    }
+    if (caminho === "/agentes" && req.method === "GET") {
+      const projeto = new URL(url, "http://x").searchParams.get("projeto") || "";
+      if (!projeto) { res.writeHead(400); res.end(); return; }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(listarAgentes(projeto)));
+      return;
+    }
+    if (caminho === "/agentes") {
+      // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+      const corpo = await lerCorpo(req, LIMITE_BODY);
+      if (corpo === null) { res.writeHead(400); res.end(); return; }
+      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
+      let j: any = null;
+      try { j = JSON.parse(corpo); } catch {}
+      const projeto = j && typeof j.projeto === "string" ? j.projeto.trim() : "";
+      const cwd = j && typeof j.cwd === "string" ? j.cwd.trim() : "";
+      const papel = j && typeof j.papel === "string" ? j.papel : "";
+      if (!projeto || !cwd || !Object.prototype.hasOwnProperty.call(PAPEIS, papel)) { res.writeHead(400); res.end(); return; }
+      const def = PAPEIS[papel as Papel];
+      const id = "ag-" + randomUUID().slice(0, 8);
+      const nome = j && typeof j.nome === "string" && j.nome.trim() ? j.nome.trim() : def.nome;
+      const modelo = (j && typeof j.modelo === "string" ? j.modelo.trim() : "") || "opencode-go/glm-5.2";
+      const instrucao = j && typeof j.instrucao === "string" ? j.instrucao : def.instrucao;
+      let serve = serves.get(cwd);
+      let erro = "";
+      if (!serve) {
+        // Reaproveita o serve de um agente vivo do MESMO cwd (ex.: registros lidos do disco apos restart).
+        for (const a of agentes.values()) if (a.cwd === cwd && a.base && !a.erro) { serve = { base: a.base, pid: 0 }; break; }
+        if (serve) serves.set(cwd, serve);
+      }
+      if (!serve) {
+        try { serve = await subirServeAtual(cwd); serves.set(cwd, serve); }
+        catch (e: any) { erro = String(e?.message ?? e); }
+      }
+      if (serve) abrirPonte(serve.base);
+      let sessao = "";
+      if (serve) {
+        const s = await criarSessao(serve.base, nome);
+        if (s) sessao = s;
+        else if (!erro) erro = "nao foi possivel criar a sessao no OpenCode";
+      }
+      const ok = !!(serve && sessao);
+      const reg: RegistroAgente = {
+        id, projeto, cwd, base: serve ? serve.base : "", sessao, nome,
+        papel: papel as Papel, modelo, instrucao, tipo: "opencode", origem: "canvas",
+      };
+      if (!ok) reg.erro = erro || "falha ao subir o OpenCode";
+      gravarAgente(reg);
+      broadcast({ agentes: listarAgentes(projeto) });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(ok ? { id, status: "ok" } : { id, status: "falhou", erro: reg.erro }));
+      return;
+    }
+    if (caminho.startsWith("/agentes/")) {
+      const partes = caminho.slice("/agentes/".length).split("/");
+      let id = partes[0] || "";
+      try { id = decodeURIComponent(id); } catch {}
+      const acao = partes[1] || "";
+      if (acao === "historico" && req.method === "GET") {
+        const a = agentes.get(id);
+        if (!a) { res.writeHead(404); res.end(); return; }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(await buscarHistorico(a)));
+        return;
+      }
+      if (req.method === "POST") {
+        // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+        const corpo = await lerCorpo(req, LIMITE_BODY);
+        if (corpo === null) { res.writeHead(400); res.end(); return; }
+        if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
+        const a = agentes.get(id);
+        if (!a) { res.writeHead(404); res.end(); return; }
+        let j: any = null;
+        try { j = JSON.parse(corpo); } catch {}
+        if (acao === "mensagem") {
+          const texto = j && typeof j.texto === "string" ? j.texto : "";
+          if (!texto) { res.writeHead(400); res.end(); return; }
+          await enviarPrompt(a, texto);
+          res.writeHead(204); res.end(); return;
+        }
+        if (acao === "modelo") {
+          const modelo = j && typeof j.modelo === "string" ? j.modelo.trim() : "";
+          if (!modelo) { res.writeHead(400); res.end(); return; }
+          a.modelo = modelo;
+          gravarAgente(a);
+          res.writeHead(204); res.end(); return;
+        }
+        if (acao === "abortar") { await abortarSessao(a); res.writeHead(204); res.end(); return; }
+        if (acao === "encerrar") { await encerrarAgente(a); res.writeHead(204); res.end(); return; }
+        if (acao === "reiniciar") {
+          // Reabre a sessao do agente: reaproveita um serve VIVO da mesma cwd (o serve destacado
+          // sobrevive ao hub) ou sobe um novo com subirServe(cwd), cria uma sessao limpa e reabre a
+          // ponte do /event. Sucesso -> 200 {id,status:'ok'}; falha ao subir -> 200 {id,status:'falhou',erro}.
+          let serve = serves.get(a.cwd);
+          if (serve && !(await serveVivo(serve.base))) { serves.delete(a.cwd); serve = undefined; }
+          if (!serve) {
+            for (const x of agentes.values()) {
+              if (x.id === a.id || x.cwd !== a.cwd || !x.base || x.erro) continue;
+              if (await serveVivo(x.base)) { serve = { base: x.base, pid: x.pid ?? 0 }; break; }
+            }
+            if (serve) serves.set(a.cwd, serve);
+          }
+          let erro = "";
+          if (!serve) {
+            try { serve = await subirServeAtual(a.cwd); serves.set(a.cwd, serve); }
+            catch (e: any) { erro = String(e?.message ?? e); }
+          }
+          let sessao = "";
+          if (serve) {
+            const s = await criarSessao(serve.base, a.nome);
+            if (s) sessao = s;
+            else if (!erro) erro = "nao foi possivel criar a sessao no OpenCode";
+          }
+          if (serve && sessao) {
+            a.base = serve.base; a.sessao = sessao; a.pid = serve.pid;
+            delete a.erro; a.status = "ok";
+            gravarAgente(a);              // registro atualizado em disco (base, pid, sessao, status)
+            agenteLinhas.set(a.id, []);   // sessao nova: zera o chat em memoria
+            basesMortas.delete(serve.base);
+            abrirPonte(serve.base);       // reabre a ponte do /event da base
+            broadcast({ agenteLinhas: { id: a.id, linhas: [] } });
+            broadcast({ agentes: listarAgentes(a.projeto) });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ id: a.id, status: "ok" }));
+            return;
+          }
+          const motivo = erro || "falha ao reiniciar o OpenCode";
+          a.erro = motivo;
+          gravarAgente(a);
+          broadcast({ agentes: listarAgentes(a.projeto) });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ id: a.id, status: "falhou", erro: motivo }));
+          return;
+        }
+        res.writeHead(404); res.end(); return;
+      }
+      res.writeHead(404); res.end(); return;
+    }
     servirEstatico(url, res);
   });
 }
@@ -761,7 +1333,8 @@ function escutar(): Promise<boolean> {
       podar();
       rescan();
       void limparPlanejadores(PLANEJADORES_DIR); // uma vez no start
-      limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); }, 5000);
+      // Limpeza dos registros orfaos + retentativa espacada das pontes (bases que ainda nao respondem).
+      limpeza = setInterval(() => { void limparPlanejadores(PLANEJADORES_DIR); void reconectarPontes(); }, 5000);
       limpeza.unref();
       try { watcher = fs.watch(RUNS_DIR, () => rescan()); } catch {}
       intervalo = setInterval(rescan, 1000);
@@ -781,6 +1354,8 @@ export type OpcoesUI = {
   sempreAssumir?: boolean; // modo --ui: assume a porta de qualquer hub Hermes, sem comparar versao
   executarNovaFeature?: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }>;
   limiteBodyNovaFeature?: number; // teto proprio do corpo de /nova-feature (default 350MB)
+  subirServe?: (cwd: string) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
+  matarProcesso?: (pid: number) => void; // encerra o serve (injetavel)
 };
 
 export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
@@ -789,7 +1364,11 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   sempreAssumir = opts.sempreAssumir ?? false;
   executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
   limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
+  subirServeAtual = opts.subirServe ?? subirServeReal;
+  matarProcessoAtual = opts.matarProcesso ?? ((pid: number) => { try { process.kill(pid); } catch {} });
+  carregarAgentes();
   if (!(await escutar())) await tentarAssumir();
+  if (servidor) void reconectarPontes(); // agentes recarregados do disco ganham ponte de /event (F2.2)
   // Se o hub sumir (sessao fechou ou cedeu pra outro que depois saiu), quem estiver vivo reassume a porta.
   if (!reassumir) reassumir = setInterval(() => { if (!servidor) void escutar(); }, 10_000);
   reassumir.unref();
@@ -802,6 +1381,9 @@ export function pararUI(): void {
   if (limpeza) { clearInterval(limpeza); limpeza = null; }
   if (watcher) { try { watcher.close(); } catch {} watcher = null; }
   descarregarCanvas(); // grava ops pendentes do debounce antes de desligar
+  for (const ctrl of pontes.values()) { try { ctrl.abort(); } catch {} }
+  pontes.clear();
+  serves.clear();
   for (const c of clientes) { try { c.res.end(); } catch {} }
   clientes.clear();
   servidor?.closeAllConnections(); // fecha conexoes abertas antes do close: o proximo servidor nao herda socket morto

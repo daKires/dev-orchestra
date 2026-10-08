@@ -60,6 +60,11 @@ if (-not (Test-Path $wt)) {
         New-Item -ItemType Directory -Force (Split-Path $exclude) | Out-Null
         Add-Content $exclude '.claude/worktrees/'
     }
+    # contexto dos agentes (.orchestra/) tambem fora do status da main
+    if (-not (Select-String -Path $exclude -SimpleMatch '.orchestra/' -Quiet -ErrorAction SilentlyContinue)) {
+        New-Item -ItemType Directory -Force (Split-Path $exclude) | Out-Null
+        Add-Content $exclude '.orchestra/'
+    }
     if (& git -C $raiz rev-parse --verify --quiet "refs/heads/$branch") { Rodar-Git @('worktree', 'add', $wt, $branch) | Out-Null }
     else { Rodar-Git @('worktree', 'add', '-b', $branch, $wt, $base) | Out-Null }
     Get-ChildItem $raiz -Filter '.env*' -File -Force | Copy-Item -Destination $wt
@@ -101,6 +106,8 @@ if ($Descricao) { $texto += "`n`n$Descricao" }
 if ($anexosCaminhos.Count) {
     $texto += "`n`nAnexos enviados (leia os arquivos):`n" + (($anexosCaminhos | ForEach-Object { "- $_" }) -join "`n")
 }
+# Contexto do planejador (S3): manda ler o README de contexto do worktree, quando existir.
+$texto += "`n`nAntes de responder, leia .orchestra/contexto/plan-$slug/README.md se existir."
 
 # Sobe o servidor do OpenCode no worktree (exe direto: o shim .ps1/.cmd nao sobrevive ao Start-Process hidden).
 $exe = Join-Path (Split-Path (Get-Command opencode.cmd).Source) 'node_modules\opencode-ai\bin\opencode.exe'
