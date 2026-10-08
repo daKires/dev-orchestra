@@ -7,8 +7,8 @@ import { type NodeProps } from "@xyflow/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { X } from "lucide-react";
-import { Alcas } from "./Nos";
+import { Pin, X } from "lucide-react";
+import { Alcas, CanvasCtx } from "./Nos";
 import { cn } from "@/lib/utils";
 import { temaXterm } from "@/lib/desktop";
 import { AgentesCtx } from "./Agente";
@@ -16,7 +16,7 @@ import type { No } from "../../../../canvas.ts";
 
 const MONO = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const VERDE = "#46d3a0"; // ocioso
-const AZUL = "#74aaff"; // ocupado (pulsando)
+const AZUL = "#74aaff"; // ocupado (pulsando) e alfinete de fixado
 const AMARELO = "#e3b341"; // aguardando você
 const VERMELHO = "#e5534b"; // falhou / encerrado
 
@@ -42,7 +42,9 @@ const idDoNo = (data: unknown): string => {
 /** No' do agente Claude: terminal ao vivo + status + "Retomar sessão" quando encerrado/falhou. */
 export function NoClaude({ id, data, selected }: NodeProps) {
   const { agentes, acoes, onFechar, assinarPty } = useContext(AgentesCtx);
+  const { fixar } = useContext(CanvasCtx);
   const agenteId = idDoNo(data);
+  const fixado = (data as { no?: No }).no?.dados.fixado === true;
   const agente = agentes.find((a) => a.id === agenteId);
   const status = agente?.status ?? "ocioso";
   const ocupado = agente?.ocupado === true;
@@ -135,7 +137,18 @@ export function NoClaude({ id, data, selected }: NodeProps) {
             aguardando você
           </span>
         )}
-        <button type="button" title="Fechar" onClick={() => onFechar(id, agenteId)} className="nodrag ml-auto grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: "#858585" }}>
+        <button
+          type="button"
+          title={fixado ? "Desafixar" : "Fixar"}
+          aria-label={fixado ? "Desafixar" : "Fixar"}
+          aria-pressed={fixado}
+          onClick={() => fixar(id)}
+          className="nodrag ml-auto grid size-5 shrink-0 place-items-center rounded hover:bg-white/10"
+          style={{ color: fixado ? AZUL : "#858585" }}
+        >
+          <Pin className="size-3.5" />
+        </button>
+        <button type="button" title="Fechar" onClick={() => onFechar(id, agenteId)} className="nodrag grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: "#858585" }}>
           <X className="size-3.5" />
         </button>
       </header>

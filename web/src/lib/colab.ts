@@ -1,9 +1,7 @@
 // Visual da conversa e explorador (F3 S4/S5 implementam).
 // PURO: so' tipos + funcoes (roda com `node --experimental-strip-types`); sem imports de runtime.
 
-// ---------------------------------------------------------------------------
 // Arestas em conversa (S4 - CA-6d)
-// ---------------------------------------------------------------------------
 
 /** Uma conversa pendente entre agentes, como o hub publica no SSE {conversas}. */
 export type Conversa = { q: string; de: string; para: string; texto: string };
@@ -45,9 +43,7 @@ export function arestasEmConversa(conversas: Conversa[], arestas: ArestaRef[]): 
   return mapa;
 }
 
-// ---------------------------------------------------------------------------
 // Linhas de colaboracao na transcricao (S4 - CA-6d)
-// ---------------------------------------------------------------------------
 
 /** Prefixos que marcam uma linha de conversa entre agentes (fmtPergunta/fmtResposta/…). */
 const PREFIXOS_COLAB = ["[pergunta de", "[resposta de", "[mensagem de", "[sem resposta"];
@@ -58,9 +54,7 @@ export function ehLinhaColab(texto: string): boolean {
   return PREFIXOS_COLAB.some((p) => t.startsWith(p));
 }
 
-// ---------------------------------------------------------------------------
 // Explorador de arquivos (S5 - CA-13c)
-// ---------------------------------------------------------------------------
 
 /** Um item da arvore: pastas tem `filhos`; arquivos nao trazem a chave. */
 export type NoArvore = { nome: string; caminho: string; filhos?: NoArvore[] };

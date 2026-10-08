@@ -12,9 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Aresta, No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Tokens visuais do painel
-// ---------------------------------------------------------------------------
 
 const FUNDO = "#1c1c1c";
 const CABECALHO = "#222";
@@ -35,9 +33,7 @@ const CAMPO: CSSProperties = {
   outline: "none",
 };
 
-// ---------------------------------------------------------------------------
 // Pecas de formulario
-// ---------------------------------------------------------------------------
 
 /** Titulo de um tipo de no' no cabecalho do painel. */
 const TITULO_TIPO: Record<string, string> = {
@@ -160,9 +156,7 @@ function Tamanhos({ atual, disabled, onEscolher }: { atual: string; disabled?: b
   );
 }
 
-// ---------------------------------------------------------------------------
 // Corpos por tipo de item
-// ---------------------------------------------------------------------------
 
 type EdicaoProps = {
   no: No;
@@ -263,9 +257,7 @@ function CorpoDoNo({ no, bloquear, editar }: EdicaoProps) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Inspetor
-// ---------------------------------------------------------------------------
 
 export type InspetorProps = {
   /** Nos selecionados (modelo); 1 = painel do no', 2+ = acoes em lote. */

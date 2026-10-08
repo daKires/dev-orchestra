@@ -1,5 +1,5 @@
-// Regressao (F3.1): no Windows a tool bash do OpenCode roda em bash (git-bash), que nao resolve
-// `canvas.cmd` sem a extensao. bin/canvas (script sh) precisa existir e funcionar pelo nome `canvas`.
+// Regressao (F3.1): no Windows a tool bash do OpenCode (e o Bash do Claude) roda em git-bash; o CLI
+// e' o bin/canvas (script sh), que precisa funcionar pelo nome `canvas`. Nao ha mais canvas.cmd.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

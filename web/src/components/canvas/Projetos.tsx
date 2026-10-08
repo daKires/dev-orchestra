@@ -51,9 +51,7 @@ export function corDoProjeto(p: Projeto): { nome: NomeCorProjeto | null; hex: st
 export const MINI_LARGURA = 220;
 export const MINI_ALTURA = 130;
 
-// ---------------------------------------------------------------------------
 // Miniatura do grafo (CA-P1): busca o snapshot do projeto e projeta nos/arestas em SVG.
-// ---------------------------------------------------------------------------
 
 function Miniatura({ raiz }: { raiz: string }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);

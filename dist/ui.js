@@ -1152,9 +1152,7 @@ function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao) {
     broadcast({ agentes: listarAgentes(projeto) });
     return { id, ok: !erro, erro };
 }
-// ---------------------------------------------------------------------------
 // Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
-// ---------------------------------------------------------------------------
 // Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
 function colabDe(id) {
     const a = agentes.get(id);

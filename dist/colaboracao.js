@@ -1,7 +1,5 @@
 import { posix } from "node:path";
-// ---------------------------------------------------------------------------
 // Nomes
-// ---------------------------------------------------------------------------
 /** Slug de um nome: minusculas, sem acento, separador '-'. Ex.: "Líder do Projeto" -> "lider-do-projeto". */
 export function slugNome(nome) {
     return nome
@@ -11,9 +9,7 @@ export function slugNome(nome) {
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
 }
-// ---------------------------------------------------------------------------
 // Grafo de colaboracao
-// ---------------------------------------------------------------------------
 /**
  * Agentes ligados a `agenteId` por uma aresta (em qualquer direcao), sem ele mesmo,
  * na ordem em que aparecem em `agentes` (CA-6a).
@@ -120,9 +116,7 @@ export class Conversas {
         return this.todas.filter((p) => !p.respondida);
     }
 }
-// ---------------------------------------------------------------------------
 // Fila de entregas
-// ---------------------------------------------------------------------------
 /** Fila por agente; um agente desconhecido conta como ocioso (CA-6e). */
 export class FilaEntregas {
     filas = new Map();
@@ -149,9 +143,7 @@ export class FilaEntregas {
         return fila;
     }
 }
-// ---------------------------------------------------------------------------
 // Formatadores
-// ---------------------------------------------------------------------------
 export function fmtPergunta(de, q, texto) {
     return `[pergunta de ${de} · ${q}] ${texto} -- responda com: canvas reply ${q} "<resultado>"`;
 }
@@ -168,9 +160,7 @@ export function fmtSemResposta(de, q) {
 export function linhaIdentidade(nome, id, token) {
     return `${nome} (${id}) — use: canvas --eu ${id}:${token}`;
 }
-// ---------------------------------------------------------------------------
 // Flow do agente (regiao + formas)
-// ---------------------------------------------------------------------------
 const FORMAS = ["elipse", "losango", "retangulo"];
 const CORES_FORMA = ["amarelo", "cinza", "lilas", "verde", "vermelho"];
 const FORMA_W = 180;
@@ -251,9 +241,7 @@ export function opsFlowLink(snap, agenteId, a, b, rotulo, rev = 0) {
     const item = rotulo !== undefined ? { id, de: idA, para: idB, rotulo, rev } : { id, de: idA, para: idB, rev };
     return { ops: [{ op: "upsert", tipo: "aresta", item }] };
 }
-// ---------------------------------------------------------------------------
 // Cards do agente (arquivo + nota)
-// ---------------------------------------------------------------------------
 const CARD_W = 300;
 const CARD_GAP = 24;
 const CARD_H_ARQUIVO = 100;
@@ -294,9 +282,7 @@ export function opsNote(snap, agNo, titulo, corpo, rev = 0) {
         { op: "upsert", tipo: "aresta", item: aresta },
     ];
 }
-// ---------------------------------------------------------------------------
 // Caminhos
-// ---------------------------------------------------------------------------
 /** Normaliza um caminho relativo para '/'; devolve null se absoluto, vazio ou com '..' (traversal). */
 export function validarCaminho(_cwd, rel) {
     if (typeof rel !== "string" || rel.length === 0)

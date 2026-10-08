@@ -11,8 +11,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { WifiOff } from "lucide-react";
 import {
-  checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, mesclarNosRf, noNovo, ordemZ, paiDoNo,
-  pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO, type Ferramenta, type NomeForma,
+  alternarFixado, checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, mesclarNosRf, noNovo,
+  ordemZ, organizarPorTipo, paiDoNo, pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO,
+  type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
 import { layoutAgentes, layoutRuns } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
@@ -63,9 +64,7 @@ const nodeTypes = {
   ...navegadorNodeTypes,
 };
 
-// ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
-// ---------------------------------------------------------------------------
 
 // Tipos que tem render proprio; os demais caem no card de nota como fallback.
 const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador"]);
@@ -160,9 +159,7 @@ function lerBase64(arquivo: Blob): Promise<string> {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Controle de zoom proprio (canto inferior direito): −  N%  +
-// ---------------------------------------------------------------------------
 
 function ControleZoom() {
   const { zoom } = useViewport();
@@ -182,9 +179,7 @@ function ControleZoom() {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Canvas
-// ---------------------------------------------------------------------------
 
 export function Canvas({ projeto }: { projeto: string }) {
   const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
@@ -527,6 +522,25 @@ export function Canvas({ projeto }: { projeto: string }) {
     if (alterados.length) enviar(alterados.map((n): Op => ({ op: "upsert", tipo: "no", item: n })));
   };
 
+  /**
+   * Auto-organiza o canvas em faixas por tipo (organizarPorTipo), respeitando os cards fixados.
+   * `enviar` registra UMA acao no historico (Ctrl+Z desfaz tudo de uma vez); depois o enquadramento
+   * ajusta a vista pro novo arranjo. Nada mudou -> nenhuma op e nada de fitView.
+   */
+  const organizar = () => {
+    const ops = organizarPorTipo(modelo.nos, Date.now());
+    if (ops.length) {
+      enviar(ops);
+      setTimeout(() => instancia.current?.fitView({ maxZoom: 1, padding: 0.2 }), 50);
+    } else if (modelo.nos.length) setAviso("Nada para organizar.");
+  };
+
+  /** Alterna dados.fixado dos nos escolhidos (fixados ficam de fora do auto-organizar). */
+  const alternarFixados = (ids: string[]) => {
+    if (bloqueado || ids.length === 0) return;
+    enviar(alternarFixado(modelo.nos, ids, Date.now()));
+  };
+
   /** Nova nota na posicao (plano do canvas) do clique direito no vazio. */
   const novaNotaEm = (x: number, y: number) => {
     if (bloqueado) return;
@@ -566,10 +580,23 @@ export function Canvas({ projeto }: { projeto: string }) {
       if (k === "v") { if (colarClipboard()) { e.preventDefault(); return true; } return false; }
       if (k === "0") { e.preventDefault(); void instancia.current?.zoomTo(1); return true; }
     }
-    if (!ctrl && e.shiftKey && (e.key === "!" || e.key === "1")) {
-      e.preventDefault();
-      void instancia.current?.fitView({ maxZoom: 1, padding: 0.25 });
-      return true;
+    if (!ctrl && e.shiftKey) {
+      const k = e.key.toLowerCase();
+      // Shift+O: auto-organiza em faixas por tipo (respeitando os fixados). Shift+F: fixa/desafixa.
+      if (k === "o") { e.preventDefault(); organizar(); return true; }
+      if (k === "f") {
+        const ids = idsSelecionados();
+        if (ids.length === 0) return false;
+        if (bloqueado) return false;
+        e.preventDefault();
+        alternarFixados(ids);
+        return true;
+      }
+      if (e.key === "!" || e.key === "1") {
+        e.preventDefault();
+        void instancia.current?.fitView({ maxZoom: 1, padding: 0.25 });
+        return true;
+      }
     }
     return false;
   };
@@ -726,6 +753,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     removerNo: aoRemoverNo,
     redimensionar: aoRedimensionar,
     rotular: aoRotular,
+    fixar: (id: string) => { alternarFixados([id]); },
     arestaEditando,
     editarAresta: setArestaEditando,
   };
@@ -966,6 +994,7 @@ export function Canvas({ projeto }: { projeto: string }) {
       <Barra
         bloquear={bloqueado}
         ferramenta={ferramenta}
+        onOrganizar={organizar}
         onFerramenta={(f) => { setOrigemSeta(null); setFerramenta(f); }}
         onForma={(forma) => { setFormaPendente(forma); setOrigemSeta(null); setFerramenta("forma"); }}
         onImagem={(arquivo) => void criarImagem(arquivo)}

@@ -4,7 +4,7 @@
 // num Dialog; arrastar um arquivo (application/x-hermes-arquivo) solta no Canvas vira um card 'arquivo'.
 import { useCallback, useContext, useEffect, useMemo, useState, type DragEvent } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Search, X } from "lucide-react";
+import { ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Pin, Search, X } from "lucide-react";
 import { arvoreDeCaminhos, filtrarArvore, type NoArvore } from "@/lib/colab";
 import { cn } from "@/lib/utils";
 import { AgentesCtx } from "./Agente";
@@ -15,9 +15,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Tokens (mesmo chrome dos outros cards do canvas)
-// ---------------------------------------------------------------------------
 
 const FUNDO = "#1c1c1c";
 const BORDA = "#303030";
@@ -35,9 +33,7 @@ export const MIME_ARQUIVO = "application/x-hermes-arquivo";
 
 const lerDados = (data: unknown): No => (data as { no: No }).no;
 
-// ---------------------------------------------------------------------------
 // Previa do arquivo (Dialog) — reusada pelo Explorador e pelo card de arquivo (Run.tsx)
-// ---------------------------------------------------------------------------
 
 /** Dialog com a previa de um arquivo do agente (GET /arquivo?agente=&caminho=) em <pre> monospace 12px. */
 export function ModalArquivo({ aberto, agenteId, caminho, onFechar }: {
@@ -81,9 +77,7 @@ export function ModalArquivo({ aberto, agenteId, caminho, onFechar }: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Arvore (pasta recolhivel / arquivo arrastavel)
-// ---------------------------------------------------------------------------
 
 type RamoProps = {
   item: NoArvore;
@@ -125,9 +119,7 @@ function Ramo({ item, nivel, fechadas, onAlternar, onAbrir, onArrastar }: RamoPr
   );
 }
 
-// ---------------------------------------------------------------------------
 // nodeType
-// ---------------------------------------------------------------------------
 
 /** No' 'explorador': cabecalho 'Explorador · <agente>', busca e a arvore do agente. */
 export function NoExplorador({ id, data, selected }: NodeProps) {
@@ -136,6 +128,7 @@ export function NoExplorador({ id, data, selected }: NodeProps) {
   const no = lerDados(data);
   const agenteId = typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
   const nome = agentes.find((a) => a.id === agenteId)?.nome ?? (agenteId || "agente");
+  const fixado = no.dados.fixado === true;
   const [busca, setBusca] = useState("");
   const [caminhos, setCaminhos] = useState<string[]>([]);
   const [estado, setEstado] = useState<"carregando" | "ok" | "erro">("carregando");
@@ -179,6 +172,7 @@ export function NoExplorador({ id, data, selected }: NodeProps) {
       >
         <Folder className="size-3.5 shrink-0" style={{ color: AZUL }} />
         <span className="truncate" title={`Explorador · ${nome}`}>Explorador · {nome}</span>
+        {fixado && <Pin className="size-3.5 shrink-0" style={{ color: "#74aaff" }} aria-label="Fixado" />}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" title="Opções" className="nodrag ml-auto grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: CINZA }}>
@@ -187,6 +181,10 @@ export function NoExplorador({ id, data, selected }: NodeProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="cv-menu min-w-40">
             <DropdownMenuItem onSelect={() => carregar()}>Recarregar</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => acoes.fixar(id)}>
+              <Pin className="size-3.5" style={{ color: "#74aaff" }} />
+              {fixado ? "Desafixar" : "Fixar"}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <button type="button" title="Fechar" onClick={() => acoes.removerNo(id)} className="nodrag grid size-5 shrink-0 place-items-center rounded hover:bg-white/10" style={{ color: CINZA }}>

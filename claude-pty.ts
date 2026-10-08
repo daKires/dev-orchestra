@@ -1,9 +1,7 @@
 // Agentes Claude Code via PTY (F4 S1): logica PURA (CA-4d, 4e, 4f).
 // Roda com `node --experimental-strip-types`: apenas imports de `node:`; sem enum/namespace.
 
-// ---------------------------------------------------------------------------
 // Argumentos do processo `claude` (CA-4d, 4h)
-// ---------------------------------------------------------------------------
 
 export type ArgsClaudeOpts = {
   prompt: string;
@@ -24,16 +22,12 @@ export function argsClaude(o: ArgsClaudeOpts): string[] {
   return args;
 }
 
-// ---------------------------------------------------------------------------
 // Modelos (CA-5)
-// ---------------------------------------------------------------------------
 
 /** Modelos aceitos: "" (padrao do Claude) + opus/sonnet/haiku. */
 export const MODELOS_CLAUDE: readonly string[] = ["", "opus", "sonnet", "haiku"];
 
-// ---------------------------------------------------------------------------
 // Hooks de status (CA-4e)
-// ---------------------------------------------------------------------------
 
 export type HookCommand = { type: "command"; command: string };
 export type HookMatcher = { matcher: string; hooks: HookCommand[] };
@@ -57,9 +51,7 @@ export function settingsHooks(id: string, token: string): SettingsHooks {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Escrita no PTY (CA-4f)
-// ---------------------------------------------------------------------------
 
 /** Envia texto ao PTY como colagem entre colchetes (bracketed paste) seguida de Enter. */
 export function textoParaPty(msg: string): string {
