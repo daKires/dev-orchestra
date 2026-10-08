@@ -60,14 +60,31 @@ export function NoClaude({ id, data, selected }: NodeProps) {
       fontFamily: MONO,
       fontSize: 13,
       cursorBlink: true,
-      convertEol: true,
+      convertEol: false, // saida de PTY ja vem com \r\n; converter quebra a TUI do claude
       scrollback: 5000,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
-    try { fit.fit(); } catch {}
-    const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
+    // Cada fit avisa o PTY do tamanho real do card (senao o claude desenha na largura do spawn e corta).
+    let ultimo = "";
+    let espera: ReturnType<typeof setTimeout> | undefined;
+    const ajustar = () => {
+      try { fit.fit(); } catch { return; }
+      const chave = `${term.cols}x${term.rows}`;
+      if (chave === ultimo) return;
+      ultimo = chave;
+      clearTimeout(espera);
+      espera = setTimeout(() => {
+        void fetch(`/agentes/${encodeURIComponent(agenteId)}/tamanho`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+          body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+        }).catch(() => {});
+      }, 150);
+    };
+    ajustar();
+    const ro = new ResizeObserver(ajustar);
     ro.observe(el);
     const sub = term.onData((dados) => {
       void fetch(`/agentes/${encodeURIComponent(agenteId)}/teclas`, {

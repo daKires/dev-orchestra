@@ -8,6 +8,7 @@ export type PtyProc = {
   kill(): void;
   onData(cb: (d: string) => void): void;
   onExit(cb: (c: number) => void): void;
+  resize(cols: number, rows: number): void;
 };
 
 export type PtyDriver = {
@@ -35,6 +36,7 @@ export function criarDriverPty(): PtyDriver {
         kill: () => { try { p.kill(); } catch {} },
         onData: (cb) => { p.onData(cb); },
         onExit: (cb) => { p.onExit((e) => cb(e.exitCode)); },
+        resize: (cols, rows) => { try { p.resize(cols, rows); } catch {} },
       };
     },
   };

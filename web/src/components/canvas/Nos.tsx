@@ -427,7 +427,7 @@ const AZUL_CONVERSA = "#74aaff";
 /** data da aresta: `rotulo` do usuario e, quando em conversa, `{sentido, balao}` (F3 S4). */
 type DadosAresta = { rotulo?: string; conversa?: EmConversa };
 
-function ArestaRotulo({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd, style }: EdgeProps) {
+function ArestaRotulo({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerStart, markerEnd, style }: EdgeProps) {
   const acoes = useContext(CanvasCtx);
   const dados = data as DadosAresta | undefined;
   const conversa = dados?.conversa;
@@ -443,6 +443,7 @@ function ArestaRotulo({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
       <BaseEdge
         id={id}
         path={caminho}
+        markerStart={markerStart}
         markerEnd={markerEnd}
         style={conversa ? { ...style, stroke: AZUL_CONVERSA } : style}
       />

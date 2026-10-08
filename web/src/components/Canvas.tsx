@@ -121,6 +121,10 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
 // reverso inverte a animacao pela classe CSS `cv-anim-reversa` (sem trocar source/target).
 function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<string, EmConversa>): Edge {
   const comSeta = pontaDaAresta(porId.get(a.de)?.tipo, porId.get(a.para)?.tipo);
+  // Agente <-> agente/navegador: ligacao de mao dupla (os dois conversam/controlam), seta nas duas pontas.
+  const ehAtor = (t?: string) => t === "agente" || t === "navegador";
+  const maoDupla = !comSeta && ehAtor(porId.get(a.de)?.tipo) && ehAtor(porId.get(a.para)?.tipo);
+  const seta = { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 };
   const conv = emConversa[a.id];
   return {
     id: a.id,
@@ -130,7 +134,8 @@ function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<stri
     data: { rotulo: a.rotulo ?? "", conversa: conv },
     animated: !!conv,
     className: conv?.sentido === "reverso" ? "cv-anim-reversa" : undefined,
-    markerEnd: comSeta ? { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 } : undefined,
+    markerStart: maoDupla ? seta : undefined,
+    markerEnd: comSeta || maoDupla ? seta : undefined,
   };
 }
 
