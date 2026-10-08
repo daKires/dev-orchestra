@@ -538,7 +538,7 @@ export function Canvas({ projeto }: { projeto: string }) {
     if (ops.length) {
       enviar(ops);
       setTimeout(() => instancia.current?.fitView({ maxZoom: 1, padding: 0.2 }), 50);
-    }
+    } else if (modelo.nos.length) setAviso("Nada para organizar.");
   };
 
   /** Alterna dados.fixado dos nos escolhidos (fixados ficam de fora do auto-organizar). */
