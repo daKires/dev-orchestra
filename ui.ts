@@ -559,10 +559,8 @@ function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Agentes (F2/S3, CA-4a/4c/5/9): registros em disco, ponte do /event do OpenCode,
 // rotas /agentes e sincronizacao do contexto do canvas.
-// ---------------------------------------------------------------------------
 
 // Registro em disco de um agente: o Agente do modelo + campos de runtime (erro do ultimo start,
 // pid do serve e status explicito marcado pelo reiniciar, que destaca o serve como saudavel).
@@ -1003,9 +1001,7 @@ function criarAgenteClaude(projeto: string, cwd: string, papel: Papel, nome: str
   return { id, ok: !erro, erro };
 }
 
-// ---------------------------------------------------------------------------
 // Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
-// ---------------------------------------------------------------------------
 
 // Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
 function colabDe(id: string): Colab | undefined {

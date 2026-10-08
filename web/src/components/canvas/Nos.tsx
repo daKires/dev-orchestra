@@ -19,9 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Contexto: acoes que os cards/arestas chamam de volta pro Canvas
-// ---------------------------------------------------------------------------
 
 export type CanvasAcoes = {
   nos: No[];
@@ -43,9 +41,7 @@ export const CanvasCtx = createContext<CanvasAcoes>({
   arestaEditando: null, editarAresta: () => {},
 });
 
-// ---------------------------------------------------------------------------
 // Pecas comuns
-// ---------------------------------------------------------------------------
 
 type Dados = { no: No };
 
@@ -212,9 +208,7 @@ export function JanelaCard({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Markdown por blocos (sem HTML cru)
-// ---------------------------------------------------------------------------
 
 function Trechos({ trechos }: { trechos: Trecho[] }) {
   return (
@@ -249,9 +243,7 @@ export function Md({ texto }: { texto: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // nodeTypes
-// ---------------------------------------------------------------------------
 
 /** Nota: card inteiro na cor da paleta, faixa de cabecalho + corpo markdown no tom `texto`. */
 function NoNota({ id, data, selected }: NodeProps) {
@@ -458,9 +450,7 @@ function NoTexto({ id, data, selected }: NodeProps) {
 
 export const nodeTypes = { nota: NoNota, imagem: NoImagem, forma: NoForma, grupo: NoGrupo, texto: NoTexto };
 
-// ---------------------------------------------------------------------------
 // edgeTypes: aresta bezier com rotulo editavel (duplo clique) em pilula
-// ---------------------------------------------------------------------------
 
 /** Cor do tracejado/balao das arestas em conversa (F3 S4) — mesmo azul das alcas ativas. */
 const AZUL_CONVERSA = "#74aaff";

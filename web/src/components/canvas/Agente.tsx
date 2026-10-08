@@ -16,9 +16,7 @@ import {
 import type { AgenteVisivel, Linha } from "@/hooks/useAgentes";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Contexto (S5b): agentes do projeto + transcricoes + acoes + fechar o no'
-// ---------------------------------------------------------------------------
 
 /** Resumo do agente como o hub devolve (o `erro` so' aparece quando o agente falhou). */
 export type AgenteDoCanvas = AgenteVisivel & { erro?: string };
@@ -56,9 +54,7 @@ export const AgentesCtx = createContext<AgentesValor>({
   assinarPty: () => () => {},
 });
 
-// ---------------------------------------------------------------------------
 // Cores do terminal
-// ---------------------------------------------------------------------------
 
 const VERDE = "#46d3a0"; // ocioso / tool ok
 const AZUL = "#74aaff"; // ocupado (pulsando)
@@ -147,9 +143,7 @@ function SelectModelo({ agenteId, modelo, cwd, acoes }: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // nodeType
-// ---------------------------------------------------------------------------
 
 /** No' do agente: cabecalho com status, banner do OpenCode, transcricao rolavel e input. */
 export function NoAgente({ id, data, selected }: NodeProps) {

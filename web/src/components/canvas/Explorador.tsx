@@ -15,9 +15,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Tokens (mesmo chrome dos outros cards do canvas)
-// ---------------------------------------------------------------------------
 
 const FUNDO = "#1c1c1c";
 const BORDA = "#303030";
@@ -35,9 +33,7 @@ export const MIME_ARQUIVO = "application/x-hermes-arquivo";
 
 const lerDados = (data: unknown): No => (data as { no: No }).no;
 
-// ---------------------------------------------------------------------------
 // Previa do arquivo (Dialog) — reusada pelo Explorador e pelo card de arquivo (Run.tsx)
-// ---------------------------------------------------------------------------
 
 /** Dialog com a previa de um arquivo do agente (GET /arquivo?agente=&caminho=) em <pre> monospace 12px. */
 export function ModalArquivo({ aberto, agenteId, caminho, onFechar }: {
@@ -81,9 +77,7 @@ export function ModalArquivo({ aberto, agenteId, caminho, onFechar }: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Arvore (pasta recolhivel / arquivo arrastavel)
-// ---------------------------------------------------------------------------
 
 type RamoProps = {
   item: NoArvore;
@@ -125,9 +119,7 @@ function Ramo({ item, nivel, fechadas, onAlternar, onAbrir, onArrastar }: RamoPr
   );
 }
 
-// ---------------------------------------------------------------------------
 // nodeType
-// ---------------------------------------------------------------------------
 
 /** No' 'explorador': cabecalho 'Explorador · <agente>', busca e a arvore do agente. */
 export function NoExplorador({ id, data, selected }: NodeProps) {

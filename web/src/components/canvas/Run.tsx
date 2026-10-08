@@ -16,9 +16,7 @@ import { Alcas } from "./Nos";
 import { ModalArquivo } from "./Explorador";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Contexto (S5c): runs por id + relogio + acoes do canvas (expansao e diff)
-// ---------------------------------------------------------------------------
 
 export const RunsCtx = createContext<{
   runs: Record<string, Run>;
@@ -27,9 +25,7 @@ export const RunsCtx = createContext<{
   abrirDiff: (runId: string, arquivo: string) => void;
 }>({ runs: {}, agora: Date.now(), alternar: () => {}, abrirDiff: () => {} });
 
-// ---------------------------------------------------------------------------
 // Pecas comuns (tokens do Castor, como os outros cards)
-// ---------------------------------------------------------------------------
 
 const FUNDO = "#1c1c1c";
 const BORDA = "#303030";
@@ -69,9 +65,7 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // nodeTypes
-// ---------------------------------------------------------------------------
 
 /** Run: card com cabecalho (status + feature + Expandir/Recolher) e progresso/custo/duracao/status. */
 function NoRun({ data, selected }: NodeProps) {
@@ -194,9 +188,7 @@ function NoArquivo({ data, selected }: NodeProps) {
 /** Mapa de nodeTypes do xyflow (o Canvas registra run/worker/arquivo apontando pra estes cards). */
 export const nodeTypes = { run: NoRun, worker: NoWorker, arquivo: NoArquivo };
 
-// ---------------------------------------------------------------------------
 // Modal de diff (abre o DiffView existente num dialog)
-// ---------------------------------------------------------------------------
 
 export function ModalDiff({ aberto, patch, arquivo, onFechar }: {
   aberto: boolean; patch: string; arquivo: string; onFechar: () => void;
