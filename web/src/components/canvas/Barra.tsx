@@ -4,7 +4,7 @@
 import { useRef, type ChangeEvent, type ReactNode } from "react";
 import {
   ArrowUpRight, Bot, Circle, Diamond, Frame, Globe, Hand, Image as ImageIcon,
-  MousePointer2, Square, StickyNote, Type,
+  LayoutGrid, MousePointer2, Square, StickyNote, Type,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -24,6 +24,8 @@ type Props = {
   onAgente: () => void;
   /** Abre o dialog de criar um navegador (atalho B). */
   onNavegador: () => void;
+  /** Auto-organiza o canvas em faixas por tipo (atalho Shift+O). */
+  onOrganizar: () => void;
 };
 
 const TAM = 36; // icone de 36px (Castor)
@@ -58,7 +60,7 @@ function Botao({ titulo, ativo, disabled, onClick, children }: {
   );
 }
 
-export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador }: Props) {
+export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador, onOrganizar }: Props) {
   const arquivo = useRef<HTMLInputElement | null>(null);
 
   const escolherArquivo = (e: ChangeEvent<HTMLInputElement>) => {
@@ -136,6 +138,9 @@ export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, o
       </Botao>
       <Botao titulo="+ Navegador (B)" disabled={bloquear} onClick={onNavegador}>
         <Globe className="size-4" />
+      </Botao>
+      <Botao titulo="Organizar (Shift+O)" disabled={bloquear} onClick={onOrganizar}>
+        <LayoutGrid className="size-4" />
       </Botao>
     </div>
   );

@@ -6,9 +6,7 @@
 function slugNome(nome) {
     return nome.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
-// ---------------------------------------------------------------------------
 // URL (CA-7a)
-// ---------------------------------------------------------------------------
 /** Aceita somente URLs http/https validas (qualquer caixa); recusa o resto. */
 export function urlPermitida(url) {
     if (typeof url !== "string" || url.length === 0)
@@ -22,9 +20,7 @@ export function urlPermitida(url) {
     }
     return u.protocol === "http:" || u.protocol === "https:";
 }
-// ---------------------------------------------------------------------------
 // Formatacao da leitura (CA-7b)
-// ---------------------------------------------------------------------------
 /** Numero com 2 digitos (para data/hora). */
 function p2(x) {
     return String(x).padStart(2, "0");
@@ -46,9 +42,7 @@ export function formatarLeitura(l, max = 6000) {
     }
     return linhas.join("\n");
 }
-// ---------------------------------------------------------------------------
 // Resolucao de elemento (CA-7b)
-// ---------------------------------------------------------------------------
 /**
  * Resolve um alvo contra os elementos lidos: numero -> pelo `n` exato; texto -> rotulo que
  * contem o alvo (sem diferenciar maiusculas). Ambiguo devolve erro com 'ambíguo' e os numeros.
@@ -70,18 +64,14 @@ export function resolverElemento(els, alvo) {
         return { ok: casam[0] };
     return { erro: `elemento "${texto}" é ambíguo: ${casam.map((e) => e.n).join(", ")}` };
 }
-// ---------------------------------------------------------------------------
 // Nome do screenshot (CA-7b)
-// ---------------------------------------------------------------------------
 /** Nome de arquivo do screenshot: `<slugNome>-YYYYMMDD-HHMMSS.png` (hora local). */
 export function nomeShot(nome, data) {
     const ts = `${data.getFullYear()}${p2(data.getMonth() + 1)}${p2(data.getDate())}` +
         `-${p2(data.getHours())}${p2(data.getMinutes())}${p2(data.getSeconds())}`;
     return `${slugNome(nome)}-${ts}.png`;
 }
-// ---------------------------------------------------------------------------
 // Script de leitura (CA-7b)
-// ---------------------------------------------------------------------------
 /**
  * IIFE avaliada na pagina via `Runtime.evaluate`. Numera a partir de 1 os elementos
  * interativos VISIVEIS, marca cada um com `data-hermes-n` e devolve (JSON) o titulo, a url,

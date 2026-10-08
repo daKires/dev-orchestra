@@ -6,9 +6,7 @@
 import type { No, Snapshot } from "./canvas.js";
 import type { Planejador } from "./ui.js";
 
-// ---------------------------------------------------------------------------
 // Papeis (CA-5)
-// ---------------------------------------------------------------------------
 
 export type Papel = "lider" | "designer" | "dev" | "revisor" | "livre";
 
@@ -39,9 +37,7 @@ export const PAPEIS: Record<Papel, DefinicaoPapel> = {
   livre: { nome: "Livre", instrucao: "" },
 };
 
-// ---------------------------------------------------------------------------
 // Modelo de agente
-// ---------------------------------------------------------------------------
 
 export type OrigemAgente = "canvas" | "planejador";
 
@@ -116,9 +112,7 @@ export function separarModelo(modelo: string): { providerID: string; modelID: st
   return { providerID: modelo.slice(0, i), modelID: modelo.slice(i + 1) };
 }
 
-// ---------------------------------------------------------------------------
 // Linhas (transcricao do chat do OpenCode) (CA-4a)
-// ---------------------------------------------------------------------------
 
 export type EstadoLinha = "pendente" | "rodando" | "ok" | "erro";
 export type TipoLinha = "usuario" | "texto" | "tool";
@@ -289,9 +283,7 @@ export function aplicarLinhas(atual: Linha[], novas: Linha[], maxMsgs = 50): Lin
   return out.filter((l) => manter.has(l.msg));
 }
 
-// ---------------------------------------------------------------------------
 // Contexto dos agentes a partir do canvas (S2, CA-9)
-// ---------------------------------------------------------------------------
 
 export type ItemContexto =
   | { noId: string; tipo: "nota"; titulo: string; corpo: string }

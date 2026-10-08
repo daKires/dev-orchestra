@@ -13,9 +13,7 @@ export function argsClaude(o) {
         args.push("--model", o.modelo);
     return args;
 }
-// ---------------------------------------------------------------------------
 // Modelos (CA-5)
-// ---------------------------------------------------------------------------
 /** Modelos aceitos: "" (padrao do Claude) + opus/sonnet/haiku. */
 export const MODELOS_CLAUDE = ["", "opus", "sonnet", "haiku"];
 /**
@@ -35,9 +33,7 @@ export function settingsHooks(id, token) {
         },
     };
 }
-// ---------------------------------------------------------------------------
 // Escrita no PTY (CA-4f)
-// ---------------------------------------------------------------------------
 /** Envia texto ao PTY como colagem entre colchetes (bracketed paste) seguida de Enter. */
 export function textoParaPty(msg) {
     return "\x1b[200~" + msg + "\x1b[201~\r";

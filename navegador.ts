@@ -7,9 +7,7 @@ function slugNome(nome: string): string {
   return nome.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-// ---------------------------------------------------------------------------
 // Modelos
-// ---------------------------------------------------------------------------
 
 /** Elemento interativo lido da pagina: numero estavel, papel em PT e rotulo curto. */
 export type Elemento = { n: number; papel: string; rotulo: string };
@@ -17,9 +15,7 @@ export type Elemento = { n: number; papel: string; rotulo: string };
 /** Leitura de uma pagina: cabecalho + texto + elementos interativos. */
 export type Leitura = { titulo: string; url: string; texto: string; elementos: Elemento[] };
 
-// ---------------------------------------------------------------------------
 // URL (CA-7a)
-// ---------------------------------------------------------------------------
 
 /** Aceita somente URLs http/https validas (qualquer caixa); recusa o resto. */
 export function urlPermitida(url: string): boolean {
@@ -33,9 +29,7 @@ export function urlPermitida(url: string): boolean {
   return u.protocol === "http:" || u.protocol === "https:";
 }
 
-// ---------------------------------------------------------------------------
 // Formatacao da leitura (CA-7b)
-// ---------------------------------------------------------------------------
 
 /** Numero com 2 digitos (para data/hora). */
 function p2(x: number): string {
@@ -58,9 +52,7 @@ export function formatarLeitura(l: Leitura, max = 6000): string {
   return linhas.join("\n");
 }
 
-// ---------------------------------------------------------------------------
 // Resolucao de elemento (CA-7b)
-// ---------------------------------------------------------------------------
 
 /**
  * Resolve um alvo contra os elementos lidos: numero -> pelo `n` exato; texto -> rotulo que
@@ -81,9 +73,7 @@ export function resolverElemento(els: Elemento[], alvo: string): { ok: Elemento 
   return { erro: `elemento "${texto}" é ambíguo: ${casam.map((e) => e.n).join(", ")}` };
 }
 
-// ---------------------------------------------------------------------------
 // Nome do screenshot (CA-7b)
-// ---------------------------------------------------------------------------
 
 /** Nome de arquivo do screenshot: `<slugNome>-YYYYMMDD-HHMMSS.png` (hora local). */
 export function nomeShot(nome: string, data: Date): string {
@@ -93,9 +83,7 @@ export function nomeShot(nome: string, data: Date): string {
   return `${slugNome(nome)}-${ts}.png`;
 }
 
-// ---------------------------------------------------------------------------
 // Script de leitura (CA-7b)
-// ---------------------------------------------------------------------------
 
 /**
  * IIFE avaliada na pagina via `Runtime.evaluate`. Numera a partir de 1 os elementos

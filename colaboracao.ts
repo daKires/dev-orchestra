@@ -6,9 +6,7 @@ import { posix } from "node:path";
 /** Referencia minima a um agente (id + nome de exibicao). */
 export type AgenteRef = { id: string; nome: string };
 
-// ---------------------------------------------------------------------------
 // Nomes
-// ---------------------------------------------------------------------------
 
 /** Slug de um nome: minusculas, sem acento, separador '-'. Ex.: "Líder do Projeto" -> "lider-do-projeto". */
 export function slugNome(nome: string): string {
@@ -20,9 +18,7 @@ export function slugNome(nome: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-// ---------------------------------------------------------------------------
 // Grafo de colaboracao
-// ---------------------------------------------------------------------------
 
 /**
  * Agentes ligados a `agenteId` por uma aresta (em qualquer direcao), sem ele mesmo,
@@ -58,9 +54,7 @@ export function resolverAlvo(lista: AgenteRef[], alvo: string): { ok: AgenteRef 
   return { erro: `agente ${alvo} é ambíguo: ${casam.map((a) => a.id).join(", ")}` };
 }
 
-// ---------------------------------------------------------------------------
 // Conversas (perguntas/respostas)
-// ---------------------------------------------------------------------------
 
 export type Pergunta = {
   q: string;
@@ -149,9 +143,7 @@ export class Conversas {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Fila de entregas
-// ---------------------------------------------------------------------------
 
 /** Fila por agente; um agente desconhecido conta como ocioso (CA-6e). */
 export class FilaEntregas<T = string> {
@@ -181,9 +173,7 @@ export class FilaEntregas<T = string> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Formatadores
-// ---------------------------------------------------------------------------
 
 export function fmtPergunta(de: string, q: string, texto: string): string {
   return `[pergunta de ${de} · ${q}] ${texto} -- responda com: canvas reply ${q} "<resultado>"`;
@@ -206,9 +196,7 @@ export function linhaIdentidade(nome: string, id: string, token: string): string
   return `${nome} (${id}) — use: canvas --eu ${id}:${token}`;
 }
 
-// ---------------------------------------------------------------------------
 // Flow do agente (regiao + formas)
-// ---------------------------------------------------------------------------
 
 const FORMAS: readonly string[] = ["elipse", "losango", "retangulo"];
 const CORES_FORMA: readonly string[] = ["amarelo", "cinza", "lilas", "verde", "vermelho"];
@@ -310,9 +298,7 @@ export function opsFlowLink(
   return { ops: [{ op: "upsert", tipo: "aresta", item }] };
 }
 
-// ---------------------------------------------------------------------------
 // Cards do agente (arquivo + nota)
-// ---------------------------------------------------------------------------
 
 const CARD_W = 300;
 const CARD_GAP = 24;
@@ -359,9 +345,7 @@ export function opsNote(snap: Snapshot, agNo: No, titulo: string, corpo: string,
   ];
 }
 
-// ---------------------------------------------------------------------------
 // Caminhos
-// ---------------------------------------------------------------------------
 
 /** Normaliza um caminho relativo para '/'; devolve null se absoluto, vazio ou com '..' (traversal). */
 export function validarCaminho(_cwd: string, rel: string): string | null {

@@ -3,9 +3,7 @@
 // nao vai pro bundle do browser — so' tipos entram, via `import type` (apagado na compilacao).
 import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Aplicacao de operacoes (mesma regra de conflito do hub)
-// ---------------------------------------------------------------------------
 
 /**
  * Devolve um NOVO snapshot (nunca muta o original). Mesma regra do aplicarOps do hub: a ultima
@@ -43,9 +41,7 @@ export function aplicarOpsLocal(s: Snapshot, ops: Op[]): Snapshot {
   return { nos: [...nos.values()], arestas: [...arestas.values()] };
 }
 
-// ---------------------------------------------------------------------------
 // Grupo pai
-// ---------------------------------------------------------------------------
 
 /**
  * Id do MENOR grupo que contem o no' INTEIRO (comparando x,y,w,h absolutos com o retangulo do
@@ -66,9 +62,7 @@ export function paiDoNo(no: No, grupos: No[]): string | undefined {
   return melhor?.id;
 }
 
-// ---------------------------------------------------------------------------
 // Nos do react-flow: medidas/selecao (S5 - F1.5, fix das arestas invisiveis)
-// ---------------------------------------------------------------------------
 
 /**
  * Mescla os nos RECONSTRUIDOS do modelo (`novos`) com os nos antigos do react-flow (`antigos`).
@@ -93,9 +87,7 @@ export function mesclarNosRf<T extends { id: string; measured?: unknown; selecte
   });
 }
 
-// ---------------------------------------------------------------------------
 // Inspetor (F2.1): so' nos criados a mao abrem o painel de propriedades
-// ---------------------------------------------------------------------------
 
 /** Tipos que tem editor proprio no inspetor (os cards automaticos ficam de fora). */
 const TIPOS_INSPECIONAVEIS = new Set<TipoNo>(["nota", "forma", "imagem", "grupo", "texto"]);
@@ -109,9 +101,7 @@ export function inspecionavel(no: { tipo: TipoNo; dados: Record<string, unknown>
   return TIPOS_INSPECIONAVEIS.has(no.tipo) && no.dados?.auto !== true;
 }
 
-// ---------------------------------------------------------------------------
 // Markdown -> blocos
-// ---------------------------------------------------------------------------
 
 /** Trecho inline de markdown. Chaves so' aparecem quando verdadeiras (sem false/undefined). */
 export type Trecho = { texto: string; negrito?: true; codigo?: true };
@@ -215,9 +205,7 @@ export function mdBlocos(texto: string): BlocoMd[] {
   return blocos;
 }
 
-// ---------------------------------------------------------------------------
 // Zoom
-// ---------------------------------------------------------------------------
 
 /** Limita o zoom a 10%..200%; NaN (ou nao-finito) cai em 1. */
 export function limitarZoom(z: number): number {
@@ -225,9 +213,7 @@ export function limitarZoom(z: number): number {
   return Math.min(2, Math.max(0.1, z));
 }
 
-// ---------------------------------------------------------------------------
 // Imagens
-// ---------------------------------------------------------------------------
 
 export const MAX_IMAGEM_BYTES = 25 * 1024 * 1024;
 
@@ -266,9 +252,7 @@ export function checarImagem(nome: string, bytes: number): string | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
 // Ferramentas e criacao de nos (S2 - F1.5)
-// ---------------------------------------------------------------------------
 
 /** Ferramentas da barra flutuante do canvas. */
 export type Ferramenta = "selecionar" | "mao" | "nota" | "forma" | "imagem" | "regiao" | "seta" | "texto";
@@ -345,9 +329,7 @@ export function noNovo(
   }
 }
 
-// ---------------------------------------------------------------------------
 // Paletas / tokens visuais do Castor (puro, sem React)
-// ---------------------------------------------------------------------------
 
 /** Tokens de uma nota: fundo do card, borda, faixa de cabecalho e cor do texto. */
 export type EstiloNota = { fundo: string; borda: string; cabecalho: string; texto: string };
@@ -410,9 +392,7 @@ export const CORES_FORMA = {
 /** Cores de região/grupo (moldura da zona): cinza ou lilás. */
 export const CORES_REGIAO = { cinza: "#858585", lilas: "#7966d6" } as const;
 
-// ---------------------------------------------------------------------------
 // Edicao: duplicar/colar e ordem z (S3 - F1.5, CA-E2/E3)
-// ---------------------------------------------------------------------------
 
 /**
  * Copia os nos de `ids` mais os filhos RECURSIVOS dos grupos copiados: cada copia ganha id novo e
@@ -468,9 +448,7 @@ export function ordemZ(nos: No[], ids: string[], onde: "frente" | "tras"): No[] 
   return nos.filter((n) => alvo.has(n.id)).map((n) => ({ ...n, dados: { ...n.dados, z } }));
 }
 
-// ---------------------------------------------------------------------------
 // Historico local por ops inversas (S4 - F1.5, CA-E4)
-// ---------------------------------------------------------------------------
 
 /**
  * Ops que DESFAZEM `ops`, na ordem inversa. Criar -> remove; editar -> volta o item anterior com o
@@ -538,9 +516,7 @@ export class Historico {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Miniatura do canvas (S5 - F1.5, CA-P1)
-// ---------------------------------------------------------------------------
 
 export type MiniRetangulo = { x: number; y: number; w: number; h: number; cor: string };
 export type MiniLinha = { x1: number; y1: number; x2: number; y2: number };
@@ -589,4 +565,138 @@ export function miniatura(s: Snapshot, largura: number, altura: number): Miniatu
     linhas.push({ x1: r1.x + r1.w / 2, y1: r1.y + r1.h / 2, x2: r2.x + r2.w / 2, y2: r2.y + r2.h / 2 });
   }
   return { retangulos, linhas };
+}
+
+// Auto-organizar em faixas por tipo + fixar cards (S5 - acabamento)
+
+export const ESPACO_ORGANIZAR = 80;
+export const LARGURA_ORGANIZAR = 3200;
+
+export function alternarFixado(nos: No[], ids: string[], rev: number): Op[] {
+  const alvos = nos.filter((n) => ids.includes(n.id));
+  const fixar = alvos.some((n) => n.dados.fixado !== true);
+  return alvos.map((n) => ({ op: "upsert", tipo: "no", item: { ...n, dados: { ...n.dados, fixado: fixar }, rev } }));
+}
+
+const FAIXAS: TipoNo[][] = [["agente"], ["navegador"], ["run", "worker"], ["nota", "imagem", "arquivo", "explorador", "texto"], ["forma", "grupo"]];
+const fixo = (n: No) => n.dados.fixado === true;
+const bate = (a: Retangulo, b: Retangulo, m: number) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+
+// Empilha `itens` em faixas a partir de (x0,y0), largura max `larg`, evitando `obst`. Devolve posicoes e a altura usada.
+function empilhar(itens: No[], x0: number, y0: number, larg: number, obst: Retangulo[]): { pos: Map<string, { x: number; y: number }>; fundo: number; direita: number } {
+  const pos = new Map<string, { x: number; y: number }>();
+  let y = y0;
+  let fundo = y0;
+  let direita = x0;
+  for (const tipos of FAIXAS) {
+    const da = itens.filter((n) => tipos.includes(n.tipo)).sort((a, b) => a.x - b.x || a.y - b.y);
+    if (!da.length) continue;
+    let x = x0;
+    let alturaLinha = 0;
+    for (const n of da) {
+      for (let guarda = 0; guarda < 500; guarda++) {
+        if (x > x0 && x + n.w > x0 + larg) {
+          y += alturaLinha + ESPACO_ORGANIZAR;
+          x = x0;
+          alturaLinha = 0;
+        }
+        const r = { x, y, w: n.w, h: n.h };
+        const o = obst.find((b) => bate(r, b, ESPACO_ORGANIZAR / 2));
+        if (!o) break;
+        x = o.x + o.w + ESPACO_ORGANIZAR;
+        if (x + n.w > x0 + larg) {
+          y += Math.max(alturaLinha, 1) + ESPACO_ORGANIZAR;
+          x = x0;
+          alturaLinha = 0;
+        }
+      }
+      pos.set(n.id, { x, y });
+      x += n.w + ESPACO_ORGANIZAR;
+      alturaLinha = Math.max(alturaLinha, n.h);
+      fundo = Math.max(fundo, y + n.h);
+      direita = Math.max(direita, x - ESPACO_ORGANIZAR);
+    }
+    y = fundo + ESPACO_ORGANIZAR;
+  }
+  return { pos, fundo, direita };
+}
+
+/**
+ * Auto-organiza o canvas em faixas horizontais por tipo (agente -> navegador -> run/worker ->
+ * nota/imagem/arquivo/explorador/texto -> forma/grupo), respeitando os cards fixados. Regioes
+ * (grupos) movem como bloco com seus descendentes e rearrumam os filhos por dentro, crescendo se
+ * precisar. Devolve so' os upserts dos nos cujo x/y/w/h mudou; tudo fixado (ou vazio) -> [].
+ */
+export function organizarPorTipo(nos: No[], rev: number): Op[] {
+  if (nos.length === 0) return [];
+  const atual = new Map<string, No>(nos.map((n) => [n.id, { ...n }]));
+  const grupos = nos.filter((n) => n.tipo === "grupo");
+  const pai = new Map<string, string | undefined>();
+  for (const n of nos) pai.set(n.id, paiDoNo(n, grupos));
+
+  const descendentes = (id: string): string[] => {
+    const out: string[] = [];
+    const fila = [id];
+    for (let i = 0; i < fila.length; i++) {
+      for (const n of nos) {
+        if (pai.get(n.id) === fila[i]) {
+          out.push(n.id);
+          fila.push(n.id);
+        }
+      }
+    }
+    return out;
+  };
+  const ehFixo = (n: No): boolean =>
+    fixo(n) || (n.tipo === "grupo" && descendentes(n.id).some((d) => fixo(atual.get(d)!)));
+  const mover = (id: string, dx: number, dy: number) => {
+    const n = atual.get(id)!;
+    n.x += dx;
+    n.y += dy;
+    if (n.tipo === "grupo") {
+      for (const d of descendentes(id)) {
+        const m = atual.get(d)!;
+        m.x += dx;
+        m.y += dy;
+      }
+    }
+  };
+  const retangulo = (r: Retangulo): Retangulo => ({ x: r.x, y: r.y, w: r.w, h: r.h });
+
+  // 1) Regioes do mais interno ao mais externo: arruma os filhos nao fixados por dentro.
+  for (const g of [...grupos].sort((a, b) => a.w * a.h - b.w * b.h)) {
+    const filhos = nos.filter((n) => pai.get(n.id) === g.id).map((n) => atual.get(n.id)!);
+    if (filhos.length === 0) continue;
+    const gAtual = atual.get(g.id)!;
+    const contidos = filhos.filter((c) => !ehFixo(c));
+    const obst: Retangulo[] = filhos.filter(ehFixo).map(retangulo);
+    const larg = Math.max(gAtual.w - 80, ...filhos.map((c) => c.w));
+    const { pos, fundo, direita } = empilhar(contidos, gAtual.x + 40, gAtual.y + 48, larg, obst);
+    for (const c of contidos) {
+      const p = pos.get(c.id)!;
+      mover(c.id, p.x - c.x, p.y - c.y);
+    }
+    gAtual.w = Math.max(gAtual.w, direita - gAtual.x + 40);
+    gAtual.h = Math.max(gAtual.h, fundo - gAtual.y + 40);
+  }
+
+  // 2) Topo: empilha os nao fixados a partir da origem, desviando dos fixados (e regioes com fixados).
+  const topo = nos.filter((n) => !pai.get(n.id)).map((n) => atual.get(n.id)!);
+  const obst: Retangulo[] = topo.filter(ehFixo).map(retangulo);
+  const moverTopo = topo.filter((n) => !ehFixo(n));
+  const { pos } = empilhar(moverTopo, 0, 0, LARGURA_ORGANIZAR, obst);
+  for (const n of moverTopo) {
+    const p = pos.get(n.id)!;
+    mover(n.id, p.x - n.x, p.y - n.y);
+  }
+
+  // 3) So' os nos que mudaram de posicao/tamanho.
+  const ops: Op[] = [];
+  for (const n of nos) {
+    const a = atual.get(n.id)!;
+    if (a.x !== n.x || a.y !== n.y || a.w !== n.w || a.h !== n.h) {
+      ops.push({ op: "upsert", tipo: "no", item: { ...n, x: a.x, y: a.y, w: a.w, h: a.h, rev } });
+    }
+  }
+  return ops;
 }
