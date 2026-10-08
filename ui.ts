@@ -587,6 +587,7 @@ type PtyProc = {
   kill(): void;
   onData(cb: (d: string) => void): void;
   onExit(cb: (c: number) => void): void;
+  resize?(cols: number, rows: number): void;
 };
 export type PtyDriver = {
   spawn(opts: { comando: string; args: string[]; cwd: string; env: Record<string, string | undefined>; cols?: number; rows?: number }): PtyProc;
@@ -595,6 +596,7 @@ let ptyAtual: PtyDriver | undefined;
 const ptyProcs = new Map<string, PtyProc>();   // id -> processo do `claude`
 const ptyBuffers = new Map<string, string>();  // id -> ultimas ~200KB de saida do PTY (GET /agentes/:id/pty)
 const aguardandoSet = new Set<string>();       // ids aguardando permissao (aguardando = ocupado na fila)
+const tamanhoPty = new Map<string, { cols: number; rows: number }>(); // id -> ultimo tamanho do xterm do card (reusado no retomar)
 const LIMITE_BUFFER_PTY = 200 * 1024;          // ~200KB de buffer por agente
 
 let subirServeAtual: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }> = subirServeReal;
@@ -643,6 +645,18 @@ function envServe(): NodeJS.ProcessEnv {
   const atual = env.PATH ?? env.Path ?? "";
   delete env.Path;
   env.PATH = bin + path.delimiter + atual;
+  return env;
+}
+
+// Env do `claude` no PTY: o do serve (bin/ no PATH, onde fica o `canvas`) sem as variaveis de uma sessao
+// Claude Code/desktop que abriu o app (ANTHROPIC_BASE_URL, CLAUDE_CODE_*...): com elas o claude cobra
+// pela API em vez de usar o login da conta. CLAUDE_CONFIG_DIR fica (escolha do usuario).
+export function envClaude(base: NodeJS.ProcessEnv = envServe()): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_AGENT_SDK|CLAUDECODE$|CLAUDE_PID$|CLAUDE_EFFORT$)/i.test(k)) continue;
+    env[k] = v;
+  }
   return env;
 }
 
@@ -952,9 +966,9 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean): void {
     comando: "claude",
     args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
     cwd: a.cwd,
-    env: envServe(), // mesmo PATH com bin/ na frente usado no serve (o CLI `canvas` fica la)
-    cols: 120,
-    rows: 32,
+    env: envClaude(),
+    cols: tamanhoPty.get(a.id)?.cols ?? 120,
+    rows: tamanhoPty.get(a.id)?.rows ?? 32,
   });
   ptyProcs.set(a.id, proc);
   ptyBuffers.set(a.id, "");
@@ -1616,6 +1630,14 @@ function criarServidor(): http.Server {
           const dados = j && typeof j.dados === "string" ? j.dados : "";
           if (!dados) { res.writeHead(400); res.end(); return; }
           escreverPty(a.id, dados);
+          res.writeHead(204); res.end(); return;
+        }
+        if (acao === "tamanho") {
+          // Tamanho do xterm do card (fit): o PTY precisa saber, senao o claude quebra linhas na largura errada.
+          const cols = Math.trunc(Number(j?.cols)), rows = Math.trunc(Number(j?.rows));
+          if (!(cols >= 10 && cols <= 500 && rows >= 4 && rows <= 300)) { res.writeHead(400); res.end(); return; }
+          tamanhoPty.set(a.id, { cols, rows });
+          ptyProcs.get(a.id)?.resize?.(cols, rows);
           res.writeHead(204); res.end(); return;
         }
         if (acao === "mensagem") {

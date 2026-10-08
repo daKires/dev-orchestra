@@ -653,6 +653,7 @@ let ptyAtual;
 const ptyProcs = new Map(); // id -> processo do `claude`
 const ptyBuffers = new Map(); // id -> ultimas ~200KB de saida do PTY (GET /agentes/:id/pty)
 const aguardandoSet = new Set(); // ids aguardando permissao (aguardando = ocupado na fila)
+const tamanhoPty = new Map(); // id -> ultimo tamanho do xterm do card (reusado no retomar)
 const LIMITE_BUFFER_PTY = 200 * 1024; // ~200KB de buffer por agente
 let subirServeAtual = subirServeReal;
 let matarProcessoAtual = (pid) => { try {
@@ -699,6 +700,18 @@ function envServe() {
     const atual = env.PATH ?? env.Path ?? "";
     delete env.Path;
     env.PATH = bin + path.delimiter + atual;
+    return env;
+}
+// Env do `claude` no PTY: o do serve (bin/ no PATH, onde fica o `canvas`) sem as variaveis de uma sessao
+// Claude Code/desktop que abriu o app (ANTHROPIC_BASE_URL, CLAUDE_CODE_*...): com elas o claude cobra
+// pela API em vez de usar o login da conta. CLAUDE_CONFIG_DIR fica (escolha do usuario).
+export function envClaude(base = envServe()) {
+    const env = {};
+    for (const [k, v] of Object.entries(base)) {
+        if (/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_AGENT_SDK|CLAUDECODE$|CLAUDE_PID$|CLAUDE_EFFORT$)/i.test(k))
+            continue;
+        env[k] = v;
+    }
     return env;
 }
 // Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
@@ -1098,9 +1111,9 @@ function subirPtyClaude(a, continuar) {
         comando: "claude",
         args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
         cwd: a.cwd,
-        env: envServe(), // mesmo PATH com bin/ na frente usado no serve (o CLI `canvas` fica la)
-        cols: 120,
-        rows: 32,
+        env: envClaude(),
+        cols: tamanhoPty.get(a.id)?.cols ?? 120,
+        rows: tamanhoPty.get(a.id)?.rows ?? 32,
     });
     ptyProcs.set(a.id, proc);
     ptyBuffers.set(a.id, "");
@@ -2039,6 +2052,20 @@ function criarServidor() {
                         return;
                     }
                     escreverPty(a.id, dados);
+                    res.writeHead(204);
+                    res.end();
+                    return;
+                }
+                if (acao === "tamanho") {
+                    // Tamanho do xterm do card (fit): o PTY precisa saber, senao o claude quebra linhas na largura errada.
+                    const cols = Math.trunc(Number(j?.cols)), rows = Math.trunc(Number(j?.rows));
+                    if (!(cols >= 10 && cols <= 500 && rows >= 4 && rows <= 300)) {
+                        res.writeHead(400);
+                        res.end();
+                        return;
+                    }
+                    tamanhoPty.set(a.id, { cols, rows });
+                    ptyProcs.get(a.id)?.resize?.(cols, rows);
                     res.writeHead(204);
                     res.end();
                     return;

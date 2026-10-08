@@ -33,6 +33,7 @@
     "ui-cli.test.ts",
     "ui-ceder.test.ts",
     "ui-browser.test.ts",
-    "ui-claude.test.ts"
+    "ui-claude.test.ts",
+    "ui-claude-env.test.ts"
   ]
 }
