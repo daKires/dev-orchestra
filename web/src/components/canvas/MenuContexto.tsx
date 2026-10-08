@@ -10,9 +10,7 @@ import { Check, ChevronRight, ClipboardPaste, Copy, Layers, StickyNote, Trash2 }
 import { CORES_FORMA, CORES_NOTA, CORES_REGIAO } from "@/lib/canvas";
 import type { No } from "../../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Tipos
-// ---------------------------------------------------------------------------
 
 // Onde o clique direito aconteceu: num no' (id + ponto na tela) ou no vazio (ponto na tela + ponto no
 // plano do canvas, usado pra criar a nota no lugar certo).
@@ -41,9 +39,7 @@ export type MenuContextoProps = {
   children: ReactNode;
 };
 
-// ---------------------------------------------------------------------------
 // Paletas / rotulos
-// ---------------------------------------------------------------------------
 
 const ROTULO_COR: Record<string, string> = {
   amarelo: "Amarelo", rosa: "Rosa", lilas: "Lilás", azul: "Azul", verde: "Verde",
@@ -62,9 +58,7 @@ function corAtual(paleta: Record<string, string>, valor: unknown, padrao: string
   return typeof valor === "string" && valor in paleta ? valor : padrao;
 }
 
-// ---------------------------------------------------------------------------
 // Itens
-// ---------------------------------------------------------------------------
 
 function Item({ children, onSelect }: { children: ReactNode; onSelect: () => void }) {
   return (
@@ -126,9 +120,7 @@ function ItensPane({ alvo, acoes }: { alvo: Extract<MenuAlvo, { tipo: "pane" }>;
   );
 }
 
-// ---------------------------------------------------------------------------
 // MenuContexto
-// ---------------------------------------------------------------------------
 
 export function MenuContexto({ alvo, no, acoes, onFechar, children }: MenuContextoProps) {
   const gatilho = useRef<HTMLSpanElement>(null);

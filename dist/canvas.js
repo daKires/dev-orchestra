@@ -17,9 +17,7 @@ export const TIPOS_NO = [
     "explorador",
     "navegador",
 ];
-// ---------------------------------------------------------------------------
 // Validacao de operacoes
-// ---------------------------------------------------------------------------
 const ehString = (v) => typeof v === "string";
 const ehNumero = (v) => typeof v === "number" && Number.isFinite(v);
 const ehId = (v) => ehString(v) && v.length > 0;
@@ -88,9 +86,7 @@ export function validarOps(x) {
     }
     return x;
 }
-// ---------------------------------------------------------------------------
 // Aplicacao de operacoes
-// ---------------------------------------------------------------------------
 /**
  * Devolve um NOVO snapshot (nunca muta o original). Regra de conflito: a ultima
  * escrita vence por item — aplica quando o item nao existe ou `rev >= rev` atual.
@@ -132,9 +128,7 @@ export function aplicarOps(s, ops) {
     }
     return { nos: [...nos.values()], arestas: [...arestas.values()] };
 }
-// ---------------------------------------------------------------------------
 // Assets (imagens anexadas a nos)
-// ---------------------------------------------------------------------------
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 const EXT_IMAGEM = [
     "png",
@@ -175,9 +169,7 @@ export function validarAsset(nome, dadosB64) {
         return null;
     return { nome: base, ext, bytes };
 }
-// ---------------------------------------------------------------------------
 // Projetos
-// ---------------------------------------------------------------------------
 const normalizarRaiz = (raiz) => raiz.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 /** sha1 hex da raiz normalizada: grafias diferentes da mesma pasta => mesmo id. */
 export function idProjeto(raiz) {

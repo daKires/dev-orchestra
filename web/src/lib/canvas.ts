@@ -3,9 +3,7 @@
 // nao vai pro bundle do browser — so' tipos entram, via `import type` (apagado na compilacao).
 import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 
-// ---------------------------------------------------------------------------
 // Aplicacao de operacoes (mesma regra de conflito do hub)
-// ---------------------------------------------------------------------------
 
 /**
  * Devolve um NOVO snapshot (nunca muta o original). Mesma regra do aplicarOps do hub: a ultima
@@ -43,9 +41,7 @@ export function aplicarOpsLocal(s: Snapshot, ops: Op[]): Snapshot {
   return { nos: [...nos.values()], arestas: [...arestas.values()] };
 }
 
-// ---------------------------------------------------------------------------
 // Grupo pai
-// ---------------------------------------------------------------------------
 
 /**
  * Id do MENOR grupo que contem o no' INTEIRO (comparando x,y,w,h absolutos com o retangulo do
@@ -66,9 +62,7 @@ export function paiDoNo(no: No, grupos: No[]): string | undefined {
   return melhor?.id;
 }
 
-// ---------------------------------------------------------------------------
 // Nos do react-flow: medidas/selecao (S5 - F1.5, fix das arestas invisiveis)
-// ---------------------------------------------------------------------------
 
 /**
  * Mescla os nos RECONSTRUIDOS do modelo (`novos`) com os nos antigos do react-flow (`antigos`).
@@ -93,9 +87,7 @@ export function mesclarNosRf<T extends { id: string; measured?: unknown; selecte
   });
 }
 
-// ---------------------------------------------------------------------------
 // Inspetor (F2.1): so' nos criados a mao abrem o painel de propriedades
-// ---------------------------------------------------------------------------
 
 /** Tipos que tem editor proprio no inspetor (os cards automaticos ficam de fora). */
 const TIPOS_INSPECIONAVEIS = new Set<TipoNo>(["nota", "forma", "imagem", "grupo", "texto"]);
@@ -109,9 +101,7 @@ export function inspecionavel(no: { tipo: TipoNo; dados: Record<string, unknown>
   return TIPOS_INSPECIONAVEIS.has(no.tipo) && no.dados?.auto !== true;
 }
 
-// ---------------------------------------------------------------------------
 // Markdown -> blocos
-// ---------------------------------------------------------------------------
 
 /** Trecho inline de markdown. Chaves so' aparecem quando verdadeiras (sem false/undefined). */
 export type Trecho = { texto: string; negrito?: true; codigo?: true };
@@ -215,9 +205,7 @@ export function mdBlocos(texto: string): BlocoMd[] {
   return blocos;
 }
 
-// ---------------------------------------------------------------------------
 // Zoom
-// ---------------------------------------------------------------------------
 
 /** Limita o zoom a 10%..200%; NaN (ou nao-finito) cai em 1. */
 export function limitarZoom(z: number): number {
@@ -225,9 +213,7 @@ export function limitarZoom(z: number): number {
   return Math.min(2, Math.max(0.1, z));
 }
 
-// ---------------------------------------------------------------------------
 // Imagens
-// ---------------------------------------------------------------------------
 
 export const MAX_IMAGEM_BYTES = 25 * 1024 * 1024;
 
@@ -266,9 +252,7 @@ export function checarImagem(nome: string, bytes: number): string | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
 // Ferramentas e criacao de nos (S2 - F1.5)
-// ---------------------------------------------------------------------------
 
 /** Ferramentas da barra flutuante do canvas. */
 export type Ferramenta = "selecionar" | "mao" | "nota" | "forma" | "imagem" | "regiao" | "seta" | "texto";
@@ -345,9 +329,7 @@ export function noNovo(
   }
 }
 
-// ---------------------------------------------------------------------------
 // Paletas / tokens visuais do Castor (puro, sem React)
-// ---------------------------------------------------------------------------
 
 /** Tokens de uma nota: fundo do card, borda, faixa de cabecalho e cor do texto. */
 export type EstiloNota = { fundo: string; borda: string; cabecalho: string; texto: string };
@@ -410,9 +392,7 @@ export const CORES_FORMA = {
 /** Cores de região/grupo (moldura da zona): cinza ou lilás. */
 export const CORES_REGIAO = { cinza: "#858585", lilas: "#7966d6" } as const;
 
-// ---------------------------------------------------------------------------
 // Edicao: duplicar/colar e ordem z (S3 - F1.5, CA-E2/E3)
-// ---------------------------------------------------------------------------
 
 /**
  * Copia os nos de `ids` mais os filhos RECURSIVOS dos grupos copiados: cada copia ganha id novo e
@@ -468,9 +448,7 @@ export function ordemZ(nos: No[], ids: string[], onde: "frente" | "tras"): No[] 
   return nos.filter((n) => alvo.has(n.id)).map((n) => ({ ...n, dados: { ...n.dados, z } }));
 }
 
-// ---------------------------------------------------------------------------
 // Historico local por ops inversas (S4 - F1.5, CA-E4)
-// ---------------------------------------------------------------------------
 
 /**
  * Ops que DESFAZEM `ops`, na ordem inversa. Criar -> remove; editar -> volta o item anterior com o
@@ -538,9 +516,7 @@ export class Historico {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Miniatura do canvas (S5 - F1.5, CA-P1)
-// ---------------------------------------------------------------------------
 
 export type MiniRetangulo = { x: number; y: number; w: number; h: number; cor: string };
 export type MiniLinha = { x1: number; y1: number; x2: number; y2: number };
@@ -591,9 +567,7 @@ export function miniatura(s: Snapshot, largura: number, altura: number): Miniatu
   return { retangulos, linhas };
 }
 
-// ---------------------------------------------------------------------------
 // Auto-organizar em faixas por tipo + fixar cards (S5 - acabamento)
-// ---------------------------------------------------------------------------
 
 export const ESPACO_ORGANIZAR = 80;
 export const LARGURA_ORGANIZAR = 3200;

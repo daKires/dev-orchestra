@@ -70,9 +70,7 @@ export type Projeto = {
   cor?: string;
 };
 
-// ---------------------------------------------------------------------------
 // Validacao de operacoes
-// ---------------------------------------------------------------------------
 
 const ehString = (v: unknown): v is string => typeof v === "string";
 const ehNumero = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -139,9 +137,7 @@ export function validarOps(x: unknown): Op[] | null {
   return x as Op[];
 }
 
-// ---------------------------------------------------------------------------
 // Aplicacao de operacoes
-// ---------------------------------------------------------------------------
 
 /**
  * Devolve um NOVO snapshot (nunca muta o original). Regra de conflito: a ultima
@@ -179,9 +175,7 @@ export function aplicarOps(s: Snapshot, ops: Op[]): Snapshot {
   return { nos: [...nos.values()], arestas: [...arestas.values()] };
 }
 
-// ---------------------------------------------------------------------------
 // Assets (imagens anexadas a nos)
-// ---------------------------------------------------------------------------
 
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 
@@ -223,9 +217,7 @@ export function validarAsset(
   return { nome: base, ext, bytes };
 }
 
-// ---------------------------------------------------------------------------
 // Projetos
-// ---------------------------------------------------------------------------
 
 const normalizarRaiz = (raiz: string): string =>
   raiz.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();

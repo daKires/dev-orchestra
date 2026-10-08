@@ -3,9 +3,7 @@
 import type { No, Snapshot } from "../../../canvas.ts";
 import type { Run, SliceEstado, StatusSlice } from "./estado.ts";
 
-// ---------------------------------------------------------------------------
 // Fluxo do plano (CA-11b): Inicio -> slices -> Gate -> Pronto
-// ---------------------------------------------------------------------------
 
 export type FormaFluxo = "elipse" | "retangulo" | "losango";
 export type NoFluxo = { id: string; forma: FormaFluxo; texto: string; cor: string };
@@ -46,9 +44,7 @@ export function fluxoDoPlano(run: Run): Fluxo {
   return { nos, arestas };
 }
 
-// ---------------------------------------------------------------------------
 // Layout das runs (CA-4b, 13a, 15): coluna de cards + regiao expandida
-// ---------------------------------------------------------------------------
 
 export type ArestaLayout = { id: string; de: string; para: string };
 export type LayoutRuns = { nos: No[]; arestas: ArestaLayout[] };
@@ -191,9 +187,7 @@ export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
   return { nos, arestas };
 }
 
-// ---------------------------------------------------------------------------
 // Layout dos agentes (CA-5b): planejadores ainda sem no' no canvas
-// ---------------------------------------------------------------------------
 
 const AGENTE_W = 620;
 const AGENTE_H = 420;
@@ -217,9 +211,7 @@ export function layoutAgentes(agentes: { id: string; origem: string }[], snap: S
   return out;
 }
 
-// ---------------------------------------------------------------------------
 // Linhas do worker (CA-4b): feed da slice + atividade atual
-// ---------------------------------------------------------------------------
 
 export type LinhaWorker = { texto: string; erro: boolean };
 

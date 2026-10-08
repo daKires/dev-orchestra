@@ -64,9 +64,7 @@ const nodeTypes = {
   ...navegadorNodeTypes,
 };
 
-// ---------------------------------------------------------------------------
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
-// ---------------------------------------------------------------------------
 
 // Tipos que tem render proprio; os demais caem no card de nota como fallback.
 const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador"]);
@@ -161,9 +159,7 @@ function lerBase64(arquivo: Blob): Promise<string> {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Controle de zoom proprio (canto inferior direito): −  N%  +
-// ---------------------------------------------------------------------------
 
 function ControleZoom() {
   const { zoom } = useViewport();
@@ -183,9 +179,7 @@ function ControleZoom() {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Canvas
-// ---------------------------------------------------------------------------
 
 export function Canvas({ projeto }: { projeto: string }) {
   const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
