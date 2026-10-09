@@ -23,10 +23,10 @@ import {
 import {
   PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas,
   aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos,
-  type Agente, type AssinaturaArquivo, type Linha, type Papel, type ParteRegistrada,
+  type Agente, type AssinaturaArquivo, type Linha, type OrigemAgente, type Papel, type ParteRegistrada,
 } from "./agentes.js";
 // Agentes Claude Code via PTY (F4/S3): logica pura importada AQUI (os modulos puros nao importam em runtime).
-import { argsClaude, settingsHooks, textoParaPty } from "./claude-pty.js";
+import { argsClaude, settingsHooks, textoParaPty, MODELOS_CLAUDE } from "./claude-pty.js";
 // Acoes da run no card (G1/S2): merge local, abrir PR e descartar (modulo puro rodado no mesmo processo).
 import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-run.js";
 
@@ -68,8 +68,8 @@ export type NovaFeature = {
 
 // Anexo (imagem/documento) aceito em POST /nova-feature: nome ja saneado, tipo declarado e base64 valido.
 export type AnexoNovaFeature = { nome: string; tipo: string; dadosB64: string };
-// Extras repassados ao executor SO' quando o pedido traz descricao e/ou anexos (compat: ausentes quando nao ha).
-export type ExtrasNovaFeature = { descricao?: string; anexosDir?: string };
+// Extras repassados ao executor: o planejador escolhido (G2) vai SEMPRE; descricao/anexosDir so' quando houver.
+export type ExtrasNovaFeature = { planejador: "claude" | "opencode"; modelo: string; descricao?: string; anexosDir?: string };
 // Resultado da validacao: sempre { projeto, feature }; descricao/anexos so' aparecem quando enviados.
 export type NovaFeatureValidada = { projeto: string; feature: string; descricao?: string; anexos?: AnexoNovaFeature[] };
 
@@ -258,7 +258,7 @@ let planejadores: Planejador[] = [];         // ultima lista empurrada via SSE
 let planejadoresAssinatura = "";             // muda -> avisa os clientes
 let onCeder: (() => void) | null = null;     // chamado no fim do ceder() (modo --ui encerra o processo)
 let sempreAssumir = false;                   // modo --ui: assume a porta de QUALQUER hub Hermes (sem comparar versao)
-let executarNovaFeature: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }> = executarNovaFeatureReal;
+let executarNovaFeature: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string; cwd?: string; slug?: string }> = executarNovaFeatureReal;
 let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
 let limiteBodyNovaFeature = LIMITE_BODY_NOVA_FEATURE; // teto proprio da rota (injetavel em iniciarUI)
 
@@ -402,8 +402,22 @@ function validarAnexo(a: unknown): AnexoNovaFeature | null {
 // Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
 // EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
 // branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
-// G2: planejador escolhido no pedido de feature (claude|opencode + modelo). Stub da spec; implementacao na S1.
-export function validarPlanejador(_j: unknown): { planejador: "claude" | "opencode"; modelo: string } | null { return null; }
+// G2: planejador escolhido no pedido de feature (claude|opencode + modelo). O modelo e' OBRIGATORIO
+// como string: claude aceita '' (padrao da conta) + opus/sonnet/haiku; opencode exige provider/modelo.
+export function validarPlanejador(j: unknown): { planejador: "claude" | "opencode"; modelo: string } | null {
+  if (!j || typeof j !== "object") return null;
+  const o = j as Record<string, unknown>;
+  if (typeof o.modelo !== "string") return null; // ausente -> null ('' so' vale vindo explicito)
+  if (o.planejador === "claude") {
+    if (MODELOS_CLAUDE.includes(o.modelo)) return { planejador: "claude", modelo: o.modelo };
+    return null;
+  }
+  if (o.planejador === "opencode") {
+    if (/^[a-z0-9-]+\/[a-z0-9._-]+$/.test(o.modelo)) return { planejador: "opencode", modelo: o.modelo };
+    return null;
+  }
+  return null;
+}
 export function validarNovaFeature(body: unknown): NovaFeatureValidada | null {
   if (!body || typeof body !== "object") return null;
   const j = body as Record<string, unknown>;
@@ -956,7 +970,8 @@ function promptClaude(instrucao: string, id: string, nome: string, token: string
 
 // Sobe o PTY do Claude: grava os hooks de status, monta os args e liga a saida ao SSE + buffer.
 // Lanca se o driver de PTY nao estiver disponivel (sem app desktop) ou se o spawn falhar.
-function subirPtyClaude(a: RegistroAgente, continuar: boolean): void {
+// `inicial` (G2): prompt inicial posicional do Claude (ex.: `/orchestra "<feature>"`), so' no primeiro start.
+function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string): void {
   const settingsPath = path.join(AGENTES_DIR, a.id + ".settings.json");
   try {
     fs.mkdirSync(AGENTES_DIR, { recursive: true });
@@ -966,7 +981,7 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean): void {
   const prompt = promptClaude(a.instrucao ?? "", a.id, a.nome, a.token ?? "");
   const proc = ptyAtual.spawn({
     comando: "claude",
-    args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
+    args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar, inicial }),
     cwd: a.cwd,
     env: { ...envClaude(), HERMES_EU: `${a.id}:${a.token}` }, // um processo por agente: `canvas` ja' sai identificado
     cols: tamanhoPty.get(a.id)?.cols ?? 120,
@@ -2066,7 +2081,7 @@ async function escutar(): Promise<boolean> {
 export type OpcoesUI = {
   onCeder?: () => void;
   sempreAssumir?: boolean; // modo --ui: assume a porta de qualquer hub Hermes, sem comparar versao
-  executarNovaFeature?: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string }>;
+  executarNovaFeature?: (projeto: string, feature: string, extras?: ExtrasNovaFeature) => Promise<{ url: string; cwd?: string; slug?: string }>;
   limiteBodyNovaFeature?: number; // teto proprio do corpo de /nova-feature (default 350MB)
   subirServe?: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
   matarProcesso?: (pid: number) => void; // encerra o serve (injetavel)
