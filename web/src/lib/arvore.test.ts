@@ -144,8 +144,20 @@ test("run 'rodando' sem evento ha mais de 10 min (processo morreu) nao abre sozi
 });
 
 test("card de run salvo com altura antiga usa a altura atual (G1 fix)", () => {
-  const l = layoutRuns([runDe("ks", [fim("ks")])], { nos: [{ ...salvoCard("ks", {}), x: 40, y: 900, h: 110 }], arestas: [] });
+  const l = layoutRuns([runDe("ks", [fim("ks")])], { nos: [{ ...salvoCard("ks", { movido: true }), x: 40, y: 900, h: 110 }], arestas: [] });
   const c = l.nos.find((n) => n.id === "run:ks")!;
   assert.deepEqual([c.x, c.y], [40, 900], "posicao salva continua valendo");
   assert.ok(c.h >= 170, "altura nao vem do salvo");
+});
+
+test("card de run so' fica onde foi salvo se voce o arrastou (dados.movido); senao segue o empilhamento (G1 fix)", () => {
+  const evs = (id: string): Msg[] => [1, 2, 3].map((i) => ({ swarm: id, ev: { t: "slice", idx: i, total: 3, tarefa: "t" + i, status: "ok", escritos: [`f${i}.ts`], ts: T + i } } as Msg));
+  const a = runDe("ma", [...evs("ma"), fim("ma")], T + 2000), b = runDe("mb", [...evs("mb"), fim("mb")], T + 1000);
+  // salvos pelo clique em Expandir, com a posicao que tinham quando ainda estavam recolhidos
+  const nos = [{ ...salvoCard("ma", { expandida: true }), x: 0, y: 40 }, { ...salvoCard("mb", { expandida: true }), x: 0, y: 250 }];
+  const l = layoutRuns([a, b], { nos, arestas: [] });
+  const regA = l.nos.find((n) => n.id === "reg:ma")!, cardB = l.nos.find((n) => n.id === "run:mb")!;
+  assert.ok(cardB.y >= regA.y + regA.h, "a run de baixo desce quando a de cima abre");
+  const movido = layoutRuns([a, b], { nos: [nos[0], { ...nos[1], dados: { ...nos[1].dados, movido: true } }], arestas: [] });
+  assert.equal(movido.nos.find((n) => n.id === "run:mb")!.y, 250, "arrastado por voce: fica onde voce pos");
 });

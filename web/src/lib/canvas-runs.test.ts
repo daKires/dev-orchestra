@@ -70,7 +70,7 @@ test("layoutRuns: expandida gera regiao a direita com fluxo, workers e arquivos 
     { swarm: "rx", ev: { t: "diff", arquivo: "src/a.ts", patch: "@@", ts: T + 2 } },
     { swarm: "rx", ev: { t: "diff", arquivo: "README.md", patch: "@@", ts: T + 3 } },
   ]);
-  const salvo: No = { id: "run:rx", tipo: "run", x: 100, y: 50, w: 280, h: 110, dados: { auto: true, runId: "rx", expandida: true, vista: "fluxo" }, rev: 1 };
+  const salvo: No = { id: "run:rx", tipo: "run", x: 100, y: 50, w: 280, h: 110, dados: { auto: true, runId: "rx", expandida: true, vista: "fluxo", movido: true }, rev: 1 };
   const l = layoutRuns([r], { nos: [salvo], arestas: [] });
   const ids = l.nos.map((n) => n.id);
   const card = l.nos.find((n) => n.id === "run:rx")!;
