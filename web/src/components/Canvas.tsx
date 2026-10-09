@@ -392,7 +392,11 @@ export function Canvas({ projeto }: { projeto: string }) {
     for (const [id, pos] of novas) {
       const atual = porId.get(id);
       if (!atual) continue;
-      const candidato: No = { ...atual, x: pos.x, y: pos.y };
+      // Card de run arrastado: marca `dados.movido` pro layout respeitar a posicao salva dali em diante.
+      const candidato: No = {
+        ...atual, x: pos.x, y: pos.y,
+        dados: id.startsWith("run:") ? { ...atual.dados, movido: true } : atual.dados,
+      };
       const pai = paiDoNo(candidato, grupos);
       ops.push({ op: "upsert", tipo: "no", item: { ...candidato, pai, rev: agora } });
     }
