@@ -27,9 +27,11 @@ import {
 } from "./agentes.js";
 // Agentes Claude Code via PTY (F4/S3): logica pura importada AQUI (os modulos puros nao importam em runtime).
 import { argsClaude, settingsHooks, textoParaPty } from "./claude-pty.js";
+// Acoes da run no card (G1/S2): merge local, abrir PR e descartar (modulo puro rodado no mesmo processo).
+import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-run.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
-export const RUNS_DIR = path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
+export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
 export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
 // Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
@@ -1377,6 +1379,33 @@ function ceder(): void {
   onCeder?.();
 }
 
+// ---- acoes da run no canvas (G1/S2): POST /runs/acao?run=<id> {acao} -> merge | pr | descartar ----
+const ACOES_RUN = new Set(["merge", "pr", "descartar"]);
+
+// Eventos da run: da memoria (rescan) ou, se ainda nao lidos, do JSONL em disco. null = run desconhecida.
+function eventosDaRun(id: string): Evento[] | null {
+  const emMemoria = estado.get(id);
+  if (emMemoria) return emMemoria;
+  try { return parse(fs.readFileSync(path.join(RUNS_DIR, id + ".jsonl"), "utf8")); } catch { return null; }
+}
+
+// Corpo do PR: resumo por slice (ultima linha de cada uma) + gate ok + custo total (soma das metricas).
+function corpoDoPr(evs: Evento[]): string {
+  const slices = new Map<number, { tarefa: string; status: string }>();
+  let gateOk = false;
+  let custo = 0;
+  for (const ev of evs) {
+    if (ev.t === "slice") slices.set(ev.idx, { tarefa: ev.tarefa, status: ev.status });
+    else if (ev.t === "gate" && ev.status === "ok") gateOk = true;
+    else if (ev.t === "metrica") custo += ev.custoUSD;
+  }
+  const linhas = [...slices.entries()].sort((a, b) => a[0] - b[0]).map(([n, s]) => `- S${n} ${s.tarefa}: ${s.status}`);
+  let corpo = "## Resumo\n" + linhas.join("\n");
+  if (gateOk) corpo += "\n\nGate: ok";
+  corpo += `\n\nCusto total: $${custo.toFixed(3).replace(".", ",")}`;
+  return corpo;
+}
+
 function criarServidor(): http.Server {
   return http.createServer(async (req, res) => {
     const url = req.url || "/";
@@ -1413,6 +1442,31 @@ function criarServidor(): http.Server {
       if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
       res.writeHead(204); res.end();
       setTimeout(ceder, 50);
+      return;
+    }
+    // Acoes da run no card (G1/S2): merge local, abrir PR e descartar. So' por POST com X-Hermes.
+    if (caminho === "/runs/acao") {
+      // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+      const corpo = await lerCorpo(req, LIMITE_BODY);
+      if (corpo === null) { res.writeHead(400); res.end(); return; }
+      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
+      let j: any = null;
+      try { j = JSON.parse(corpo); } catch {}
+      const acao = j && typeof j.acao === "string" ? j.acao : "";
+      if (!ACOES_RUN.has(acao)) { res.writeHead(400); res.end(); return; }
+      const id = new URL(url, "http://x").searchParams.get("run") || "";
+      const evs = id ? eventosDaRun(id) : null;
+      const runEv = evs && evs.find((e) => e.t === "run");
+      if (!runEv || runEv.t !== "run") { res.writeHead(404); res.end(); return; }
+      const painel = [...evs!].reverse().find((e) => e.t === "painel");
+      if (!painel || painel.t !== "painel") { responderTexto(res, 409, "run ainda rodando"); return; }
+      if ((acao === "merge" || acao === "pr") && painel.status !== "COMPLETE") { responderTexto(res, 409, "só para runs COMPLETE"); return; }
+      let r: ResultadoAcao;
+      if (acao === "merge") r = mergeLocal({ cwd: runEv.cwd, branch: painel.branch });
+      else if (acao === "descartar") r = descartarRun({ cwd: runEv.cwd, branch: painel.branch });
+      else r = abrirPr({ cwd: runEv.cwd, branch: painel.branch, feature: runEv.feature, corpo: corpoDoPr(evs!) });
+      res.writeHead(r.ok ? 200 : 409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(r));
       return;
     }
     if (url === "/nova-feature") {
