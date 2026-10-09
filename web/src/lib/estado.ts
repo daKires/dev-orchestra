@@ -12,7 +12,7 @@ export type SliceEstado = {
   escritos: string[]; comandos: string[]; motivo?: string; ms?: number; semMudancas?: boolean;
   inicioTs?: number; metrica?: Metrica;
 };
-export type FeedItem = { ts: number; slice?: number; tipo: "tool" | "fase" | "slice" | "log"; texto: string; erro: boolean };
+export type FeedItem = { ts: number; slice?: number; tipo: "tool" | "fase" | "slice" | "log"; texto: string; erro: boolean; nome?: string };
 export type Atividade =
   | { tipo: "gerando"; slice: number; tokens: number; ts: number }
   | { tipo: "comando"; slice: number; cmd: string; desde: number }
@@ -81,8 +81,8 @@ const FEED_MAX = 2000;
 function mutar(r: Run, ev: Evento): void {
   const ts = ev.ts ?? Date.now();
   r.ultimoEventoTs = Math.max(r.ultimoEventoTs, ts);
-  const feed = (tipo: FeedItem["tipo"], texto: string, erro = false, slice?: number) => {
-    r.feed.push({ ts, slice, tipo, texto, erro });
+  const feed = (tipo: FeedItem["tipo"], texto: string, erro = false, slice?: number, nome?: string) => {
+    r.feed.push({ ts, slice, tipo, texto, erro, ...(nome !== undefined ? { nome } : {}) });
     if (r.feed.length > FEED_MAX) r.feed.splice(0, r.feed.length - FEED_MAX);
   };
   switch (ev.t) {
@@ -114,7 +114,7 @@ function mutar(r: Run, ev: Evento): void {
     }
     case "tool":
       if (r.atividade?.tipo === "comando" && ev.nome === "rodar_comando") r.atividade = null;
-      feed("tool", ev.nome + (ev.alvo ? " " + ev.alvo : "") + (ev.ok ? "" : " — " + (ev.resumo || "erro")), !ev.ok, ev.slice);
+      feed("tool", ev.nome + (ev.alvo ? " " + ev.alvo : "") + (ev.ok ? "" : " — " + (ev.resumo || "erro")), !ev.ok, ev.slice, ev.nome);
       break;
     case "gerando":
       r.atividade = { tipo: "gerando", slice: ev.slice, tokens: ev.tokens, ts };
