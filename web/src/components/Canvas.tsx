@@ -231,7 +231,7 @@ export function Canvas({ projeto }: { projeto: string }) {
   const modelo = useMemo<Snapshot>(() => {
     const ocultos = new Set(estado.nos.filter((n) => n.dados?.oculto === true).map((n) => n.id));
     const visiveis = estado.nos.filter((n) => !ocultos.has(n.id));
-    const lr = layoutRuns(runsProjeto, estado);
+    const lr = layoutRuns(runsProjeto, estado, Date.now());
     const la = layoutAgentes(agentes, estado);
     const jaTem = new Set(estado.nos.map((n) => n.id));
     const extras: No[] = [];
