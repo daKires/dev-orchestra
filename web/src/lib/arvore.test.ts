@@ -142,3 +142,10 @@ test("run 'rodando' sem evento ha mais de 10 min (processo morreu) nao abre sozi
   assert.ok(!morta.nos.some((n) => n.id === "reg:kz"), "parada ha 11 min: recolhida");
   assert.equal(morta.nos.find((n) => n.id === "worker:kz:1"), undefined);
 });
+
+test("card de run salvo com altura antiga usa a altura atual (G1 fix)", () => {
+  const l = layoutRuns([runDe("ks", [fim("ks")])], { nos: [{ ...salvoCard("ks", {}), x: 40, y: 900, h: 110 }], arestas: [] });
+  const c = l.nos.find((n) => n.id === "run:ks")!;
+  assert.deepEqual([c.x, c.y], [40, 900], "posicao salva continua valendo");
+  assert.ok(c.h >= 170, "altura nao vem do salvo");
+});
