@@ -81,3 +81,14 @@ test("alternarFixado: fixa os selecionados; se todos ja fixados, desafixa (CA-1)
   assert.equal((soltar[0].item as No).dados.fixado, false);
   assert.equal(soltar[0].item.rev, 4);
 });
+
+test("organizar nao mexe em nos automaticos das runs (dados.auto); quem posiciona e' o layoutRuns (G1 fix)", () => {
+  const nos = [
+    no("run:r1", "run", 5000, 5000, 280, 170, { auto: true, runId: "r1" }),
+    no("worker:r1:1", "worker", 6000, 5000, 260, 64, { auto: true }),
+    no("n", "nota", 900, 900),
+  ];
+  const ops = organizarPorTipo(nos, 3);
+  assert.ok(ops.every((o) => !String(o.item.id).startsWith("run:") && !String(o.item.id).startsWith("worker:")));
+  assert.ok(ops.some((o) => o.item.id === "n"), "o resto continua sendo organizado");
+});

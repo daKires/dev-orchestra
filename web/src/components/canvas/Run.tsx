@@ -1,44 +1,58 @@
-// Cards de run/worker/arquivo no canvas (F2 - S5c): tres nodeTypes do xyflow que leem os dados do
-// no' (dados.runId/idx/arquivo) e o estado das runs de um contexto (RunsCtx) proprio, exportado daqui
-// pra nao mexer no CanvasCtx dos outros cards. Tambem exporta ModalDiff, que abre o DiffView existente
-// num dialog. UI em PT-BR, so' tema escuro, reaproveitando lucide-react + components/ui.
-import { createContext, useContext, useState } from "react";
+// Cards de run/worker/arquivo no canvas (F2 - S5c; G1 - S3): tres nodeTypes do xyflow que leem os
+// dados do no' (dados.runId/idx/arquivo) e o estado das runs de um contexto (RunsCtx) proprio, exportado
+// daqui pra nao mexer no CanvasCtx dos outros cards. Na vista Arvore (G1) a slice vira um card ao vivo
+// com o feedDaSlice e o card da run ganha as acoes (merge/PR/descartar) e o seletor Arvore|Fluxo.
+// Tambem exporta ModalDiff, que abre o DiffView existente num dialog. UI em PT-BR, so' tema escuro.
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { FileCode } from "lucide-react";
 import { kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
-import { fmtDur, fmtUSD, tomStatus } from "@/lib/formato";
-import { linhasDoWorker } from "@/lib/layout";
+import { fmtDur, fmtHora, fmtUSD, tomStatus } from "@/lib/formato";
+import { feedDaSlice, linhasDoWorker, type LinhaFeed } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
 import { Alcas } from "./Nos";
 import { ModalArquivo } from "./Explorador";
 import type { No } from "../../../../canvas.ts";
 
-// Contexto (S5c): runs por id + relogio + acoes do canvas (expansao e diff)
+// Vista da arvore: 'arvore' (padrao, cards de slice) ou 'fluxo' (fluxograma historico).
+export type Vista = "arvore" | "fluxo";
+
+// Contexto (S5c/G1): runs por id + relogio + acoes do canvas (expansao, vista, slice aberta e diff)
 
 export const RunsCtx = createContext<{
   runs: Record<string, Run>;
   agora: number;
   alternar: (runId: string) => void;
+  vista: (runId: string, vista: Vista) => void;
+  alternarSlice: (runId: string, idx: number) => void;
   abrirDiff: (runId: string, arquivo: string) => void;
-}>({ runs: {}, agora: Date.now(), alternar: () => {}, abrirDiff: () => {} });
+  /** Abre a run no canvas: grava expandida=true no card run:<id> e centraliza nele (painel Runs). */
+  abrirRun: (runId: string) => void;
+}>({
+  runs: {}, agora: Date.now(),
+  alternar: () => {}, vista: () => {}, alternarSlice: () => {}, abrirDiff: () => {}, abrirRun: () => {},
+});
 
 // Pecas comuns (tokens do Castor, como os outros cards)
 
 const FUNDO = "#1c1c1c";
-const BORDA = "#303030";
+const BORDA = "#2c2c2c";
 const CABECALHO = "#222";
 const CINZA = "#858585";
 const AZUL = "#74aaff";
-const VERDE = "#46d3a0";
-const VERMELHO = "#e5534b";
+const VERDE = "#5fd29a";
+const AMARELO = "#d9b45a";
+const VERMELHO = "#ff7b72";
 const FONTE = "400 12px/1.45 ui-sans-serif, system-ui, sans-serif";
-const MONO = "400 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const MONO = "400 12px/1.5 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const TITULO = "500 12px/1 ui-sans-serif, system-ui, sans-serif";
+const BOTAO = "500 11px/1 ui-sans-serif, system-ui, sans-serif";
 
-/** Card #1c1c1c, borda #303030, raio 12 (mesmo chrome dos outros nos do canvas). */
+/** Card #1c1c1c, borda #2c2c2c, raio 12 (mesmo chrome dos outros nos do canvas). */
 const moldura = { background: FUNDO, border: `1px solid ${BORDA}`, borderRadius: 12 } as const;
 
 const lerDados = (data: unknown): No => (data as { no: No }).no;
@@ -51,6 +65,10 @@ function corDaSlice(status: string): string {
   if (status === "incompleta" || status === "pulada") return VERMELHO;
   return CINZA;
 }
+
+/** Cor da ferramenta no feed: log cinza, marco de slice verde, ferramenta (tool) azul. */
+const corFerramenta = (ferramenta: string): string =>
+  ferramenta === "log" ? CINZA : ferramenta === "slice" ? VERDE : AZUL;
 
 /** So' o nome base do arquivo (sem pastas). */
 const nomeDoArquivo = (caminho: string): string => caminho.split(/[\\/]+/).filter(Boolean).pop() ?? caminho;
@@ -65,15 +83,111 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   );
 }
 
+// Acoes da run (G1 - S2): resultado de POST /runs/acao e /cancel mostrado no proprio card.
+
+type TipoAcao = "merge" | "pr" | "descartar" | "cancelar";
+type Resultado = {
+  tipo: TipoAcao;
+  ok: boolean;
+  base?: string;
+  url?: string;
+  erro?: string;
+  conflitos?: string[];
+};
+
+/** Rotulo curto de sucesso por acao. */
+function rotuloResultado(t: TipoAcao): string {
+  switch (t) {
+    case "pr": return "PR aberto";
+    case "merge": return "Merge feito";
+    case "descartar": return "Worktree descartado";
+    case "cancelar": return "Cancelamento pedido";
+  }
+}
+
+/** Bloco do resultado da acao no card: link do PR clicavel, base, erro em vermelho e conflitos. */
+function ResultadoAcao({ r, onFechar }: { r: Resultado; onFechar: () => void }) {
+  return (
+    <div className="min-w-0 rounded-md px-2 py-1.5" style={{ background: "#191919", border: `1px solid ${BORDA}`, font: FONTE }}>
+      <div className="flex items-center gap-1">
+        <span className="min-w-0 flex-1 truncate" style={{ color: r.ok ? VERDE : VERMELHO }}>
+          {r.ok ? rotuloResultado(r.tipo) : r.erro}
+        </span>
+        <button type="button" className="nodrag shrink-0 rounded px-1 hover:bg-white/10" style={{ color: CINZA }} onClick={onFechar}>✕</button>
+      </div>
+      {r.ok && r.url ? (
+        <a href={r.url} target="_blank" rel="noreferrer" className="nodrag block truncate underline" style={{ color: AZUL }}>{r.url}</a>
+      ) : null}
+      {r.ok && r.base ? <div className="truncate" style={{ color: CINZA }}>base: {r.base}</div> : null}
+      {!r.ok && r.conflitos && r.conflitos.length > 0 ? (
+        <ul className="mt-0.5 list-disc pl-4" style={{ color: VERMELHO }}>
+          {r.conflitos.map((c) => <li key={c} className="truncate">{c}</li>)}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 // nodeTypes
 
-/** Run: card com cabecalho (status + feature + Expandir/Recolher) e progresso/custo/duracao/status. */
+/** Run: card com status/feature, acoes (Cancelar ou ⋯), metricas e o seletor Arvore|Fluxo. */
 function NoRun({ data, selected }: NodeProps) {
-  const { runs, agora, alternar } = useContext(RunsCtx);
+  const { runs, agora, alternar, vista } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const run = runs[runId];
+  const [resultado, setResultado] = useState<Resultado | null>(null);
+  const [confirmar, setConfirmar] = useState<"merge" | "descartar" | null>(null);
+  const [flash, setFlash] = useState(false);
+  const gateAnt = useRef<string | undefined>(undefined);
+
+  // Quando o ultimo gate vira 'ok', flash verde curto no card (cv-gate-ok). O primeiro render so'
+  // registra o estado atual (sem flash em runs ja' terminadas no replay).
+  const ultimoGate = run && run.gate.length ? run.gate[run.gate.length - 1] : undefined;
+  const gateStatus = ultimoGate?.status;
+  useEffect(() => {
+    if (gateAnt.current === undefined) { gateAnt.current = gateStatus; return; }
+    if (gateStatus === "ok" && gateAnt.current !== "ok") {
+      gateAnt.current = gateStatus;
+      setFlash(true);
+      const t = setTimeout(() => setFlash(false), 900);
+      return () => clearTimeout(t);
+    }
+    gateAnt.current = gateStatus;
+  }, [gateStatus]);
+
   const expandida = no.dados.expandida === true;
+  const vistaAtual: Vista = no.dados.vista === "fluxo" ? "fluxo" : "arvore";
+
+  /** Chama POST /runs/acao?run=<id> {acao} e guarda o resultado pra mostrar no card. */
+  const acao = async (a: "merge" | "pr" | "descartar") => {
+    setResultado(null);
+    try {
+      const r = await fetch(`/runs/acao?run=${encodeURIComponent(runId)}`, {
+        method: "POST",
+        headers: { "X-Hermes": "1", "Content-Type": "application/json" },
+        body: JSON.stringify({ acao: a }),
+      });
+      const j = (await r.json().catch(() => null)) as { ok?: boolean; base?: string; url?: string; erro?: string; conflitos?: string[] } | null;
+      if (j?.ok) setResultado({ tipo: a, ok: true, base: j.base, url: j.url });
+      else setResultado({ tipo: a, ok: false, erro: j?.erro || `O hub recusou a ação (HTTP ${r.status}).`, conflitos: j?.conflitos });
+    } catch (e) {
+      setResultado({ tipo: a, ok: false, erro: "Falha de rede ao executar a ação: " + String((e as Error).message) });
+    }
+  };
+
+  /** Pede o cancelamento da run (POST /cancel com X-Hermes). */
+  const cancelar = async () => {
+    setResultado(null);
+    try {
+      const r = await fetch(`/cancel?run=${encodeURIComponent(runId)}`, { method: "POST", headers: { "X-Hermes": "1" } });
+      if (r.ok || r.status === 204) setResultado({ tipo: "cancelar", ok: true });
+      else setResultado({ tipo: "cancelar", ok: false, erro: `O hub recusou o cancelamento (HTTP ${r.status}).` });
+    } catch (e) {
+      setResultado({ tipo: "cancelar", ok: false, erro: "Falha de rede ao pedir o cancelamento: " + String((e as Error).message) });
+    }
+  };
+
   if (!run) {
     return (
       <div className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel")} style={moldura}>
@@ -88,46 +202,198 @@ function NoRun({ data, selected }: NodeProps) {
   const k = kpis(run);
   const fim = st === "rodando" ? agora : run.ultimoEventoTs;
   const dur = run.inicioTs ? fmtDur(Math.max(0, fim - run.inicioTs)) : "";
+  const rodandoAgora = st === "rodando";
+  const terminada = !rodandoAgora && st !== "aguardando";
   return (
-    <div className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel")} style={moldura}>
-      <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
-        style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
-        <StatusIcon status={st} />
-        <span className="min-w-0 flex-1 truncate" title={run.feature}>{run.feature}</span>
-        <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
-          style={{ color: "#b8b8b8", font: "500 11px/1 ui-sans-serif, system-ui, sans-serif" }}
-          onClick={() => alternar(runId)}>
-          {expandida ? "Recolher" : "Expandir"}
-        </button>
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col justify-center gap-1.5 px-2.5 py-2" style={{ font: FONTE, color: "#dedee3" }}>
-        <Campo rotulo="Slices" valor={`${p.feitas}/${p.total}`} />
-        <Campo rotulo="Custo" valor={k.n ? fmtUSD(k.custo) : "—"} />
-        <Campo rotulo="Duração" valor={dur || "—"} />
-        <div className="flex items-center gap-1.5">
+    <>
+      <div
+        className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", flash && "cv-gate-ok")}
+        style={moldura}
+      >
+        <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
+          style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
           <StatusIcon status={st} />
-          <span className="truncate">{tomStatus(st).rotulo}</span>
+          <span className="min-w-0 flex-1 truncate" title={run.feature}>{run.feature}</span>
+          <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
+            style={{ color: "#b8b8b8", font: BOTAO }}
+            onClick={() => alternar(runId)}>
+            {expandida ? "Recolher" : "Expandir"}
+          </button>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col justify-center gap-1 px-2.5 py-1.5" style={{ font: FONTE, color: "#dedee3" }}>
+          {resultado ? (
+            <ResultadoAcao r={resultado} onFechar={() => setResultado(null)} />
+          ) : (
+            <>
+              <Campo rotulo="Slices" valor={`${p.feitas}/${p.total}`} />
+              <Campo rotulo="Custo" valor={k.n ? fmtUSD(k.custo) : "—"} />
+              <Campo rotulo="Duração" valor={dur || "—"} />
+              <div className="flex items-center gap-1.5">
+                <StatusIcon status={st} />
+                <span className="truncate">{tomStatus(st).rotulo}</span>
+              </div>
+            </>
+          )}
         </div>
+        <div className="flex shrink-0 items-center gap-1 px-2 py-1" style={{ borderTop: `1px solid ${BORDA}` }}>
+          <div className="flex items-center gap-0.5">
+            {(["arvore", "fluxo"] as const).map((v) => (
+              <button key={v} type="button" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
+                style={{ color: vistaAtual === v ? "#fff" : "#b8b8b8", background: vistaAtual === v ? "#333" : "transparent", font: BOTAO }}
+                onClick={() => vista(runId, v)}>
+                {v === "arvore" ? "Árvore" : "Fluxo"}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-1">
+            {rodandoAgora ? (
+              <button type="button" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
+                style={{ color: VERMELHO, font: BOTAO }}
+                onClick={() => void cancelar()}>
+                Cancelar
+              </button>
+            ) : terminada ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" title="Ações da run" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
+                    style={{ color: "#b8b8b8", font: "500 13px/1 ui-sans-serif, system-ui, sans-serif" }}>
+                    ⋯
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="cv-menu">
+                  <DropdownMenuItem disabled={st !== "COMPLETE"} onSelect={() => void acao("pr")}>Abrir PR</DropdownMenuItem>
+                  <DropdownMenuItem disabled={st !== "COMPLETE"} onSelect={() => setConfirmar("merge")}>Merge local</DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirmar("descartar")}>Descartar worktree</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
+        </div>
+        <Alcas />
       </div>
-      <Alcas />
-    </div>
+
+      {/* Confirmacao das acoes destrutivas (merge e descartar) */}
+      <Dialog open={confirmar !== null} onOpenChange={(o) => { if (!o) setConfirmar(null); }}>
+        <DialogContent className="max-w-sm" style={{ background: FUNDO, border: `1px solid ${BORDA}` }}>
+          <DialogTitle style={{ color: "#eee", font: TITULO }}>
+            {confirmar === "merge" ? "Merge local" : "Descartar worktree"}
+          </DialogTitle>
+          <DialogDescription style={{ color: "#b8b8b8", font: FONTE }}>
+            {confirmar === "merge"
+              ? `Fazer merge --no-ff de ${run.branch || "?"} na base?`
+              : `Apagar ${run.branch || "?"} e o worktree? Isso não pode ser desfeito.`}
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="rounded px-2 py-1 text-xs hover:bg-white/10"
+              style={{ color: "#b8b8b8", border: `1px solid ${BORDA}` }} onClick={() => setConfirmar(null)}>
+              Cancelar
+            </button>
+            <button type="button" className="rounded px-2 py-1 text-xs"
+              style={{ background: confirmar === "descartar" ? VERMELHO : AZUL, color: "#111", font: BOTAO }}
+              onClick={() => { const a = confirmar; setConfirmar(null); if (a) void acao(a); }}>
+              Confirmar
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
-/** Worker: mini-terminal por slice. Slice ok comeca recolhida; clique no cabecalho expande. */
+/** Worker: na vista Arvore vira card compacto/ao vivo da slice; na vista Fluxo, o mini-terminal. */
 function NoWorker({ data, selected }: NodeProps) {
-  const { runs } = useContext(RunsCtx);
+  const { runs, alternarSlice } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const idx = typeof no.dados.idx === "number" ? no.dados.idx : 0;
   const run = runs[runId];
+  // A presenca de `dados.aberta` marca a vista Arvore (o layout so' a escreve nessa vista).
+  const emArvore = typeof no.dados.aberta === "boolean";
   const [aberto, setAberto] = useState(false);
+  const corpo = useRef<HTMLDivElement | null>(null);
+  const noFim = useRef(true);
   const slice = run?.slices.find((s) => s.idx === idx);
   const status = slice?.status ?? "fila";
   const tarefa = slice?.tarefa ?? run?.plano[idx - 1]?.tarefa ?? "";
-  const linhas = run ? linhasDoWorker(run, idx) : [];
-  const recolhida = status === "ok" && !aberto;
   const cor = corDaSlice(status);
+  const linhas = run ? feedDaSlice(run, idx) : [];
+  // Arvore: aberta segue dados.aberta (default do layout). Fluxo: recolhe sozinha quando ok.
+  const aberta = emArvore ? no.dados.aberta === true : !(status === "ok" && !aberto);
+
+  // Auto-scroll do feed: desce pro fim quando chega linha nova, mas PARA se o usuario rolou pra cima.
+  useEffect(() => {
+    const el = corpo.current;
+    if (el && noFim.current) el.scrollTop = el.scrollHeight;
+  }, [linhas.length, aberta, emArvore]);
+
+  const aoRolar = () => {
+    const el = corpo.current;
+    if (!el) return;
+    noFim.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+
+  if (emArvore && !aberta) {
+    // Compacto: 'S<idx> · <tarefa>' + status colorido + ultima linha do feed. Clique alterna aberta.
+    const ultima = linhas.length ? linhas[linhas.length - 1] : undefined;
+    return (
+      <div
+        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso")}
+        style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
+      >
+        <header className="flex shrink-0 cursor-pointer items-center gap-1.5 px-2 py-1.5"
+          style={{ background: CABECALHO, color: "#eee", font: TITULO }}
+          onClick={() => alternarSlice(runId, idx)}>
+          <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
+          <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+          <span className="shrink-0" style={{ color: cor }}>{tomStatus(status).rotulo}</span>
+        </header>
+        <div className="min-h-0 flex-1 truncate px-2 py-1" style={{ font: MONO, color: ultima?.erro ? VERMELHO : CINZA }}>
+          {ultima ? ultima.texto : "aguardando…"}
+        </div>
+        <Alcas />
+      </div>
+    );
+  }
+
+  if (emArvore) {
+    // Aberto: card ao vivo com feedDaSlice (hora, ferramenta colorida, texto; erro em vermelho).
+    const m = slice?.metrica;
+    return (
+      <div
+        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso")}
+        style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
+      >
+        <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
+          style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
+          <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
+          <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+          {m ? <span className="shrink-0 font-mono tabular-nums" style={{ color: CINZA }}>{fmtUSD(m.custoUSD)} · {m.iteracoes} it.</span> : null}
+          <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
+            style={{ color: "#b8b8b8", font: BOTAO }}
+            onClick={() => alternarSlice(runId, idx)}>
+            Recolher
+          </button>
+        </header>
+        <div ref={corpo} onScroll={aoRolar}
+          className="nodrag nowheel min-h-0 flex-1 overflow-auto px-2 py-1.5" style={{ font: MONO }}>
+          {linhas.length === 0 ? (
+            <p style={{ color: CINZA }}>aguardando…</p>
+          ) : linhas.map((l: LinhaFeed, i) => (
+            <div key={i} className="grid items-start gap-x-2" style={{ gridTemplateColumns: "auto auto 1fr" }}>
+              <span className="tabular-nums" style={{ color: CINZA }}>{fmtHora(l.ts)}</span>
+              <span className="truncate" style={{ color: corFerramenta(l.ferramenta) }}>{l.ferramenta}</span>
+              <span className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : "#dedee3" }}>{l.texto}</span>
+            </div>
+          ))}
+        </div>
+        <Alcas />
+      </div>
+    );
+  }
+
+  // Vista Fluxo (historico): mini-terminal por slice. Slice ok comeca recolhida; clique expande.
+  const linhasFluxo = run ? linhasDoWorker(run, idx) : [];
+  const recolhida = !aberta;
   return (
     <div className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel")}
       style={{ ...moldura, opacity: status === "fila" ? 0.5 : 1 }}>
@@ -139,10 +405,10 @@ function NoWorker({ data, selected }: NodeProps) {
         {slice?.metrica ? <span className="shrink-0 font-mono" style={{ color: "#b8b8b8" }}>{fmtUSD(slice.metrica.custoUSD)}</span> : null}
       </header>
       {!recolhida && (
-        <div className="nowheel min-h-0 flex-1 overflow-auto p-2" style={{ font: MONO, color: "#dedee3" }}>
-          {linhas.length === 0
+        <div ref={corpo} onScroll={aoRolar} className="nodrag nowheel min-h-0 flex-1 overflow-auto p-2" style={{ font: MONO, color: "#dedee3" }}>
+          {linhasFluxo.length === 0
             ? <p style={{ color: CINZA }}>aguardando…</p>
-            : linhas.map((l, i) => <p key={i} className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : undefined }}>{l.texto}</p>)}
+            : linhasFluxo.map((l, i) => <p key={i} className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : undefined }}>{l.texto}</p>)}
         </div>
       )}
       <Alcas />
@@ -151,9 +417,9 @@ function NoWorker({ data, selected }: NodeProps) {
 }
 
 /**
- * Arquivo: card compacto (icone FileCode + nome + legenda). Quando o no' e' de uma run, o clique abre
- * o diff. Quando o no' veio de um agente (dados.agenteId + dados.caminho, ex.: publicados por `canvas
- * file` ou arrastados do Explorador), o clique abre a MESMA previa do Explorador.
+ * Arquivo: card compacto (icone FileCode + nome + legenda) com entrada animada (cv-entra). Quando o no'
+ * e' de uma run, o clique abre o diff. Quando o no' veio de um agente (dados.agenteId + dados.caminho,
+ * ex.: publicados por `canvas file` ou arrastados do Explorador), o clique abre a MESMA previa do Explorador.
  */
 function NoArquivo({ data, selected }: NodeProps) {
   const { abrirDiff } = useContext(RunsCtx);
@@ -169,7 +435,7 @@ function NoArquivo({ data, selected }: NodeProps) {
   const abrir = () => { if (doAgente) setPreview(true); else abrirDiff(runId, arquivo); };
   return (
     <>
-      <div className={cn("flex h-full w-full cursor-pointer items-center gap-2 overflow-hidden px-2.5", selected && "cv-sel")}
+      <div className={cn("cv-entra flex h-full w-full cursor-pointer items-center gap-2 overflow-hidden px-2.5", selected && "cv-sel")}
         style={moldura} title={doAgente ? caminho : arquivo} onClick={abrir}>
         <FileCode className="size-4 shrink-0" style={{ color: AZUL }} />
         <div className="min-w-0 flex-1">
