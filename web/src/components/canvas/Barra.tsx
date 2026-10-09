@@ -3,7 +3,7 @@
 // quando !conectado (bloquear). A criacao em si (clique/arrasto) mora no Canvas.
 import { useRef, type ChangeEvent, type ReactNode } from "react";
 import {
-  ArrowUpRight, Bot, Circle, Diamond, Frame, Globe, Hand, Image as ImageIcon,
+  ArrowUpRight, Bot, ChartColumn, Circle, Diamond, Frame, Globe, Hand, Image as ImageIcon,
   LayoutGrid, MousePointer2, Square, StickyNote, Type,
 } from "lucide-react";
 import {
@@ -24,6 +24,8 @@ type Props = {
   onAgente: () => void;
   /** Abre o dialog de criar um navegador (atalho B). */
   onNavegador: () => void;
+  /** Abre o painel de runs do projeto (card Runs). */
+  onPainel: () => void;
   /** Auto-organiza o canvas em faixas por tipo (atalho Shift+O). */
   onOrganizar: () => void;
 };
@@ -60,7 +62,7 @@ function Botao({ titulo, ativo, disabled, onClick, children }: {
   );
 }
 
-export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador, onOrganizar }: Props) {
+export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador, onPainel, onOrganizar }: Props) {
   const arquivo = useRef<HTMLInputElement | null>(null);
 
   const escolherArquivo = (e: ChangeEvent<HTMLInputElement>) => {
@@ -138,6 +140,9 @@ export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, o
       </Botao>
       <Botao titulo="+ Navegador (B)" disabled={bloquear} onClick={onNavegador}>
         <Globe className="size-4" />
+      </Botao>
+      <Botao titulo="Runs — painel do projeto" disabled={bloquear} onClick={onPainel}>
+        <ChartColumn className="size-4" />
       </Botao>
       <Botao titulo="Organizar (Shift+O)" disabled={bloquear} onClick={onOrganizar}>
         <LayoutGrid className="size-4" />
