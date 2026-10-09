@@ -50,7 +50,7 @@ export type ArestaLayout = { id: string; de: string; para: string };
 export type LayoutRuns = { nos: No[]; arestas: ArestaLayout[] };
 
 const CARD_W = 280;
-const CARD_H = 110;
+const CARD_H = 170;           // o card da run agora tem status, Arvore|Fluxo e acoes
 const COLUNA_X = 40;
 const COLUNA_Y = 40;
 const ESPACO_VERTICAL = 40;
@@ -68,6 +68,7 @@ const GAP_ARQ = 12;
 const REG_GAP = 40;           // distancia do card ate' a regiao
 const MARGEM_CONTEUDO = 80;   // folga minima entre a coluna de runs e o conteudo do usuario
 const ESPACO_REGIAO = 40;     // folga extra reservada pra regiao da run nao invadir o conteudo
+const RUN_PARADA_MS = 10 * 60_000; // sem evento nem painel por 10 min: run "parada" (processo morreu)
 
 // Vista Arvore (G1): coluna de slices + arquivos na mesma linha
 const SLICE_W_COMPACTA = 260;
@@ -106,15 +107,20 @@ function larguraRegiao(run: Run): number {
 }
 
 /**
- * Coluna de cards de run (280x110), mais recente em cima. Uma run expandida ganha a direita um grupo
- * `reg:<id>` (nomeado pela feature da run): `dados.expandida` salvo no card vence; sem valor salvo, a
- * run ATIVA (rodando/aguardando) abre sozinha e a terminada fica recolhida. A vista segue `dados.vista`
- * do card: 'fluxo' desenha o fluxograma + workers + arquivos; ausente/'arvore' (padrao) desenha a arvore
- * (coluna de slices 260x64, aberta 620x380, com os arquivos na mesma linha). A coluna fica a ESQUERDA de
- * todo o conteudo do usuario (nos sem dados.auto e que nao sao 'agente'), reservando espaco pra maior
- * regiao possivel; sem conteudo do usuario, mantem a coluna padrao (COLUNA_X).
+ * Coluna de cards de run (280x170), mais recente em cima, empilhados sem sobrepor: cada run fica num
+ * cursor `y` e, depois de montada, o cursor avanca pro fundo real (fundo do card OU da regiao, o maior)
+ * + ESPACO_VERTICAL. Uma run expandida ganha a direita um grupo `reg:<id>` (nomeado pela feature):
+ * `dados.expandida` salvo no card vence; sem valor salvo, a run ATIVA (rodando/aguardando) abre sozinha
+ * e a terminada fica recolhida. Quando `agora` vem, uma run ativa cujo `ultimoEventoTs` e' anterior a
+ * `agora - 10 min` conta como PARADA (processo morreu) e NAO abre sozinha (o salvo continua vencendo);
+ * sem `agora`, nao checa. A vista segue `dados.vista` do card: 'fluxo' desenha o fluxograma + workers +
+ * arquivos; ausente/'arvore' (padrao) desenha a arvore (coluna de slices 260x64, aberta 620x380, com os
+ * arquivos na mesma linha). A coluna fica a ESQUERDA de todo o conteudo do usuario (nos sem dados.auto
+ * e que nao sao 'agente'), reservando espaco pra maior regiao possivel; sem conteudo do usuario, mantem
+ * a coluna padrao (COLUNA_X). A posicao salva (comSalvo) do card ainda vence para o proprio card, mas o
+ * cursor segue o fundo real.
  */
-export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
+export function layoutRuns(runs: Run[], snap: Snapshot, agora?: number): LayoutRuns {
   const salvos = indexarSalvos(snap);
   const ordenadas = [...runs].sort((a, b) => b.inicioTs - a.inicioTs);
   const nos: No[] = [];
@@ -129,21 +135,26 @@ export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
     ? COLUNA_X
     : minX - MARGEM_CONTEUDO - CARD_W - ESPACO_REGIAO - larguraRegiaoMax;
 
-  ordenadas.forEach((run, i) => {
+  let cursorY = COLUNA_Y; // topo da proxima run (empilha sem sobrepor, mais nova em cima)
+  ordenadas.forEach((run) => {
     const cardId = `run:${run.id}`;
     const card = comSalvo({
-      id: cardId, tipo: "run", x: colunaX, y: COLUNA_Y + i * (CARD_H + ESPACO_VERTICAL),
+      id: cardId, tipo: "run", x: colunaX, y: cursorY,
       w: CARD_W, h: CARD_H, dados: { auto: true, runId: run.id }, rev: 0,
     }, salvos);
     nos.push(card);
 
     // Expandida: o boolean salvo no card vence; sem valor salvo, a run ATIVA (rodando/aguardando =
-    // sem evento painel) abre sozinha e a terminada fica recolhida.
-    const ativa = run.status === "rodando" || run.status === "aguardando";
+    // sem evento painel) abre sozinha e a terminada fica recolhida. Com `agora`, uma run ativa PARADA
+    // (sem evento ha mais de 10 min) nao abre sozinha.
+    const ativa = (run.status === "rodando" || run.status === "aguardando")
+      && !(agora !== undefined && run.ultimoEventoTs < agora - RUN_PARADA_MS);
     const expandida = typeof salvos.get(cardId)?.dados?.expandida === "boolean"
       ? salvos.get(cardId)!.dados!.expandida === true
       : ativa;
-    if (!expandida) return; // recolhida: so' o card
+    // Fundo real desta run: o card; sobe pro fundo da regiao se ela existir (o cursor segue ele).
+    let fundo = card.y + card.h;
+    if (!expandida) { cursorY = fundo + ESPACO_VERTICAL; return; } // recolhida: so' o card
 
     const regId = `reg:${run.id}`;
     const regX = card.x + card.w + REG_GAP;
@@ -277,6 +288,8 @@ export function layoutRuns(runs: Run[], snap: Snapshot): LayoutRuns {
       dados: { auto: true, runId: run.id, titulo: run.feature }, rev: 0,
     }, salvos));
     nos.push(...resolvidos);
+    fundo = Math.max(fundo, regY + altura);
+    cursorY = fundo + ESPACO_VERTICAL;
   });
 
   return { nos, arestas };
