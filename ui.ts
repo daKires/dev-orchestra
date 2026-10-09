@@ -402,6 +402,8 @@ function validarAnexo(a: unknown): AnexoNovaFeature | null {
 // Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
 // EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
 // branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
+// G2: planejador escolhido no pedido de feature (claude|opencode + modelo). Stub da spec; implementacao na S1.
+export function validarPlanejador(_j: unknown): { planejador: "claude" | "opencode"; modelo: string } | null { return null; }
 export function validarNovaFeature(body: unknown): NovaFeatureValidada | null {
   if (!body || typeof body !== "object") return null;
   const j = body as Record<string, unknown>;
