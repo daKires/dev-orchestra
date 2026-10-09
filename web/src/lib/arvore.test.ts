@@ -161,3 +161,24 @@ test("card de run so' fica onde foi salvo se voce o arrastou (dados.movido); sen
   const movido = layoutRuns([a, b], { nos: [nos[0], { ...nos[1], dados: { ...nos[1].dados, movido: true } }], arestas: [] });
   assert.equal(movido.nos.find((n) => n.id === "run:mb")!.y, 250, "arrastado por voce: fica onde voce pos");
 });
+
+test("mesclarComLayout: no automatico salvo usa a versao do layout; os do usuario e os ocultos seguem a regra atual (G1 fix)", async () => {
+  const { mesclarComLayout } = await import("./layout.ts");
+  const salvos: No[] = [
+    { id: "run:r1", tipo: "run", x: 0, y: 40, w: 280, h: 110, dados: { auto: true, runId: "r1", expandida: true }, rev: 1 },
+    { id: "n1", tipo: "nota", x: 5, y: 5, w: 100, h: 100, dados: {}, rev: 1 },
+    { id: "run:r9", tipo: "run", x: 0, y: 0, w: 280, h: 110, dados: { auto: true, oculto: true }, rev: 1 },
+  ];
+  const gerados: No[] = [
+    { id: "run:r1", tipo: "run", x: 0, y: 900, w: 280, h: 170, dados: { auto: true, runId: "r1", expandida: true }, rev: 1 },
+    { id: "reg:r1", tipo: "grupo", x: 320, y: 900, w: 500, h: 300, dados: { auto: true }, rev: 0 },
+    { id: "n1", tipo: "nota", x: 999, y: 999, w: 1, h: 1, dados: {}, rev: 0 },
+  ];
+  const m = mesclarComLayout(salvos, gerados);
+  const por = new Map(m.map((n) => [n.id, n]));
+  assert.deepEqual([por.get("run:r1")!.y, por.get("run:r1")!.h], [900, 170], "automatico: layout vence");
+  assert.deepEqual([por.get("n1")!.x, por.get("n1")!.y], [5, 5], "do usuario: salvo vence");
+  assert.ok(por.has("reg:r1"), "novos do layout entram");
+  assert.ok(!por.has("run:r9"), "oculto nao aparece");
+  assert.equal(m.filter((n) => n.id === "run:r1").length, 1, "sem duplicar");
+});
