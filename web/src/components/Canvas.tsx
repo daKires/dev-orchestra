@@ -15,7 +15,7 @@ import {
   ordemZ, organizarPorTipo, paiDoNo, pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO,
   type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
-import { layoutAgentes, layoutRuns } from "@/lib/layout";
+import { layoutAgentes, layoutRuns, mesclarComLayout } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
 import { arestasEmConversa, type EmConversa } from "@/lib/colab";
 import { cn } from "@/lib/utils";
@@ -225,22 +225,13 @@ export function Canvas({ projeto }: { projeto: string }) {
     [runsEstado, projeto],
   );
 
-  // Modelo exibido = snapshot (MENOS os nos ocultos) + layout das runs + layout dos agentes.
-  // O id que ja' esta' no snapshot SEMPRE vence (nada de duplicar). As arestas do layout entram so' se
-  // forem novas (as do snapshot ganham).
+  // Modelo exibido = snapshot mesclado com o layout das runs + o layout dos agentes (mesclarComLayout):
+  // os nos ocultos ficam de fora, o automatico salvo usa a versao do layout e o conteudo do usuario
+  // segue o salvo (nada de duplicar). As arestas do layout entram so' se forem novas (as do snapshot ganham).
   const modelo = useMemo<Snapshot>(() => {
-    const ocultos = new Set(estado.nos.filter((n) => n.dados?.oculto === true).map((n) => n.id));
-    const visiveis = estado.nos.filter((n) => !ocultos.has(n.id));
     const lr = layoutRuns(runsProjeto, estado, Date.now());
     const la = layoutAgentes(agentes, estado);
-    const jaTem = new Set(estado.nos.map((n) => n.id));
-    const extras: No[] = [];
-    for (const n of [...lr.nos, ...la]) {
-      if (jaTem.has(n.id)) continue;
-      jaTem.add(n.id);
-      extras.push(n);
-    }
-    const nos = [...visiveis, ...extras];
+    const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]);
     const idsNos = new Set(nos.map((n) => n.id));
     const idsArestas = new Set(estado.arestas.map((a) => a.id));
     const arestasExtras: Aresta[] = lr.arestas
