@@ -31,9 +31,11 @@ import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContex
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
 import { AgentesCtx, NoAgente } from "./canvas/Agente";
 import { NoClaude } from "./canvas/Claude";
-import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes } from "./canvas/Run";
+import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes, type Vista } from "./canvas/Run";
 import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
 import { ProjetoCtx, nodeTypes as navegadorNodeTypes } from "./canvas/Navegador";
+import { nodeTypes as painelNodeTypes } from "./canvas/Painel";
+import { idProjetoFront } from "@/lib/desktop";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -55,19 +57,20 @@ function NoAgenteTipo(props: NodeProps) {
 }
 
 // nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b, F4 S6) + run/worker/arquivo
-// (S5c) + o explorador de arquivos (F3 S5) + o navegador (F4 S6).
+// (S5c) + o explorador de arquivos (F3 S5) + o navegador (F4 S6) + o painel de runs (G1 S4).
 const nodeTypes = {
   ...nosNodeTypes,
   agente: NoAgenteTipo,
   ...runNodeTypes,
   ...exploradorNodeTypes,
   ...navegadorNodeTypes,
+  ...painelNodeTypes,
 };
 
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 
 // Tipos que tem render proprio; os demais caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador"]);
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador", "painel"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -790,6 +793,28 @@ export function Canvas({ projeto }: { projeto: string }) {
     if (no) upsertNo(no, { expandida: no.dados.expandida !== true });
   };
 
+  /** Arvore|Fluxo do card de run (G1/S3): grava `dados.vista` do no' run:<id> (mesmo upsert do expandir). */
+  const trocarVista = (runId: string, vista: Vista) => {
+    const no = buscarNo(`run:${runId}`);
+    if (no) upsertNo(no, { vista });
+  };
+
+  /** Clique na slice (G1/S3): alterna `dados.aberta` do no' worker:<id>:<idx> (card ao vivo x compacto). */
+  const alternarSlice = (runId: string, idx: number) => {
+    const no = buscarNo(`worker:${runId}:${idx}`);
+    if (no) upsertNo(no, { aberta: no.dados.aberta !== true });
+  };
+
+  /**
+   * Abre uma run pelo painel Runs (G1/S4): grava `dados.expandida = true` no card run:<id> e centraliza
+   * a vista nele (fitView no proprio card, com folga). O atraso curto deixa o modelo/layout assentar.
+   */
+  const abrirRun = (runId: string) => {
+    const no = buscarNo(`run:${runId}`);
+    if (no && no.dados.expandida !== true) upsertNo(no, { expandida: true });
+    setTimeout(() => void instancia.current?.fitView({ nodes: [{ id: `run:${runId}` }], maxZoom: 1, padding: 0.4 }), 60);
+  };
+
   /** ✕ do card do agente: abre o dialog de ocultar/encerrar. */
   const pedirFecharAgente = (noId: string, agenteId: string) => setFecharAgente({ noId, agenteId });
 
@@ -845,6 +870,29 @@ export function Canvas({ projeto }: { projeto: string }) {
     enviar([{ op: "upsert", tipo: "no", item: no }]);
   };
 
+  /**
+   * Botao "Runs" da barra (G1/S4): cria o no' `painel:<id do projeto>` (820x520) no centro visivel do
+   * canvas. Se o painel deste projeto ja' existir, apenas centraliza nele (fitView), sem duplicar.
+   * O id do projeto e' o mesmo sha1 do hub (idProjetoFront), entao o painel nao se mistura entre projetos.
+   */
+  const abrirPainel = async () => {
+    if (bloqueado) return;
+    const id = `painel:${await idProjetoFront(projeto)}`;
+    if (modelo.nos.some((n) => n.id === id)) {
+      void instancia.current?.fitView({ nodes: [{ id }], maxZoom: 1, padding: 0.4 });
+      return;
+    }
+    const p = centro();
+    const w = 820;
+    const h = 520;
+    const no: No = {
+      id, tipo: "painel",
+      x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h,
+      dados: { projeto }, rev: Date.now(),
+    };
+    enviar([{ op: "upsert", tipo: "no", item: no }]);
+  };
+
   /** "+ Explorador" do menu do agente: cria o no' `exp:<agenteId>` (320x460) a esquerda do agente, ligado a ele. */
   const abrirExplorador = (agenteId: string) => {
     if (bloqueado) return;
@@ -882,7 +930,10 @@ export function Canvas({ projeto }: { projeto: string }) {
     runs: runsEstado.runs,
     agora,
     alternar: alternarRun,
+    vista: trocarVista,
+    alternarSlice,
     abrirDiff: (runId: string, arquivo: string) => setDiff({ runId, arquivo }),
+    abrirRun,
   };
 
   // Diff aberto pelo card de arquivo (ModalDiff controlado por estado local).
@@ -1000,6 +1051,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         onImagem={(arquivo) => void criarImagem(arquivo)}
         onAgente={() => setNovoAgenteAberto(true)}
         onNavegador={() => setNovoNavegadorAberto(true)}
+        onPainel={() => void abrirPainel()}
       />
 
       <NovoAgente

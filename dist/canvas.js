@@ -16,6 +16,7 @@ export const TIPOS_NO = [
     "arquivo",
     "explorador",
     "navegador",
+    "painel",
 ];
 // Validacao de operacoes
 const ehString = (v) => typeof v === "string";

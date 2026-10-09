@@ -578,7 +578,7 @@ export function alternarFixado(nos: No[], ids: string[], rev: number): Op[] {
   return alvos.map((n) => ({ op: "upsert", tipo: "no", item: { ...n, dados: { ...n.dados, fixado: fixar }, rev } }));
 }
 
-const FAIXAS: TipoNo[][] = [["agente"], ["navegador"], ["run", "worker"], ["nota", "imagem", "arquivo", "explorador", "texto"], ["forma", "grupo"]];
+const FAIXAS: TipoNo[][] = [["agente"], ["navegador"], ["run", "worker", "painel"], ["nota", "imagem", "arquivo", "explorador", "texto"], ["forma", "grupo"]];
 const fixo = (n: No) => n.dados.fixado === true;
 const bate = (a: Retangulo, b: Retangulo, m: number) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
 

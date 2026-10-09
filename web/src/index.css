@@ -428,6 +428,38 @@
   color: #fff;
 }
 
+/* Animacoes da arvore de runs (G1 - S3): pulso azul na slice rodando, flash verde quando o gate
+   fica ok e entrada (translateY + fade) dos cards de arquivo. Todas dentro de `.cv` e desligadas
+   por completo quando o usuario pede menos movimento (prefers-reduced-motion). */
+@keyframes cv-pulso {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(116, 170, 255, 0); }
+  50% { box-shadow: 0 0 0 5px rgba(116, 170, 255, 0.35); }
+}
+.cv .cv-pulso {
+  animation: cv-pulso 1.6s ease-in-out infinite;
+}
+@keyframes cv-gate-ok {
+  0% { box-shadow: 0 0 0 0 rgba(95, 210, 154, 0.6); }
+  100% { box-shadow: 0 0 0 9px rgba(95, 210, 154, 0); }
+}
+.cv .cv-gate-ok {
+  animation: cv-gate-ok 0.9s ease-out 1;
+}
+@keyframes cv-entra {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.cv .cv-entra {
+  animation: cv-entra 0.28s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cv .cv-pulso,
+  .cv .cv-gate-ok,
+  .cv .cv-entra {
+    animation: none;
+  }
+}
+
 /* Ferramentas (S2 - F1.5): cursor por ferramenta. Criacao = crosshair; mao = grab/grabbing. */
 .cv.cv-pane-criacao .react-flow__pane {
   cursor: crosshair;
