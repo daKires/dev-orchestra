@@ -138,10 +138,12 @@ export function layoutRuns(runs: Run[], snap: Snapshot, agora?: number): LayoutR
   let cursorY = COLUNA_Y; // topo da proxima run (empilha sem sobrepor, mais nova em cima)
   ordenadas.forEach((run) => {
     const cardId = `run:${run.id}`;
-    const card = comSalvo({
+    // A posicao salva (x,y) continua valendo, mas o tamanho e' SEMPRE o atual: o card cresceu
+    // (status, Arvore|Fluxo e acoes) e uma altura antiga salva nao pode voltar a valer.
+    const card = { ...comSalvo({
       id: cardId, tipo: "run", x: colunaX, y: cursorY,
       w: CARD_W, h: CARD_H, dados: { auto: true, runId: run.id }, rev: 0,
-    }, salvos);
+    }, salvos), w: CARD_W, h: CARD_H };
     nos.push(card);
 
     // Expandida: o boolean salvo no card vence; sem valor salvo, a run ATIVA (rodando/aguardando =

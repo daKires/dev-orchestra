@@ -579,7 +579,9 @@ export function alternarFixado(nos: No[], ids: string[], rev: number): Op[] {
 }
 
 const FAIXAS: TipoNo[][] = [["agente"], ["navegador"], ["run", "worker", "painel"], ["nota", "imagem", "arquivo", "explorador", "texto"], ["forma", "grupo"]];
-const fixo = (n: No) => n.dados.fixado === true;
+// Fica FORA da organizacao: os fixados a mao e os automaticos das runs (dados.auto), que sao
+// posicionados pelo layoutRuns. Ambos viram obstaculos para ninguem ser colocado em cima deles.
+const fixo = (n: No) => n.dados.fixado === true || n.dados.auto === true;
 const bate = (a: Retangulo, b: Retangulo, m: number) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
 
 // Empilha `itens` em faixas a partir de (x0,y0), largura max `larg`, evitando `obst`. Devolve posicoes e a altura usada.
@@ -663,8 +665,10 @@ export function organizarPorTipo(nos: No[], rev: number): Op[] {
   };
   const retangulo = (r: Retangulo): Retangulo => ({ x: r.x, y: r.y, w: r.w, h: r.h });
 
-  // 1) Regioes do mais interno ao mais externo: arruma os filhos nao fixados por dentro.
+  // 1) Regioes do mais interno ao mais externo: arruma os filhos nao fixados por dentro. As regioes
+  // automaticas das runs (dados.auto) ficam de fora: quem posiciona e' o layoutRuns.
   for (const g of [...grupos].sort((a, b) => a.w * a.h - b.w * b.h)) {
+    if (g.dados.auto === true) continue;
     const filhos = nos.filter((n) => pai.get(n.id) === g.id).map((n) => atual.get(n.id)!);
     if (filhos.length === 0) continue;
     const gAtual = atual.get(g.id)!;
