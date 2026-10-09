@@ -115,3 +115,30 @@ test("resumoPainel: ultimos 7 dias, KPIs e linhas mais novas primeiro (CA-G1g)",
   assert.deepEqual(Object.keys(p.linhas[0]).sort(), ["custo", "feature", "id", "ms", "slicesOk", "slicesTotal", "status"].sort());
   assert.equal(resumoPainel([], agora).primeiraTentativa, null);
 });
+
+test("runs empilhadas nao se sobrepoem: cada run comeca abaixo da regiao/card da anterior (G1 fix)", () => {
+  const evs = (id: string): Msg[] => [1, 2, 3].map((i) => ({ swarm: id, ev: { t: "slice", idx: i, total: 3, tarefa: "t" + i, status: "ok", escritos: [`f${i}.ts`], ts: T + i } } as Msg));
+  const a = runDe("ka", evs("ka"), T + 2000), b = runDe("kb", evs("kb"), T + 1000), c = runDe("kc", [], T);
+  const l = layoutRuns([a, b, c], vazioS, T + 3000); // as tres ativas e recentes: todas abertas
+  assert.ok(["ka", "kb", "kc"].every((id) => l.nos.some((n) => n.id === "reg:" + id)), "todas expandidas");
+  const caixa = (id: string) => {
+    const nos = l.nos.filter((n) => n.id === "run:" + id || n.id === "reg:" + id);
+    return { y1: Math.min(...nos.map((n) => n.y)), y2: Math.max(...nos.map((n) => n.y + n.h)) };
+  };
+  const ordem = ["ka", "kb", "kc"].map(caixa);
+  for (let i = 0; i < 2; i++) assert.ok(ordem[i].y2 <= ordem[i + 1].y1, `run ${i} termina antes da proxima comecar`);
+});
+
+test("card da run comporta status, Arvore|Fluxo e acoes (altura >= 170) (G1 fix)", () => {
+  const l = layoutRuns([runDe("kh", [fim("kh")])], vazioS);
+  assert.ok(l.nos.find((n) => n.id === "run:kh")!.h >= 170);
+});
+
+test("run 'rodando' sem evento ha mais de 10 min (processo morreu) nao abre sozinha (G1 fix)", () => {
+  const r = runDe("kz", [{ swarm: "kz", ev: { t: "slice", idx: 1, total: 3, tarefa: "t1", status: "rodando", ts: T + 5 } }]);
+  const viva = layoutRuns([r], vazioS, r.ultimoEventoTs + 60_000);
+  assert.ok(viva.nos.some((n) => n.id === "reg:kz"), "ativa recente abre");
+  const morta = layoutRuns([r], vazioS, r.ultimoEventoTs + 11 * 60_000);
+  assert.ok(!morta.nos.some((n) => n.id === "reg:kz"), "parada ha 11 min: recolhida");
+  assert.equal(morta.nos.find((n) => n.id === "worker:kz:1"), undefined);
+});
