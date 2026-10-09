@@ -50,9 +50,10 @@ test("fluxoDoPlano: slice ruim fica vermelha; gate e fim acompanham o resultado 
   assert.deepEqual(fluxoDoPlano(fila).nos.map((n) => n.cor), ["verde", "cinza", "cinza", "amarelo", "cinza"], "slices do plano sem evento = fila");
 });
 
-test("layoutRuns: run recolhida = 1 card na coluna Runs, mais recente em cima (CA-15)", () => {
-  const a = runDe("ra", [], T);
-  const b = runDe("rb", [], T + 1000);
+test("layoutRuns: run terminada recolhida = 1 card na coluna Runs, mais recente em cima (CA-15; G1: so' a ativa abre sozinha)", () => {
+  const fim = (id: string): Msg => ({ swarm: id, ev: { t: "painel", status: "COMPLETE", branch: "b", linhas: [], ts: T + 5000 } });
+  const a = runDe("ra", [fim("ra")], T);
+  const b = runDe("rb", [fim("rb")], T + 1000);
   const l = layoutRuns([a, b], vazioS);
   const cards = l.nos.filter((n) => n.tipo === "run");
   assert.deepEqual(cards.map((n) => n.id), ["run:rb", "run:ra"]);
@@ -69,7 +70,7 @@ test("layoutRuns: expandida gera regiao a direita com fluxo, workers e arquivos 
     { swarm: "rx", ev: { t: "diff", arquivo: "src/a.ts", patch: "@@", ts: T + 2 } },
     { swarm: "rx", ev: { t: "diff", arquivo: "README.md", patch: "@@", ts: T + 3 } },
   ]);
-  const salvo: No = { id: "run:rx", tipo: "run", x: 100, y: 50, w: 280, h: 110, dados: { auto: true, runId: "rx", expandida: true }, rev: 1 };
+  const salvo: No = { id: "run:rx", tipo: "run", x: 100, y: 50, w: 280, h: 110, dados: { auto: true, runId: "rx", expandida: true, vista: "fluxo" }, rev: 1 };
   const l = layoutRuns([r], { nos: [salvo], arestas: [] });
   const ids = l.nos.map((n) => n.id);
   const card = l.nos.find((n) => n.id === "run:rx")!;
@@ -93,7 +94,7 @@ test("layoutRuns: expandida gera regiao a direita com fluxo, workers e arquivos 
 test("layoutRuns: posicoes salvas dos filhos vencem (CA-11b)", () => {
   const r = runDe("rz");
   const nos: No[] = [
-    { id: "run:rz", tipo: "run", x: 0, y: 0, w: 280, h: 110, dados: { auto: true, runId: "rz", expandida: true }, rev: 1 },
+    { id: "run:rz", tipo: "run", x: 0, y: 0, w: 280, h: 110, dados: { auto: true, runId: "rz", expandida: true, vista: "fluxo" }, rev: 1 },
     { id: "flow:rz:1", tipo: "forma", x: 777, y: 888, w: 160, h: 80, dados: { auto: true }, pai: "reg:rz", rev: 1 },
   ];
   const n = layoutRuns([r], { nos, arestas: [] }).nos.find((x) => x.id === "flow:rz:1")!;
