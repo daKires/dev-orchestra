@@ -93,6 +93,31 @@ function comSalvo(no: No, salvos: Map<string, No>): No {
 }
 
 /**
+ * Mescla os nos SALVOS (snapshot) com os GERADOS pelo layout automatico (runs + agentes) numa unica
+ * lista, sem duplicar ids:
+ * - nos salvos com `dados.oculto === true` (e os gerados com o mesmo id) ficam de fora;
+ * - para cada salvo visivel: se `dados.auto === true` e existe um gerado com o mesmo id, usa o GERADO
+ *   (o layout ja' mescla do salvo o que importa via comSalvo); senao usa o salvo (conteudo do usuario);
+ * - acrescenta os gerados cujo id NAO estava entre os salvos.
+ */
+export function mesclarComLayout(salvos: No[], gerados: No[]): No[] {
+  const ocultos = new Set(salvos.filter((n) => n.dados?.oculto === true).map((n) => n.id));
+  const idsSalvos = new Set(salvos.map((n) => n.id));
+  const porId = new Map(gerados.filter((n) => !ocultos.has(n.id)).map((n) => [n.id, n]));
+  const out: No[] = [];
+  for (const s of salvos) {
+    if (ocultos.has(s.id)) continue;
+    const g = porId.get(s.id);
+    out.push(s.dados?.auto === true && g ? g : s);
+  }
+  for (const g of gerados) {
+    if (ocultos.has(g.id) || idsSalvos.has(g.id)) continue;
+    out.push(g);
+  }
+  return out;
+}
+
+/**
  * Largura que a regiao de uma run TERIA (a maior regiao possivel), ignorando posicoes salvas: so'
  * depende do numero de slices (cadeia do fluxo) e dos arquivos. Usada pra reservar espaco a esquerda
  * do conteudo do usuario sem a regiao nunca invadir nada.
