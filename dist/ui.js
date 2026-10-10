@@ -1971,6 +1971,11 @@ function criarServidor() {
                 return;
             }
             const id = new URL(url, "http://x").searchParams.get("run") || "";
+            if (!/^[a-z0-9-]+$/.test(id)) {
+                res.writeHead(400);
+                res.end();
+                return;
+            }
             const cancelado = fs.existsSync(arquivoCancel(id));
             const erro = validarAcaoSlice(eventosDaRun(id), slice, cancelado);
             if (erro) {
