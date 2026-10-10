@@ -148,7 +148,9 @@ test("/cli/run com OpenCode: aresta ate' ag:plan-<slug>, pedido gravado em pedid
     assert.equal(r.status, 200);
     const snap = await (await fetch(`${BASE}/canvas?projeto=${encodeURIComponent(projeto)}`)).json();
     assert.ok(snap.arestas.some((a) => a.id.startsWith("pedido:") && a.de === "ag:" + pedinte && a.para === "ag:plan-grafico"), "aresta de pedido ate' o planejador OpenCode");
-    const pedidos = JSON.parse(readFileSync(path.join(process.env.HERMES_AGENTES_DIR, "pedidos.json"), "utf8"));
+    const arqPedidos = path.join(process.env.HERMES_AGENTES_DIR, "pedidos.json");
+    assert.ok(existsSync(arqPedidos), "pedidos.json criado pelo /cli/run com OpenCode");
+    const pedidos = JSON.parse(readFileSync(arqPedidos, "utf8"));
     assert.ok(pedidos.some((p) => p.cwd === wt && p.pedidoPor === pedinte), "pedido do OpenCode gravado");
     const evs = [
         { t: "run", feature: "Grafico", cwd: wt, total: 2, ts: 1 },
