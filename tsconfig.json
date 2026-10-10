@@ -38,6 +38,8 @@
     "ui-claude-env.test.ts",
     "ui-acoes-run.test.ts",
     "ui-g2.test.ts",
+    "ui-g3.test.ts",
+    "g3-agente.test.ts",
     "acoes-run.ts"
   ]
 }
