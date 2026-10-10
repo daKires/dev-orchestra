@@ -3,6 +3,7 @@
 /**
  * Monta os argumentos do Claude Code: `--continue` (se continuar), `--append-system-prompt`
  * seguido do prompt, `--settings` seguido do caminho e, so' quando informado, `--model`.
+ * `inicial` (G2) vai como ULTIMO argumento posicional (prompt inicial do Claude, ex.: `/orchestra "..."`).
  */
 export function argsClaude(o) {
     const args = [];
@@ -11,6 +12,8 @@ export function argsClaude(o) {
     args.push("--append-system-prompt", o.prompt, "--settings", o.settingsPath);
     if (o.modelo)
         args.push("--model", o.modelo);
+    if (o.inicial)
+        args.push(o.inicial);
     return args;
 }
 // Modelos (CA-5)

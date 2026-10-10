@@ -32,6 +32,7 @@ export default function App() {
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
   const [nova, setNova] = useState(false);
+  const [projetoNova, setProjetoNova] = useState(""); // projeto pre-preenchido no dialog de nova feature
   const [vista, setVista] = useLocal<"ide" | "canvas">("vista", "ide");
   const [canvasProjeto, setCanvasProjeto] = useLocal<string | null>("canvas-projeto", null);
   const lateral = usePanelRef();
@@ -133,7 +134,7 @@ export default function App() {
             {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
             <Button
               size="sm" variant="outline" className="h-6.5 gap-1.5 px-2.5 text-xs"
-              title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
+              title="Criar uma feature nova (worktree + planejador)" onClick={() => { setProjetoNova(""); setNova(true); }}
             >
               <Plus className="size-3.5" />Nova feature
             </Button>
@@ -151,7 +152,7 @@ export default function App() {
                   <span className="truncate text-xs text-muted-foreground">{canvasProjeto}</span>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <Canvas projeto={canvasProjeto} />
+                  <Canvas projeto={canvasProjeto} onNovaFeature={() => { setProjetoNova(canvasProjeto); setNova(true); }} />
                 </div>
               </div>
             ) : (
@@ -214,7 +215,7 @@ export default function App() {
         onRun={(id) => { setRunId(id); setSliceSel(null); }} onSlice={irSlice} onArquivo={abrirArquivo}
       />
       <CancelDialog r={r} aberto={cancelar} onAberto={setCancelar} />
-      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} />
+      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} projetoInicial={projetoNova} />
     </TooltipProvider>
   );
 }
