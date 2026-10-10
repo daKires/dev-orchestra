@@ -7,12 +7,38 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ANEXO_ACCEPT, ANEXO_MAX, corpoNovaFeature, nomeSeguroAnexo, podeCriar, problemaAnexo,
-  projetosConhecidos, tamanhoLegivel, type Anexo, type Estado,
+  ANEXO_ACCEPT, ANEXO_MAX, corpoNovaFeature, nomeSeguroAnexo, podeCriarComPlanejador, problemaAnexo,
+  projetosConhecidos, tamanhoLegivel, type Anexo, type Estado, type PlanejadorEscolha,
 } from "@/lib/estado";
 import { cn } from "@/lib/utils";
 
 type Props = { estado: Estado; aberto: boolean; onAberto: (v: boolean) => void };
+
+// Modelos do Claude Code: "" = Padrão (quem escolhe e' a conta), o resto vai como --model. Mesma lista
+// do NovoAgente; o planejador escolhido pelo usuario aqui e' OBRIGATORIO (sem padrao).
+const MODELOS_CLAUDE: readonly { valor: string; nome: string }[] = [
+  { valor: "", nome: "Padrão" },
+  { valor: "opus", nome: "opus" },
+  { valor: "sonnet", nome: "sonnet" },
+  { valor: "haiku", nome: "haiku" },
+];
+
+// Modelos do OpenCode disponiveis na pasta do projeto (GET /agentes/modelos?cwd=): mesmo endpoint que o
+// NovoAgente usa (useAgentes.modelos). [] quando o serve do OpenCode ainda nao subiu naquela cwd.
+async function carregarModelos(cwd: string): Promise<string[]> {
+  try {
+    const r = await fetch(`/agentes/modelos?cwd=${encodeURIComponent(cwd)}`);
+    if (!r.ok) return [];
+    const j: unknown = await r.json();
+    return Array.isArray(j) ? j.filter((m): m is string => typeof m === "string") : [];
+  } catch { return []; }
+}
+
+/** Classes de um select no mesmo tom dos campos do dialog (o Input do shadcn). */
+const CLASSE_SELECT =
+  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm transition-colors " +
+  "outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none " +
+  "disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 dark:bg-input/30";
 
 // Le um File como base64 puro (sem o prefixo "data:...;base64,"), que e' o que o hub espera em dadosB64.
 function base64De(arquivo: File): Promise<string> {
@@ -42,11 +68,16 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
   const [erro, setErro] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [criando, setCriando] = useState(false); // 202 aceito: esperando o desfecho pelo SSE
+  // Planejador escolhido (G2/S4b): sem padrao — o usuario TEM que escolher Claude ou OpenCode.
+  const [planejador, setPlanejador] = useState<"claude" | "opencode" | null>(null);
+  const [modelo, setModelo] = useState("");
+  const [modelos, setModelos] = useState<string[]>([]);
   const pedido = useRef<{ projeto: string; feature: string } | null>(null);
   const seletorAnexos = useRef<HTMLInputElement>(null);
   const projetos = useMemo(() => projetosConhecidos(estado, estado.planejadores), [estado]);
   const nf = estado.novaFeature;
-  const pode = podeCriar(projeto, feature) && !enviando && !criando;
+  const escolha: PlanejadorEscolha | undefined = planejador ? { planejador, modelo } : undefined;
+  const pode = podeCriarComPlanejador(projeto, feature, escolha) && !enviando && !criando;
 
   // Fechar o dialog limpa o formulario (reabrir sempre comeca do zero).
   useEffect(() => {
@@ -54,7 +85,23 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
     pedido.current = null;
     setProjeto(""); setFeature(""); setDescricao(""); setAnexos([]); setErrosAnexo([]); setArrastando(false);
     setMsg(""); setErro(false); setEnviando(false); setCriando(false);
+    setPlanejador(null); setModelo(""); setModelos([]);
   }, [aberto]);
+
+  // Modelos do OpenCode da pasta do projeto (mesmo GET /agentes/modelos do NovoAgente). So' carrega
+  // quando o planejador OpenCode esta' escolhido; trocar a pasta recarrega.
+  useEffect(() => {
+    if (!aberto || planejador !== "opencode" || !projeto.trim()) { setModelos([]); return; }
+    let vivo = true;
+    void carregarModelos(projeto.trim()).then((ms) => { if (vivo) setModelos(ms); });
+    return () => { vivo = false; };
+  }, [aberto, planejador, projeto]);
+
+  /** Troca o planejador e zera o modelo: Padrão ("" = a conta decide) no Claude; sem padrao no OpenCode. */
+  const escolherPlanejador = (p: "claude" | "opencode") => {
+    setPlanejador(p);
+    setModelo("");
+  };
 
   // Acompanha o andamento pelo SSE: so' reage ao NOSSO pedido (projeto/feature ecoados pelo hub),
   // pra um pedido de outra sessao nao fechar/mexer neste formulario.
@@ -64,6 +111,8 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
     if (nf.projeto !== p.projeto || nf.feature !== p.feature) return;
     pedido.current = null;
     setCriando(false);
+    // 'ok': fecha o dialog. Com url (OpenCode) o App abre o chat do planejador; com url vazia (Claude,
+    // que roda no worktree) so' fechamos — o agente planejador aparece no canvas do projeto.
     if (nf.status === "ok") { onAberto(false); return; }
     setErro(true);
     setMsg(nf.erro || "Não deu pra criar a feature.");
@@ -111,8 +160,8 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
   };
 
   const criar = async () => {
-    if (!pode) return;
-    const corpo = corpoNovaFeature(projeto, feature, descricao, anexos);
+    if (!pode || !escolha) return;
+    const corpo = corpoNovaFeature(projeto, feature, descricao, anexos, escolha);
     pedido.current = { projeto: corpo.projeto, feature: corpo.feature };
     setEnviando(true); setErro(false); setMsg("");
     try {
@@ -155,8 +204,9 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
         <DialogHeader>
           <DialogTitle>Nova feature</DialogTitle>
           <DialogDescription>
-            Cria o worktree e sobe o planejador (orchestra-go.ps1) do projeto escolhido. O chat abre no
-            painel da direita assim que o worktree ficar pronto. Descrição e anexos são opcionais.
+            Cria o worktree e sobe o planejador escolhido (Claude ou OpenCode) do projeto. Com o OpenCode
+            o chat abre no painel da direita; com o Claude o agente planejador aparece no canvas. Descrição
+            e anexos são opcionais.
           </DialogDescription>
         </DialogHeader>
         <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void criar(); }}>
@@ -177,6 +227,47 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
               id="nova-feature" value={feature} autoComplete="off" spellCheck={false}
               placeholder="ex.: relatorio-mensal" onChange={(e) => setFeature(e.target.value)}
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span id="nova-planejador" className="text-xs font-medium">
+              Planejador <span className="font-normal text-muted-foreground">(obrigatório)</span>
+            </span>
+            <div className="flex gap-1.5" role="group" aria-labelledby="nova-planejador">
+              {(["claude", "opencode"] as const).map((p) => (
+                <button
+                  key={p} type="button" aria-pressed={planejador === p}
+                  className={cn("cv-insp-seg", planejador === p && "cv-insp-seg-on")}
+                  style={{ font: "500 12px/1 ui-sans-serif, system-ui, sans-serif", padding: "7px 12px" }}
+                  onClick={() => escolherPlanejador(p)}
+                >
+                  {p === "claude" ? "Claude" : "OpenCode"}
+                </button>
+              ))}
+            </div>
+            {planejador === "claude" && (
+              <select
+                aria-label="Modelo do Claude" value={modelo} className={CLASSE_SELECT}
+                onChange={(e) => setModelo(e.target.value)}
+              >
+                {MODELOS_CLAUDE.map((m) => <option key={m.nome} value={m.valor}>{m.nome}</option>)}
+              </select>
+            )}
+            {planejador === "opencode" && (
+              <select
+                aria-label="Modelo do OpenCode" value={modelo} className={CLASSE_SELECT}
+                onChange={(e) => setModelo(e.target.value)}
+              >
+                <option value="" disabled>Selecione um modelo…</option>
+                {modelos.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              {planejador === "claude"
+                ? "O Claude Code planeja no worktree da feature; Padrão deixa o modelo a cargo da conta."
+                : planejador === "opencode"
+                  ? "Escolha um modelo provider/modelo do OpenCode desta pasta."
+                  : "Escolha quem vai planejar a feature — Claude ou OpenCode."}
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="nova-descricao" className="text-xs font-medium">

@@ -15,7 +15,7 @@ import {
   ordemZ, organizarPorTipo, paiDoNo, pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO,
   type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
-import { layoutAgentes, layoutRuns, mesclarComLayout } from "@/lib/layout";
+import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
 import { arestasEmConversa, type EmConversa } from "@/lib/colab";
 import { cn } from "@/lib/utils";
@@ -121,21 +121,34 @@ function noParaRf(no: No, porId: Map<string, No>): Node {
 // A seta (markerEnd ArrowClosed) so' aparece quando as duas pontas sao formas (pontaDaAresta).
 // Aresta em conversa (F3 S4): tracejado azul animado (#74aaff) com o balao como rotulo; sentido
 // reverso inverte a animacao pela classe CSS `cv-anim-reversa` (sem trocar source/target).
-function arestaParaRf(a: Aresta, porId: Map<string, No>, emConversa: Record<string, EmConversa>): Edge {
+function arestaParaRf(
+  a: Aresta, porId: Map<string, No>, emConversa: Record<string, EmConversa>,
+  pedidoEmAndamento: (a: Aresta) => boolean,
+): Edge {
   const comSeta = pontaDaAresta(porId.get(a.de)?.tipo, porId.get(a.para)?.tipo);
   // Agente <-> agente/navegador: ligacao de mao dupla (os dois conversam/controlam), seta nas duas pontas.
   const ehAtor = (t?: string) => t === "agente" || t === "navegador";
   const maoDupla = !comSeta && ehAtor(porId.get(a.de)?.tipo) && ehAtor(porId.get(a.para)?.tipo);
   const seta = { type: MarkerType.ArrowClosed, color: "#606060", width: 16, height: 16 };
   const conv = emConversa[a.id];
+  // Aresta "pedido" (G2/S4b): o hub marca dados.pedido na aresta ag:<pedinte> -> ag:<planejador>.
+  // Enquanto o pedido esta' em andamento (pedidoAtivo do cwd do planejador-alvo) ela fica tracejada e
+  // animada como a aresta em conversa (classe cv-pedido pinta de azul no index.css); para quando a run
+  // daquele cwd recebe o painel final.
+  const pedido = (a as Aresta & { dados?: { pedido?: boolean } }).dados?.pedido === true;
+  const pedidoAtivoAqui = pedido && pedidoEmAndamento(a);
+  const classe = [
+    conv?.sentido === "reverso" ? "cv-anim-reversa" : "",
+    pedidoAtivoAqui ? "cv-pedido" : "",
+  ].filter(Boolean).join(" ");
   return {
     id: a.id,
     source: a.de,
     target: a.para,
     type: "rotulo",
     data: { rotulo: a.rotulo ?? "", conversa: conv },
-    animated: !!conv,
-    className: conv?.sentido === "reverso" ? "cv-anim-reversa" : undefined,
+    animated: !!conv || pedidoAtivoAqui,
+    className: classe || undefined,
     markerStart: maoDupla ? seta : undefined,
     markerEnd: comSeta || maoDupla ? seta : undefined,
   };
@@ -184,7 +197,7 @@ function ControleZoom() {
 
 // Canvas
 
-export function Canvas({ projeto }: { projeto: string }) {
+export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeature?: () => void }) {
   const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
   const [arestas, setArestas] = useState<Edge[]>([]);
@@ -231,16 +244,26 @@ export function Canvas({ projeto }: { projeto: string }) {
   const modelo = useMemo<Snapshot>(() => {
     const lr = layoutRuns(runsProjeto, estado, Date.now());
     const la = layoutAgentes(agentes, estado);
+    // Arestas planejador -> run (G2/S4b): o planejador roda no worktree e dispara a run naquele cwd.
+    const plans = agentes.filter((a) => a.origem === "planejador").map((a) => ({ agId: `ag:${a.id}`, cwd: a.cwd }));
+    const ap = arestasPlanejadorRun(plans, runsProjeto);
     const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]);
     const idsNos = new Set(nos.map((n) => n.id));
     const idsArestas = new Set(estado.arestas.map((a) => a.id));
-    const arestasExtras: Aresta[] = lr.arestas
+    const arestasExtras: Aresta[] = [...lr.arestas, ...ap]
       .filter((a) => !idsArestas.has(a.id))
       .map((a) => ({ id: a.id, de: a.de, para: a.para, rev: 0 }));
     // Arestas do snapshot + as do layout, descartando as que ficaram orfas (ponta oculta/inexistente).
     const arestas = [...estado.arestas, ...arestasExtras].filter((a) => idsNos.has(a.de) && idsNos.has(a.para));
     return { nos, arestas };
   }, [estado, agentes, runsProjeto]);
+
+  // cwd por agente (G2/S4b): e' o worktree do planejador, usado pra decidir se um pedido ainda esta' ativo.
+  const cwdDeAgente = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agentes) m.set(a.id, a.cwd);
+    return m;
+  }, [agentes]);
 
   // Arestas em conversa (F3 S4): mapa edgeId -> {sentido, balao} a partir de {conversas} do SSE.
   const emConversa = useMemo(
@@ -286,17 +309,25 @@ export function Canvas({ projeto }: { projeto: string }) {
   // medida o xyflow nao posiciona as alcas e nenhuma aresta e' desenhada.
   useEffect(() => {
     const porId = new Map(modelo.nos.map((n) => [n.id, n]));
+    // Pedido em andamento de uma aresta "pedido" (ag:<pedinte> -> ag:<planejador>): olha o cwd do
+    // planejador-alvo e anima enquanto nenhuma run daquele cwd recebeu o painel final (pedidoAtivo).
+    const pedidoEmAndamento = (a: Aresta): boolean => {
+      const alvo = porId.get(a.para);
+      const agId = alvo && alvo.tipo === "agente" && typeof alvo.dados.agenteId === "string" ? alvo.dados.agenteId : "";
+      const cwd = agId ? cwdDeAgente.get(agId) ?? "" : "";
+      return !!cwd && pedidoAtivo(cwd, runsProjeto);
+    };
     const ordenados = [...modelo.nos].sort((a, b) => (a.tipo === "grupo" ? 0 : 1) - (b.tipo === "grupo" ? 0 : 1));
     setNos((antigos) => mesclarNosRf(ordenados.map((n) => noParaRf(n, porId)), antigos));
     setArestas((antigas) => {
       const sel = new Set(antigas.filter((a) => a.selected).map((a) => a.id));
       return modelo.arestas.map((a) => {
-        const rf = arestaParaRf(a, porId, emConversa);
+        const rf = arestaParaRf(a, porId, emConversa, pedidoEmAndamento);
         if (sel.has(a.id)) rf.selected = true;
         return rf;
       });
     });
-  }, [modelo, emConversa]);
+  }, [modelo, emConversa, cwdDeAgente, runsProjeto]);
 
   useEffect(() => {
     if (!aviso) return;
@@ -580,6 +611,8 @@ export function Canvas({ projeto }: { projeto: string }) {
     }
     if (!ctrl && e.shiftKey) {
       const k = e.key.toLowerCase();
+      // Shift+N: abre o dialog "Nova feature" (mesmo do botao do topo e do '+ Feature' da barra).
+      if (k === "n") { e.preventDefault(); onNovaFeature?.(); return true; }
       // Shift+O: auto-organiza em faixas por tipo (respeitando os fixados). Shift+F: fixa/desafixa.
       if (k === "o") { e.preventDefault(); organizar(); return true; }
       if (k === "f") {
@@ -1047,6 +1080,7 @@ export function Canvas({ projeto }: { projeto: string }) {
         onAgente={() => setNovoAgenteAberto(true)}
         onNavegador={() => setNovoNavegadorAberto(true)}
         onPainel={() => void abrirPainel()}
+        onNovaFeature={() => onNovaFeature?.()}
       />
 
       <NovoAgente

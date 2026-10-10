@@ -337,6 +337,53 @@ const AGENTE_W = 620;
 const AGENTE_H = 420;
 const AGENTE_GAP = 40;
 
+// Ligacao planejador -> run e pedido em andamento (G2/S3)
+
+// Chave canonica do cwd de uma run/planejador: separadores uniformes ('/'), sem barra final e caixa
+// baixa (no Windows 'D:\x' e 'd:/x' apontam pro mesmo lugar).
+function cwdChave(cwd: string): string {
+  return cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+// Uma run "tem painel" quando ja' recebeu o evento final: o status deixa de ser de andamento (o
+// evento 'painel' grava o status final em Run.status; ver mutar() em estado.ts).
+function temPainel(r: Run): boolean {
+  return r.status !== "rodando" && r.status !== "aguardando";
+}
+
+/**
+ * Arestas planejador -> run (CA-G2b): cada run cujo cwd (normalizado) e' o cwd de um planejador ganha
+ * uma aresta `ag:<planejador> -> run:<id>` (o planejador Claude roda no worktree e dispara a run ali).
+ * Run de outro cwd (ou sem planejador correspondente) fica de fora; cwd diferente que normaliza igual
+ * ("D:\\x\\" == "d:/x") casa.
+ */
+export function arestasPlanejadorRun(plans: { agId: string; cwd: string }[], runs: Run[]): ArestaLayout[] {
+  const porCwd = new Map<string, string[]>();
+  for (const p of plans) {
+    const k = cwdChave(p.cwd);
+    if (!k) continue;
+    const lista = porCwd.get(k);
+    if (lista) lista.push(p.agId); else porCwd.set(k, [p.agId]);
+  }
+  const out: ArestaLayout[] = [];
+  for (const run of runs) {
+    const donos = porCwd.get(cwdChave(run.cwd));
+    if (!donos) continue;
+    for (const agId of donos) out.push({ id: `${agId}->run:${run.id}`, de: agId, para: `run:${run.id}` });
+  }
+  return out;
+}
+
+/**
+ * O pedido feito por um agente ainda esta' em andamento? true enquanto o planejador planeja (nenhuma
+ * run naquele cwd ainda) ou a run daquele cwd esta' rodando; false assim que existe uma run naquele
+ * cwd que ja' recebeu o painel (status final). Run de outro cwd nao conta (CA-G2e).
+ */
+export function pedidoAtivo(cwd: string, runs: Run[]): boolean {
+  const k = cwdChave(cwd);
+  return !runs.some((r) => cwdChave(r.cwd) === k && temPainel(r));
+}
+
 /**
  * Nos 'agente' para os planejadores que ainda NAO tem no' `ag:<id>` no snapshot (um no' oculto conta
  * como existente). Mesma coluna, empilhados sem sobrepor. Agentes de origem 'canvas' ficam de fora.
