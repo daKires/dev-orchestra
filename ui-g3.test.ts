@@ -105,3 +105,14 @@ test("run cancelada ou com painel: 'a run já terminou' (CA-8)", async () => {
   assert.equal(r.status, 409);
   assert.equal(await r.text(), "a run já terminou");
 });
+
+test("run com caracteres fora de [a-z0-9-] e' 400 e nao grava nada fora do RUNS_DIR (seguranca)", async () => {
+  for (const run of ["../fora", "..%2Ffora", "RUN_X", "a/b"]) {
+    const r = await post(`/runs/instrucao?run=${run}`, { slice: 2, texto: "x" });
+    assert.equal(r.status, 400, run);
+    const p = await post(`/runs/pausa?run=${run}`, { slice: 2, acao: "pausar" });
+    assert.equal(p.status, 400, run);
+  }
+  assert.equal(existsSync(path.join(TMP, "fora.instrucao.jsonl")), false);
+  assert.equal(existsSync(path.join(TMP, "fora.pausa")), false);
+});
