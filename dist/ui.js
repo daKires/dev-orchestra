@@ -333,10 +333,35 @@ function rescan() {
 function cwdNormalizado(p) {
     return path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
+function arquivoPedidos() { return path.join(AGENTES_DIR, "pedidos.json"); }
+// Le pedidos.json (array); inexistente/corrompido -> []. Cada entrada e' saneada para o formato Pedido.
+function lerPedidos() {
+    try {
+        const j = JSON.parse(fs.readFileSync(arquivoPedidos(), "utf8"));
+        if (!Array.isArray(j))
+            return [];
+        return j
+            .filter((p) => p && typeof p.cwd === "string" && typeof p.pedidoPor === "string")
+            .map((p) => ({ cwd: p.cwd, pedidoPor: p.pedidoPor, avisados: Array.isArray(p.avisados) ? p.avisados.filter((x) => typeof x === "string") : [] }));
+    }
+    catch {
+        return [];
+    }
+}
+function gravarPedidos(pedidos) {
+    try {
+        fs.mkdirSync(AGENTES_DIR, { recursive: true });
+        fs.writeFileSync(arquivoPedidos(), JSON.stringify(pedidos));
+    }
+    catch { }
+}
 // G2/S2: quando a run de um planejador termina (evento 'painel'), avisa o agente que PEDIU aquela
 // feature. O agente que pediu e' o registro com `pedidoPor` e cwd igual ao da run (o planejador Claude
-// roda no worktree). `avisados` no registro guarda os runIds ja' avisados para nao repetir a cada rescan.
+// roda no worktree) ou, no planejador OpenCode, uma entrada de pedidos.json com o mesmo cwd (o OpenCode
+// nao tem registro de agente no hub). `avisados` (registro ou entrada) guarda os runIds ja' avisados.
 function avisarFimDeRuns() {
+    const pedidos = lerPedidos();
+    let pedidosMudou = false;
     for (const [id, evs] of estado) {
         const runEv = evs.find((e) => e.t === "run");
         if (!runEv || runEv.t !== "run" || !runEv.cwd)
@@ -356,6 +381,7 @@ function avisarFimDeRuns() {
         }
         const k = [...statusPorIdx.values()].filter((s) => s.startsWith("ok")).length;
         const mensagem = `[run ${id}] ${painel.status} — ${k}/${runEv.total} slices · $${custo.toFixed(3).replace(".", ",")} · ${painel.branch}`;
+        const entregas = [];
         for (const reg of agentes.values()) {
             if (!reg.pedidoPor || cwdNormalizado(reg.cwd) !== cwdRun)
                 continue;
@@ -364,8 +390,22 @@ function avisarFimDeRuns() {
                 continue;
             reg.avisados = [...avisados, id];
             gravarAgente(reg); // grava ANTES de entregar: um rescan seguinte nao reenvia o mesmo aviso
-            void entregarColab(reg.pedidoPor, mensagem);
+            entregas.push({ para: reg.pedidoPor, texto: mensagem });
         }
+        // Planejador OpenCode: o pedido mora em pedidos.json, ligado pelo cwd normalizado do worktree.
+        for (const p of pedidos) {
+            if (cwdNormalizado(p.cwd) !== cwdRun || p.avisados.includes(id))
+                continue;
+            p.avisados = [...p.avisados, id];
+            pedidosMudou = true;
+            entregas.push({ para: p.pedidoPor, texto: mensagem });
+        }
+        if (pedidosMudou) {
+            gravarPedidos(pedidos);
+            pedidosMudou = false;
+        } // grava ANTES de entregar
+        for (const e of entregas)
+            void entregarColab(e.para, e.texto);
     }
 }
 // Remove logs (e pedidos de cancelamento) mais velhos que PODA_MS.
@@ -899,6 +939,21 @@ function serveDoCwd(cwd) {
         if (a.cwd === cwd && a.base)
             return { base: a.base, pid: 0 };
     return undefined;
+}
+// Base do OpenCode usada pra listar os modelos (GET /agentes/modelos): a do cwd pedido; sem serve
+// naquela pasta, cai no primeiro serve conhecido (serves.values()) ou na base de um planejador do
+// orchestra-go — a lista de providers do OpenCode e' da CONTA, nao da pasta. Sem nenhum -> "" (-> []).
+function baseParaModelos(cwd) {
+    const s = cwd ? serveDoCwd(cwd) : undefined;
+    if (s)
+        return s.base;
+    for (const x of serves.values())
+        if (x.base)
+            return x.base;
+    for (const p of planejadores)
+        if (p.base)
+            return p.base;
+    return "";
 }
 // ['provider/modelo', ...] a partir de GET {base}/config/providers.
 async function listarModelos(base) {
@@ -1926,22 +1981,19 @@ function criarServidor() {
                 }
                 novaFeatureEmAndamento = true;
                 const exec = dispararFeature;
-                // Extras SO' quando o pedido tem descricao e/ou anexos (compat: sem campos novos, sem extras).
                 // Extras SEMPRE com o planejador escolhido; descricao/anexosDir so' quando o pedido os tem.
                 const extras = { planejador: plano.planejador, modelo: plano.modelo };
-                {
-                    if (v.descricao)
-                        extras.descricao = v.descricao;
-                    if (v.anexos?.length) {
-                        const dir = path.join(ANEXOS_DIR, randomUUID()); // pasta UNICA por pedido
-                        try {
-                            fs.mkdirSync(dir, { recursive: true });
-                            for (const a of v.anexos)
-                                fs.writeFileSync(path.join(dir, a.nome), Buffer.from(a.dadosB64, "base64"));
-                            extras.anexosDir = dir;
-                        }
-                        catch { }
+                if (v.descricao)
+                    extras.descricao = v.descricao;
+                if (v.anexos?.length) {
+                    const dir = path.join(ANEXOS_DIR, randomUUID()); // pasta UNICA por pedido
+                    try {
+                        fs.mkdirSync(dir, { recursive: true });
+                        for (const a of v.anexos)
+                            fs.writeFileSync(path.join(dir, a.nome), Buffer.from(a.dadosB64, "base64"));
+                        extras.anexosDir = dir;
                     }
+                    catch { }
                 }
                 res.writeHead(202);
                 res.end(); // dispara em background; o andamento vai por SSE
@@ -2084,9 +2136,11 @@ function criarServidor() {
         // ---- agentes (F2/S3) ----
         if (caminho === "/agentes/modelos") {
             const cwd = new URL(url, "http://x").searchParams.get("cwd") || "";
-            const s = cwd ? serveDoCwd(cwd) : undefined;
+            // Sem serve na pasta pedida o dialog ficaria sem modelos; usa um serve/planejador conhecido
+            // (a lista de providers do OpenCode e' da conta, nao da pasta).
+            const base = baseParaModelos(cwd);
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(s ? await listarModelos(s.base) : []));
+            res.end(JSON.stringify(base ? await listarModelos(base) : []));
             return;
         }
         if (caminho === "/agentes" && req.method === "GET") {
@@ -2471,6 +2525,13 @@ function criarServidor() {
                         const aresta = { id: `pedido:${planejadorId}`, de: "ag:" + c.id, para: "ag:" + planejadorId, dados: { pedido: true }, rev: agora };
                         // Mesmo mecanismo do flow link: aplica a op no canvas do projeto e faz o broadcast.
                         aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "aresta", item: aresta }]);
+                    }
+                    // Planejador OpenCode: nao ha' agente do planejador no hub; o pedido vai pra pedidos.json
+                    // (com o cwd do worktree) pra que o aviso de fim da run chegue ao pedinte em avisarFimDeRuns.
+                    if (!r.agenteId && r.cwd) {
+                        const pedidos = lerPedidos();
+                        pedidos.push({ cwd: r.cwd, pedidoPor: c.id, avisados: [] });
+                        gravarPedidos(pedidos);
                     }
                     responderTexto(res, 200, `planejador criado: ${planejadorId} (cwd ${r.cwd ?? ""})`);
                 }

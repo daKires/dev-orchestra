@@ -12,7 +12,7 @@ import {
 } from "@/lib/estado";
 import { cn } from "@/lib/utils";
 
-type Props = { estado: Estado; aberto: boolean; onAberto: (v: boolean) => void };
+type Props = { estado: Estado; aberto: boolean; onAberto: (v: boolean) => void; projetoInicial?: string };
 
 // Modelos do Claude Code: "" = Padrão (quem escolhe e' a conta), o resto vai como --model. Mesma lista
 // do NovoAgente; o planejador escolhido pelo usuario aqui e' OBRIGATORIO (sem padrao).
@@ -57,7 +57,7 @@ function base64De(arquivo: File): Promise<string> {
 // planejador novo no painel da direita (regra do App); em 'erro' a mensagem do hub aparece aqui.
 // Regras do hub: 409 = ja existe uma criacao em andamento (uma por vez), 400 = pedido recusado.
 // Sem descricao e sem anexos o corpo sai EXATAMENTE { projeto, feature } (compatibilidade).
-export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
+export function NovaFeatureDialog({ estado, aberto, onAberto, projetoInicial }: Props) {
   const [projeto, setProjeto] = useState("");
   const [feature, setFeature] = useState("");
   const [descricao, setDescricao] = useState("");
@@ -87,6 +87,13 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
     setMsg(""); setErro(false); setEnviando(false); setCriando(false);
     setPlanejador(null); setModelo(""); setModelos([]);
   }, [aberto]);
+
+  // Abrir pelo canvas: o projeto do canvas ja' entra preenchido (o resto do formulario comeca vazio).
+  // Abrir pelo botao do topo manda projetoInicial vazio, entao nada e' preenchido.
+  useEffect(() => {
+    if (!aberto || !projetoInicial) return;
+    setProjeto(projetoInicial);
+  }, [aberto, projetoInicial]);
 
   // Modelos do OpenCode da pasta do projeto (mesmo GET /agentes/modelos do NovoAgente). So' carrega
   // quando o planejador OpenCode esta' escolhido; trocar a pasta recarrega.
@@ -253,13 +260,17 @@ export function NovaFeatureDialog({ estado, aberto, onAberto }: Props) {
               </select>
             )}
             {planejador === "opencode" && (
-              <select
-                aria-label="Modelo do OpenCode" value={modelo} className={CLASSE_SELECT}
-                onChange={(e) => setModelo(e.target.value)}
-              >
-                <option value="" disabled>Selecione um modelo…</option>
-                {modelos.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
+              <>
+                {/* Campo LIVRE com sugestoes: a lista pode vir vazia (serve ainda nao subiu na pasta),
+                    entao o usuario digita provider/modelo mesmo sem opcoes carregadas. */}
+                <Input
+                  aria-label="Modelo do OpenCode" list="modelos-opencode" value={modelo} autoComplete="off"
+                  spellCheck={false} placeholder="opencode-go/glm-5.2" onChange={(e) => setModelo(e.target.value)}
+                />
+                <datalist id="modelos-opencode">
+                  {modelos.map((m) => <option key={m} value={m} />)}
+                </datalist>
+              </>
             )}
             <p className="text-[11px] text-muted-foreground">
               {planejador === "claude"
