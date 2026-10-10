@@ -12,6 +12,12 @@ const pshell = promisify(exec);    // comandos allowlisted / gate (build/teste/t
 const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
 const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
 
+// G3/S2: teto de tempo que uma slice pode ficar pausada antes de retomar sozinha.
+export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
+
+// Caixa de instrucoes/pausa de UMA slice (implementada sobre os arquivos em RUNS_DIR, ver instrucoes.ts).
+export type CaixaSlice = { tomar(): string[]; pausada(): boolean; esperar(): Promise<"retomada" | "teto"> };
+
 export const REPAIR_TRIES = Number(process.env.HERMES_REPAIR_TRIES ?? "1");
 export function podeReparar(tentativa: number, tries: number = REPAIR_TRIES): boolean {
   return tentativa < tries;
@@ -416,7 +422,7 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
 // Erro de API/turno vira slice falha COM os tokens ja gastos; cancelamento (CanceladoError) sobe.
 export async function agente(
   base: string, feature: string, t: Tarefa, emit: Emitir, sliceIdx: number, cmds: string[], msgFn: MensagemFn = mensagemReal,
-  signal?: AbortSignal,
+  signal?: AbortSignal, caixa?: CaixaSlice,
 ): Promise<{
   escritos: string[]; comandos: string[]; ok: boolean; motivo: string; semMudancas: boolean;
   iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente: number; tokensIn: number; tokensOut: number;
@@ -449,8 +455,23 @@ export async function agente(
   };
   const messages: Msg[] = [{ role: "user", content: user }];
   try {
+    try {
     for (let turno = 0; turno < MAX_TURNS; turno++) {
       if (signal?.aborted) throw new CanceladoError();
+      // G3/S2: pausa entre turnos e instrucoes do usuario, sempre no INICIO do turno (inclusive o 0).
+      if (caixa?.pausada()) {
+        emit({ t: "pausa", slice: sliceIdx, estado: "pausada" });
+        const r = await caixa.esperar();
+        emit({ t: "pausa", slice: sliceIdx, estado: "retomada", ...(r === "teto" ? { motivo: `teto de ${Math.round(PAUSA_MAX_MS / 60000)} min` } : {}) });
+      }
+      const ins = caixa?.tomar() ?? [];
+      if (ins.length) {
+        const instr = "INSTRUCAO DO USUARIO: " + ins.join("\n");
+        const ultima = messages[messages.length - 1];
+        if (typeof ultima.content === "string") ultima.content = ultima.content + "\n\n" + instr;
+        else ultima.content = [...(ultima.content as any[]), { type: "text", text: instr }];
+        for (const i of ins) emit({ t: "instrucao", slice: sliceIdx, texto: i });
+      }
       const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS, opts);
       if (usage) { ctx.tokensIn += Number(usage.in ?? 0); ctx.tokensOut += Number(usage.out ?? 0); }
       messages.push({ role: "assistant", content: blocos });
@@ -469,10 +490,14 @@ export async function agente(
       messages.push({ role: "user", content: resultados });
     }
     return fim(false, `teto de ${MAX_TURNS} turnos atingido`);
-  } catch (e: any) {
-    if (e instanceof CanceladoError || signal?.aborted) throw new CanceladoError();
-    if (e instanceof AmbienteError) { e.tokensIn = ctx.tokensIn; e.tokensOut = ctx.tokensOut; throw e; } // custo da slice nao some
-    return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
+    } catch (e: any) {
+      if (e instanceof CanceladoError || signal?.aborted) throw new CanceladoError();
+      if (e instanceof AmbienteError) { e.tokensIn = ctx.tokensIn; e.tokensOut = ctx.tokensOut; throw e; } // custo da slice nao some
+      return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
+    }
+  } finally {
+    // G3/S2: instrucao que chegou depois do ultimo turno nao entra em lugar nenhum: emite como descartada.
+    if (caixa) for (const t of caixa.tomar()) emit({ t: "instrucao", slice: sliceIdx, texto: t, descartada: true });
   }
 }
 
@@ -486,7 +511,7 @@ export type Resultado = {
 // slice que falhar (as seguintes costumam depender dela) ou no cancelamento: o resto vira "pulada".
 export async function construir(
   cwd: string, feature: string, plano: Tarefa[], emit: Emitir, cmds: string[], signal?: AbortSignal,
-  msgFn: MensagemFn = mensagemReal,
+  msgFn: MensagemFn = mensagemReal, caixaDe?: (sliceIdx: number) => CaixaSlice,
 ): Promise<{ escritos: string[]; rejeitados: string[]; resultados: Resultado[]; cancelado: boolean; ambiente?: AmbienteError }> {
   const base = path.resolve(cwd);
   const escritos: string[] = [];
@@ -506,7 +531,7 @@ export async function construir(
     emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "rodando" });
     let r;
     try {
-      r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal);
+      r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal, caixaDe?.(sliceIdx));
     } catch (e) {
       if (e instanceof AmbienteError) {
         const ms = Date.now() - inicio;

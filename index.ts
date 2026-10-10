@@ -5,13 +5,15 @@ import assert from "node:assert";
 import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
-import { appendFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { appendFileSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import {
   baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate,
   resolverComandos, REPAIR_TRIES, podeReparar, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
-  type Tarefa, type Override,
+  PAUSA_MAX_MS,
+  type Tarefa, type Override, type CaixaSlice,
 } from "./hermes.js";
-import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, type Evento } from "./ui.js";
+import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, type Evento } from "./ui.js";
+import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
 import { escolherProvedor, comTentativas, CanceladoError, retentavel, erroHttp } from "./deepseek.js";
 import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
@@ -96,7 +98,26 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       return painel;
     }
     const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
-    const { rejeitados, resultados, escritos, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal);
+    // G3/S2: caixa de instrucoes/pausa de cada slice, ligada aos arquivos da run corrente em RUNS_DIR.
+    const caixaDe = (idx: number): CaixaSlice => {
+      const id = runAtual();
+      return {
+        tomar: () => tomarInstrucoes(RUNS_DIR, id, idx),
+        pausada: () => pausada(RUNS_DIR, id, idx),
+        esperar: async () => {
+          let r: "retomada" | "teto";
+          try {
+            r = await esperarRetomada({ pausada: () => pausada(RUNS_DIR, id, idx), tetoMs: PAUSA_MAX_MS, signal });
+          } catch (e) {
+            if (signal.aborted) throw new CanceladoError();
+            throw e;
+          }
+          if (r === "teto") retomarSlice(RUNS_DIR, id, idx); // teto: apaga o .pausa pra slice seguir
+          return r;
+        },
+      };
+    };
+    const { rejeitados, resultados, escritos, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal, undefined, caixaDe);
     const parou = cancelado || rejeitados.length > 0; // slice falhou ou cancelou: sem gate, sem commit
 
     // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
@@ -653,10 +674,17 @@ server.registerTool(
       const r = await esperar(runId, 45000);
       if ("fim" in r) return { content: [{ type: "text", text: r.fim }] };
       const linhas = r.rodando.length ? r.rodando.join("\n") : "(sem saida ainda)";
+      // G3/S2: se a run corrente esta pausada (ultimo evento de pausa), o prefixo vira PAUSADA.
+      const evs: Evento[] = (() => {
+        try {
+          return readFileSync(path.join(RUNS_DIR, runAtual() + ".jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+        } catch { return []; }
+      })();
+      const prefixo = estaPausada(evs) ? "PAUSADA" : "RODANDO";
       return {
         content: [{
           type: "text",
-          text: `RODANDO ${runId}\n${linhas}\nchame status_orchestra de novo`,
+          text: `${prefixo} ${runId}\n${linhas}\nchame status_orchestra de novo`,
         }],
       };
     } catch (e: any) {

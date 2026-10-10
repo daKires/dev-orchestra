@@ -446,6 +446,10 @@
 .cv .cv-pulso {
   animation: cv-pulso 1.6s ease-in-out infinite;
 }
+/* Slice pausada (G3 - S4b): sem pulso enquanto a slice esta' parada esperando instrucao/retomada. */
+.cv .cv-pulso.cv-pausada {
+  animation: none;
+}
 @keyframes cv-gate-ok {
   0% { box-shadow: 0 0 0 0 rgba(95, 210, 154, 0.6); }
   100% { box-shadow: 0 0 0 9px rgba(95, 210, 154, 0); }
@@ -478,4 +482,14 @@
 }
 .cv.cv-pane-mao .react-flow__pane.dragging {
   cursor: grabbing;
+}
+
+/* Rodape de instrucao da slice viva (G3 - S4b): campo de texto com placeholder apagado e anel azul no
+   foco (mesmo padrao dos campos do Inspetor; borda/fonte vem inline, com os tokens do card). */
+.cv .cv-campo::placeholder {
+  color: currentColor;
+  opacity: 0.5;
+}
+.cv .cv-campo:focus {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--cv-selecao) 45%, transparent);
 }
