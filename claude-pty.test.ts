@@ -34,3 +34,8 @@ test("validarAgente aceita tipo claude sem base/sessao (CA-4d)", () => {
   assert.deepEqual(validarAgente(a), a);
   assert.equal(validarAgente({ ...a, tipo: "gpt" }), null);
 });
+
+test("argsClaude com prompt inicial: vai como ultimo argumento posicional (G2, CA-G2a2)", () => {
+  assert.deepEqual(argsClaude({ prompt: "P", settingsPath: "s", modelo: "sonnet", inicial: '/orchestra "f"' }), ["--append-system-prompt", "P", "--settings", "s", "--model", "sonnet", '/orchestra "f"']);
+  assert.deepEqual(argsClaude({ prompt: "P", settingsPath: "s" }).length, 4, "sem inicial, nada muda");
+});

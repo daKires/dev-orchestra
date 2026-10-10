@@ -146,8 +146,10 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     } else if (g.rodou && !g.ok) {
       status = "GATE-FAILED"; // fail-closed: nao revisa nem commita codigo que nao passou no gate
     } else {
-      const diff = await diffStaged(cwd);
-      rev = await revisar(cwd, feature, diff, emit);
+      const diff = await diffStaged(cwd, baselineRef).catch((e: any) => e as Error);
+      rev = diff instanceof Error
+        ? { ok: false, ajustes: "falha ao gerar o diff: " + (diff.message ?? diff) }
+        : await revisar(cwd, feature, diff, emit);
       emit({ t: "fase", nome: "revisor", info: (rev.ok ? "OK" : "ATENCAO") + (rev.ajustes ? " - " + rev.ajustes : "") });
       status = "COMPLETE";
       if (signal.aborted) status = "CANCELED"; // ultimo ponto de corte: depois do commit o cancel e' ignorado

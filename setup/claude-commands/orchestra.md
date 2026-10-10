@@ -40,8 +40,10 @@ Passos (em PT-BR):
      binding opcional (rolldown, esbuild, swc) instalado pra esse node.
    - Comando que precisa de servico (Postgres do e2e) exige o servico de pe antes da run.
 5. Escreva os testes (spec executavel):
-   - `git checkout -b orchestra/<slug>` — slug = feature em minusculas, sem acento, todo trecho
-     nao-alfanumerico vira `-`, sem `-` nas pontas, cortado em 40 chars (mesma regra do bridge).
+   - rode `git branch --show-current`. Se JA estiver num branch `orchestra/...` (worktree criado pelo
+     orchestra-go), NAO crie branch: use esse. Senao, `git checkout -b orchestra/<slug>` — slug = feature
+     em minusculas, sem acento, todo trecho nao-alfanumerico vira `-`, sem `-` nas pontas, cortado em
+     40 chars (mesma regra do bridge).
    - escreva um arquivo de teste por slice + o runner.
    - DOCTOR (obrigatorio): chame `doctor_orchestra` com cwd e o MESMO override que vai pra run. Ele
      roda cada comando pelo shell do bridge (o que os agentes usam; NAO confie no seu terminal/Git Bash).

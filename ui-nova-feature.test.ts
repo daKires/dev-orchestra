@@ -77,7 +77,8 @@ test("rota /nova-feature: 400 sem X-Hermes/body ruim, 202 + SSE rodando->ok, 409
     fetch(`http://127.0.0.1:${PORTA}/nova-feature`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) },
-      body: JSON.stringify(body),
+      // G2: o planejador passou a ser obrigatorio; corpos-objeto ganham um planejador valido.
+      body: JSON.stringify(body && typeof body === "object" && !Array.isArray(body) ? { planejador: "opencode", modelo: "opencode-go/glm-5.2", ...body } : body),
     });
 
   assert.equal((await post({ projeto: "D:\\p", feature: "f" }, false)).status, 400, "sem X-Hermes");

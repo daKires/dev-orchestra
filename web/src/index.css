@@ -324,6 +324,14 @@
   animation-direction: reverse;
 }
 
+/* Aresta de pedido (G2/S4b): o planejador pedido por um agente (dados.pedido no modelo). Enquanto o
+   pedido esta' em andamento o Canvas marca a aresta com `cv-pedido` e liga o tracejado animado (prop
+   `animated`); aqui ela ganha o MESMO azul da aresta em conversa. Quando a run daquele cwd recebe o
+   painel final, a classe some e a aresta volta ao cinza padrao. */
+.cv .react-flow .react-flow__edge.cv-pedido .react-flow__edge-path {
+  stroke: var(--cv-aresta-ativa);
+}
+
 /* Menu (Radix porta pro body, fora de `.cv`): escuro no mesmo tom do canvas. */
 .cv-menu {
   background: #222;

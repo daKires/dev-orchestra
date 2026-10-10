@@ -306,6 +306,20 @@ export function podeCriar(projeto: string, feature: string): boolean {
   return projeto.trim() !== "" && feature.trim() !== "";
 }
 
+// Planejador escolhido no "+ Feature" (G2): o par (planejador, modelo) que vai no corpo do pedido.
+// claude aceita '' (padrao da conta) + opus/sonnet/haiku; opencode exige provider/modelo.
+export type PlanejadorEscolha = { planejador: "claude" | "opencode"; modelo: string };
+const MODELOS_CLAUDE_FRONT = ["", "opus", "sonnet", "haiku"];
+
+// true so' quando o formulario esta' completo E o planejador+modelo escolhidos sao validos (CA-G2a).
+// Sem escolha (p ausente) nao cria; a validacao do modelo segue a mesma regra do hub (validarPlanejador).
+export function podeCriarComPlanejador(projeto: string, feature: string, p?: PlanejadorEscolha): boolean {
+  if (!podeCriar(projeto, feature) || !p) return false;
+  if (p.planejador === "claude") return MODELOS_CLAUDE_FRONT.includes(p.modelo);
+  if (p.planejador === "opencode") return /^[a-z0-9-]+\/[a-z0-9._-]+$/.test(p.modelo);
+  return false;
+}
+
 // ---- anexos da "Nova feature" (CA-5) ----
 // Imagem ou documento, ate' ANEXO_MAX por pedido e ANEXO_MAX_BYTES cada. Audio/video ficam de fora:
 // o planejador nao ouve/assiste. As regras sao puras pra o componente so' refletir o veredito.
@@ -319,6 +333,7 @@ export type Anexo = { nome: string; tamanho: number; tipo: string; dadosB64: str
 export type AnexoEnviado = { nome: string; tipo: string; dadosB64: string };
 export type CorpoNovaFeature = {
   projeto: string; feature: string; descricao?: string; anexos?: AnexoEnviado[];
+  planejador?: "claude" | "opencode"; modelo?: string;
 };
 
 // Extensao (minuscula, sem ponto) da ULTIMA parte de um caminho; "" quando nao ha extensao.
@@ -358,12 +373,15 @@ export function tamanhoLegivel(bytes: number): string {
 }
 
 // Corpo do POST /nova-feature: descricao e anexos sao OPCIONAIS e somem quando vazios, pra o pedido
-// simples sair EXATAMENTE { projeto, feature } (compatibilidade com o hub antigo).
-export function corpoNovaFeature(projeto: string, feature: string, descricao = "", anexos: Anexo[] = []): CorpoNovaFeature {
+// simples sair EXATAMENTE { projeto, feature } (compatibilidade com o hub antigo). G2: quando o
+// planejador escolhido vem (parametro opcional novo no fim), `planejador` e `modelo` entram no corpo
+// (o modelo vai SEMPRE, mesmo '', porque o hub o exige como string — validarPlanejador).
+export function corpoNovaFeature(projeto: string, feature: string, descricao = "", anexos: Anexo[] = [], plano?: PlanejadorEscolha): CorpoNovaFeature {
   const corpo: CorpoNovaFeature = { projeto: projeto.trim(), feature: feature.trim() };
   const d = descricao.trim();
   if (d) corpo.descricao = d;
   if (anexos.length) corpo.anexos = anexos.map((a) => ({ nome: a.nome, tipo: a.tipo, dadosB64: a.dadosB64 }));
+  if (plano) { corpo.planejador = plano.planejador; corpo.modelo = plano.modelo; }
   return corpo;
 }
 
