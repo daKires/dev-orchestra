@@ -163,7 +163,7 @@ export function exesDe(cmds: string[]): Set<string> {
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await pexec("git", args, { cwd, windowsHide: true });
+  const { stdout } = await pexec("git", args, { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   return stdout;
 }
 async function gitOk(cwd: string, args: string[]): Promise<boolean> {
@@ -547,9 +547,11 @@ export async function construir(
   return { escritos, rejeitados, resultados, cancelado: false };
 }
 
-export async function diffStaged(cwd: string): Promise<string> {
+// Diff REAL da run: baseline..indice (inclui arquivos novos e o que ja tiver sido commitado no meio da run).
+// Sem baselineRef (repo sem HEAD), cai pro diff contra HEAD. Erro de git sobe, nao vira diff vazio.
+export async function diffStaged(cwd: string, baselineRef = ""): Promise<string> {
   await git(cwd, ["add", "-A"]);
-  return await git(cwd, ["diff", "--cached"]).catch(() => "");
+  return await git(cwd, ["diff", "--cached", ...(baselineRef ? [baselineRef] : [])]);
 }
 
 // Gate deterministico: roda os comandos resolvidos por-projeto em serie contra o cwd; qualquer exit != 0
