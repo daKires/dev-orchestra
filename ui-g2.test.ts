@@ -140,3 +140,34 @@ test("/cli/run: agente pede, nasce o planejador ligado a ele; o fim da run vira 
   assert.equal((doPedinte().match(/\[run run-g2-1\]/g) ?? []).length, 1, "uma vez so'");
   assert.ok(existsSync(path.join(process.env.HERMES_AGENTES_DIR!, plan + ".json")));
 });
+
+test("/cli/run com OpenCode: aresta ate' ag:plan-<slug>, pedido gravado em pedidos.json e aviso de fim ao pedinte (CA-G2c, d)", async (t) => {
+  const pty = ptyFalso();
+  const wt = path.join(TMP, "proj3", ".claude", "worktrees", "grafico");
+  mkdirSync(wt, { recursive: true });
+  await ui.iniciarUI({
+    pty,
+    executarNovaFeature: async () => ({ url: "http://x/chat", cwd: wt, slug: "grafico" }),
+  } as any);
+  t.after(() => ui.pararUI());
+  const projeto = path.join(TMP, "proj3");
+  const { id: pedinte } = await (await post("/agentes", { projeto, cwd: projeto, tipo: "claude", papel: "lider", nome: "Lider" })).json() as { id: string };
+  const r = await post("/cli/run", { feature: "Grafico", planejador: "opencode", modelo: "opencode-go/glm-5.2" }, { "X-Eu": `${pedinte}:${registro(pedinte).token}` });
+  assert.equal(r.status, 200);
+  const snap = await (await fetch(`${BASE}/canvas?projeto=${encodeURIComponent(projeto)}`)).json() as { arestas: Array<{ id: string; de: string; para: string }> };
+  assert.ok(snap.arestas.some((a) => a.id.startsWith("pedido:") && a.de === "ag:" + pedinte && a.para === "ag:plan-grafico"), "aresta de pedido ate' o planejador OpenCode");
+  const pedidos = JSON.parse(readFileSync(path.join(process.env.HERMES_AGENTES_DIR!, "pedidos.json"), "utf8")) as Array<{ cwd: string; pedidoPor: string }>;
+  assert.ok(pedidos.some((p) => p.cwd === wt && p.pedidoPor === pedinte), "pedido do OpenCode gravado");
+
+  const evs = [
+    { t: "run", feature: "Grafico", cwd: wt, total: 2, ts: 1 },
+    { t: "slice", idx: 1, total: 2, tarefa: "a", status: "ok", ts: 2 },
+    { t: "slice", idx: 2, total: 2, tarefa: "b", status: "incompleta", ts: 3 },
+    { t: "painel", status: "NEEDS-REVIEW", branch: "orchestra/grafico", linhas: [], ts: 4 },
+  ];
+  writeFileSync(path.join(process.env.HERMES_RUNS_DIR!, "run-g2-oc.jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const doPedinte = () => pty.escritos.get(0)!.join("");
+  assert.ok(await ate(() => /\[run run-g2-oc\] NEEDS-REVIEW — 1\/2 slices · \$0,000 · orchestra\/grafico/.test(doPedinte()), 8000), "aviso entregue (OpenCode)");
+  await new Promise((ok) => setTimeout(ok, 2500));
+  assert.equal((doPedinte().match(/\[run run-g2-oc\]/g) ?? []).length, 1, "uma vez so'");
+});
