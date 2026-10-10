@@ -61,6 +61,7 @@ const texto = (v: unknown): string => (typeof v === "string" ? v : "");
 /** Cor da slice pelo status (mesma regra do fluxo): rodando azul, ok verde, ruim vermelho, fila cinza. */
 function corDaSlice(status: string): string {
   if (status === "rodando") return AZUL;
+  if (status === "pausada") return AMARELO;
   if (status === "ok") return VERDE;
   if (status === "incompleta" || status === "pulada") return VERMELHO;
   return CINZA;
@@ -310,6 +311,10 @@ function NoWorker({ data, selected }: NodeProps) {
   // A presenca de `dados.aberta` marca a vista Arvore (o layout so' a escreve nessa vista).
   const emArvore = typeof no.dados.aberta === "boolean";
   const [aberto, setAberto] = useState(false);
+  const [campo, setCampo] = useState("");
+  const [pausando, setPausando] = useState(false);
+  const [pendentes, setPendentes] = useState<string[]>([]);
+  const [erro, setErro] = useState("");
   const corpo = useRef<HTMLDivElement | null>(null);
   const noFim = useRef(true);
   const slice = run?.slices.find((s) => s.idx === idx);
@@ -332,12 +337,65 @@ function NoWorker({ data, selected }: NodeProps) {
     noFim.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   };
 
+  // Pausa pedida pelo card: o botao volta ao normal ("Retomar") assim que o evento de pausa chega.
+  useEffect(() => { if (slice?.pausada) setPausando(false); }, [slice?.pausada]);
+
+  // Instrucoes na fila: somem quando o feed da slice recebe a linha 'instrução' com o mesmo texto.
+  useEffect(() => {
+    if (!pendentes.length) return;
+    const entradas = linhas.filter((l) => l.ferramenta === "instrução").map((l) => l.texto);
+    const restam = pendentes.filter((t) => !entradas.some((x) => x === t || x.endsWith("· " + t)));
+    if (restam.length !== pendentes.length) setPendentes(restam);
+  }, [linhas, pendentes]);
+
+  /** Envia a instrucao pra slice viva (POST /runs/instrucao); 204 limpa o campo e entra na fila de pendentes. */
+  const instruir = async () => {
+    if (!campo.trim()) return;
+    setErro("");
+    try {
+      const r = await fetch(`/runs/instrucao?run=${encodeURIComponent(runId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        body: JSON.stringify({ slice: idx, texto: campo }),
+      });
+      if (r.ok || r.status === 204) {
+        setPendentes((p) => [...p, campo.trim()]);
+        setCampo("");
+      } else setErro((await r.text().catch(() => "")) || `O hub recusou a instrução (HTTP ${r.status}).`);
+    } catch (e) {
+      setErro("Falha de rede ao instruir a slice: " + String((e as Error).message));
+    }
+  };
+
+  /** Pausa ou retoma a slice (POST /runs/pausa); 'retomar' leva o texto do campo (pode ir vazio). */
+  const pausar = async () => {
+    const retomar = slice?.pausada === true;
+    setErro("");
+    if (!retomar) setPausando(true);
+    try {
+      const r = await fetch(`/runs/pausa?run=${encodeURIComponent(runId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        body: JSON.stringify(retomar ? { slice: idx, acao: "retomar", texto: campo } : { slice: idx, acao: "pausar" }),
+      });
+      if (r.ok || r.status === 204) {
+        if (retomar) setCampo("");
+      } else {
+        if (!retomar) setPausando(false);
+        setErro((await r.text().catch(() => "")) || `O hub recusou a pausa (HTTP ${r.status}).`);
+      }
+    } catch (e) {
+      if (!retomar) setPausando(false);
+      setErro("Falha de rede ao pausar a slice: " + String((e as Error).message));
+    }
+  };
+
   if (emArvore && !aberta) {
     // Compacto: 'S<idx> · <tarefa>' + status colorido + ultima linha do feed. Clique alterna aberta.
     const ultima = linhas.length ? linhas[linhas.length - 1] : undefined;
     return (
       <div
-        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso")}
+        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso", slice?.pausada && "cv-pausada")}
         style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
       >
         <header className="flex shrink-0 cursor-pointer items-center gap-1.5 px-2 py-1.5"
@@ -345,7 +403,7 @@ function NoWorker({ data, selected }: NodeProps) {
           onClick={() => alternarSlice(runId, idx)}>
           <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
           <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
-          <span className="shrink-0" style={{ color: cor }}>{tomStatus(status).rotulo}</span>
+          <span className="shrink-0" style={{ color: slice?.pausada ? AMARELO : cor }}>{slice?.pausada ? "pausada" : tomStatus(status).rotulo}</span>
         </header>
         <div className="min-h-0 flex-1 truncate px-2 py-1" style={{ font: MONO, color: ultima?.erro ? VERMELHO : CINZA }}>
           {ultima ? ultima.texto : "aguardando…"}
@@ -360,13 +418,14 @@ function NoWorker({ data, selected }: NodeProps) {
     const m = slice?.metrica;
     return (
       <div
-        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso")}
+        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso", slice?.pausada && "cv-pausada")}
         style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
       >
         <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
           style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
           <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
           <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+          {slice?.pausada ? <span className="shrink-0" style={{ color: AMARELO }}>pausada</span> : null}
           {m ? <span className="shrink-0 font-mono tabular-nums" style={{ color: CINZA }}>{fmtUSD(m.custoUSD)} · {m.iteracoes} it.</span> : null}
           <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
             style={{ color: "#b8b8b8", font: BOTAO }}
@@ -385,7 +444,32 @@ function NoWorker({ data, selected }: NodeProps) {
               <span className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : "#dedee3" }}>{l.texto}</span>
             </div>
           ))}
+          {pendentes.map((t, i) => (
+            <div key={`pend-${i}`} className="truncate" style={{ color: CINZA }}>instrução na fila · {t}</div>
+          ))}
         </div>
+        {status === "rodando" && (
+          <div className="nodrag nowheel flex shrink-0 flex-col gap-1 px-2 py-1.5" style={{ borderTop: `1px solid ${BORDA}` }}>
+            <textarea rows={2} maxLength={4000} value={campo}
+              className="cv-campo w-full resize-none rounded-md px-2 py-1 outline-none"
+              style={{ background: "#191919", border: `1px solid ${BORDA}`, color: "#dedee3", font: MONO }}
+              placeholder="Instrua o agente desta slice…"
+              onChange={(e) => setCampo(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void instruir(); } }} />
+            {erro ? <div className="truncate" title={erro} style={{ color: VERMELHO, font: FONTE }}>{erro}</div> : null}
+            <div className="flex items-center gap-1">
+              <button type="button" className="nodrag rounded px-2 py-0.5 hover:bg-white/10"
+                style={{ color: AZUL, font: BOTAO }} onClick={() => void instruir()}>
+                Instruir agora
+              </button>
+              <button type="button" disabled={pausando}
+                className="nodrag ml-auto rounded px-2 py-0.5 hover:bg-white/10 disabled:opacity-50"
+                style={{ color: slice?.pausada ? VERDE : AMARELO, font: BOTAO }} onClick={() => void pausar()}>
+                {slice?.pausada ? "Retomar" : pausando ? "pausando…" : "Pausar"}
+              </button>
+            </div>
+          </div>
+        )}
         <Alcas />
       </div>
     );
