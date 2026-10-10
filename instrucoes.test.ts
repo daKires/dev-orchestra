@@ -37,7 +37,8 @@ test("pausar/retomar: .pausa marca a slice; retomar apaga e grava o texto opcion
   pausarSlice(d, "r1", 2);
   retomarSlice(d, "r1", 2);
   assert.deepEqual(tomarInstrucoes(d, "r1", 2), [], "retomar sem texto nao grava instrucao");
-  assert.ok(!readFileSync(arquivoInstrucao(d, "r1"), "utf8").includes("undefined"));
+  const resto = existsSync(arquivoInstrucao(d, "r1")) ? readFileSync(arquivoInstrucao(d, "r1"), "utf8") : "";
+  assert.ok(!resto.includes("undefined"));
 });
 
 const T = 1_000;
