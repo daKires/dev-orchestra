@@ -19,6 +19,7 @@ comandos:
   browser type [nav] <alvo> <valor> [--enter]
   browser nav [nav] <ação>
   browser shot [nav]
+  run "<feature>" (--claude <padrao|opus|sonnet|haiku> | --opencode <modelo>)
   status <estado>
 
 a identidade também pode vir da variável de ambiente HERMES_EU.`;
@@ -162,6 +163,46 @@ switch (cmd) {
     } else {
       erroUso();
     }
+    break;
+  }
+  case "run": {
+    const rest = args.slice(1);
+    let feature = null;
+    let planejador = null;
+    let modelo = null;
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === "--claude" || a === "--opencode") {
+        const valor = rest[i + 1];
+        if (valor === undefined) erroUso();
+        i++;
+        if (planejador !== null) erroUso();
+        if (a === "--claude") {
+          if (valor === "padrao") {
+            planejador = "claude";
+            modelo = "";
+          } else if (valor === "opus" || valor === "sonnet" || valor === "haiku") {
+            planejador = "claude";
+            modelo = valor;
+          } else {
+            erroUso();
+          }
+        } else {
+          if (!valor) erroUso();
+          planejador = "opencode";
+          modelo = valor;
+        }
+      } else if (a.startsWith("--")) {
+        erroUso();
+      } else if (feature === null) {
+        feature = a;
+      } else {
+        erroUso();
+      }
+    }
+    if (!feature || !planejador) erroUso();
+    rota = "run";
+    corpo = { feature, planejador, modelo };
     break;
   }
   case "status": {

@@ -6,6 +6,10 @@
 param(
     [Parameter(Mandatory)][string]$Projeto,
     [Parameter(Mandatory)][string]$Feature,
+    [ValidateSet('opencode','claude')][string]$Planejador = 'opencode',
+    # ATENCAO: PowerShell e' case-insensitive -> o parametro nao pode se chamar $Modelo (colidiria com
+    # $MODELO). O nome real e' $ModeloEscolhido; o alias 'Modelo' aceita o argumento -Modelo do hub.
+    [Alias('Modelo')][string]$ModeloEscolhido,
     [string]$Descricao,
     [string]$AnexosDir
 )
@@ -13,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\orchestra-env.ps1"
 if (-not $OrchestraEnvOk) { exit 1 }
 $MODELO = 'opencode-go/glm-5.2'
+if ($ModeloEscolhido) { $MODELO = $ModeloEscolhido }
 
 function Falha([string]$msg) { [Console]::Error.WriteLine("orchestra-go: $msg"); exit 1 }
 function Rodar-Git([string[]]$a) { $o = & git -C $script:raiz @a 2>&1; if ($LASTEXITCODE) { Falha "git $($a -join ' ') falhou: $o" }; $o }
@@ -108,6 +113,14 @@ if ($anexosCaminhos.Count) {
 }
 # Contexto do planejador (S3): manda ler o README de contexto do worktree, quando existir.
 $texto += "`n`nAntes de responder, leia .orchestra/contexto/plan-$slug/README.md se existir."
+
+# Modo claude: o planejador e' o Claude Code rodando NO worktree (o hub sobe o PTY). O worktree ja' foi
+# criado/reusado com deps e .env* acima; NAO sobe o servidor do OpenCode nem grava registro em
+# planejadores\ (nao ha' chat pra reabrir). Devolve so' o worktree pro hub (url vazia) e sai 0.
+if ($Planejador -eq 'claude') {
+    [ordered]@{ slug = $slug; cwd = $wt; branch = $branch; url = '' } | ConvertTo-Json -Compress
+    exit 0
+}
 
 # Sobe o servidor do OpenCode no worktree (exe direto: o shim .ps1/.cmd nao sobrevive ao Start-Process hidden).
 $exe = Join-Path (Split-Path (Get-Command opencode.cmd).Source) 'node_modules\opencode-ai\bin\opencode.exe'

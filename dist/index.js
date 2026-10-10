@@ -153,8 +153,10 @@ async function rodar(cwd, feature, plano, override, onLinha) {
             status = "GATE-FAILED"; // fail-closed: nao revisa nem commita codigo que nao passou no gate
         }
         else {
-            const diff = await diffStaged(cwd);
-            rev = await revisar(cwd, feature, diff, emit);
+            const diff = await diffStaged(cwd, baselineRef).catch((e) => e);
+            rev = diff instanceof Error
+                ? { ok: false, ajustes: "falha ao gerar o diff: " + (diff.message ?? diff) }
+                : await revisar(cwd, feature, diff, emit);
             emit({ t: "fase", nome: "revisor", info: (rev.ok ? "OK" : "ATENCAO") + (rev.ajustes ? " - " + rev.ajustes : "") });
             status = "COMPLETE";
             if (signal.aborted)

@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { conectados, resolverAlvo, slugNome, Conversas, FilaEntregas, fmtPergunta, fmtResposta, fmtMensagem, fmtSemResposta, linhaIdentidade, opsFlowAdd, opsFlowLink, opsFile, opsNote, validarCaminho, } from "./colaboracao.js";
 import { PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas, aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos, } from "./agentes.js";
 // Agentes Claude Code via PTY (F4/S3): logica pura importada AQUI (os modulos puros nao importam em runtime).
-import { argsClaude, settingsHooks, textoParaPty } from "./claude-pty.js";
+import { argsClaude, settingsHooks, textoParaPty, MODELOS_CLAUDE } from "./claude-pty.js";
 // Acoes da run no card (G1/S2): merge local, abrir PR e descartar (modulo puro rodado no mesmo processo).
 import { mergeLocal, descartarRun, abrirPr } from "./acoes-run.js";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
@@ -319,12 +319,53 @@ function rescan() {
             estado.delete(run);
             vistos.delete(run + ".jsonl");
         }
+    avisarFimDeRuns(); // G2/S2: runs que terminaram avisam o agente que pediu (uma vez)
     for (const c of clientes) {
         for (const run of drops) {
             sse(c, { swarm: run, drop: true });
             c.offsets.delete(run);
         }
         enviar(c);
+    }
+}
+// Caminho normalizado para comparar o cwd de uma run com o cwd de um agente: absoluto, barras '/',
+// sem barra final e caixa baixa (no Windows '/' e '\\' apontam pro mesmo lugar).
+function cwdNormalizado(p) {
+    return path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+// G2/S2: quando a run de um planejador termina (evento 'painel'), avisa o agente que PEDIU aquela
+// feature. O agente que pediu e' o registro com `pedidoPor` e cwd igual ao da run (o planejador Claude
+// roda no worktree). `avisados` no registro guarda os runIds ja' avisados para nao repetir a cada rescan.
+function avisarFimDeRuns() {
+    for (const [id, evs] of estado) {
+        const runEv = evs.find((e) => e.t === "run");
+        if (!runEv || runEv.t !== "run" || !runEv.cwd)
+            continue;
+        const painel = [...evs].reverse().find((e) => e.t === "painel");
+        if (!painel || painel.t !== "painel")
+            continue;
+        const cwdRun = cwdNormalizado(runEv.cwd);
+        // Ultimo status por slice (eventos fora de ordem/reexecucoes ficam com o status final) + custo total.
+        const statusPorIdx = new Map();
+        let custo = 0;
+        for (const ev of evs) {
+            if (ev.t === "slice")
+                statusPorIdx.set(ev.idx, ev.status);
+            else if (ev.t === "metrica")
+                custo += ev.custoUSD;
+        }
+        const k = [...statusPorIdx.values()].filter((s) => s.startsWith("ok")).length;
+        const mensagem = `[run ${id}] ${painel.status} — ${k}/${runEv.total} slices · $${custo.toFixed(3).replace(".", ",")} · ${painel.branch}`;
+        for (const reg of agentes.values()) {
+            if (!reg.pedidoPor || cwdNormalizado(reg.cwd) !== cwdRun)
+                continue;
+            const avisados = reg.avisados ?? [];
+            if (avisados.includes(id))
+                continue;
+            reg.avisados = [...avisados, id];
+            gravarAgente(reg); // grava ANTES de entregar: um rescan seguinte nao reenvia o mesmo aviso
+            void entregarColab(reg.pedidoPor, mensagem);
+        }
     }
 }
 // Remove logs (e pedidos de cancelamento) mais velhos que PODA_MS.
@@ -436,6 +477,26 @@ function validarAnexo(a) {
 // Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
 // EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
 // branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
+// G2: planejador escolhido no pedido de feature (claude|opencode + modelo). O modelo e' OBRIGATORIO
+// como string: claude aceita '' (padrao da conta) + opus/sonnet/haiku; opencode exige provider/modelo.
+export function validarPlanejador(j) {
+    if (!j || typeof j !== "object")
+        return null;
+    const o = j;
+    if (typeof o.modelo !== "string")
+        return null; // ausente -> null ('' so' vale vindo explicito)
+    if (o.planejador === "claude") {
+        if (MODELOS_CLAUDE.includes(o.modelo))
+            return { planejador: "claude", modelo: o.modelo };
+        return null;
+    }
+    if (o.planejador === "opencode") {
+        if (/^[a-z0-9-]+\/[a-z0-9._-]+$/.test(o.modelo))
+            return { planejador: "opencode", modelo: o.modelo };
+        return null;
+    }
+    return null;
+}
 export function validarNovaFeature(body) {
     if (!body || typeof body !== "object")
         return null;
@@ -818,8 +879,10 @@ function resumoAgente(a) {
 // Agentes do canvas daquele projeto + os derivados dos planejadores (agenteDePlanejador).
 function listarAgentes(projeto) {
     const out = [];
+    // Inclui tambem agentes cujo cwd casa com o projeto consultado (G2: o planejador Claude roda no
+    // worktree, entao aparece em /agentes?projeto=<worktree> mesmo tendo projeto = raiz do pedido).
     for (const a of agentes.values())
-        if (a.projeto === projeto)
+        if (a.projeto === projeto || a.cwd === projeto)
             out.push(resumoAgente(a));
     for (const p of planejadores) {
         if (p.projeto !== projeto && idProjeto(p.raiz) !== idProjeto(projeto))
@@ -1099,7 +1162,8 @@ function promptClaude(instrucao, id, nome, token) {
 }
 // Sobe o PTY do Claude: grava os hooks de status, monta os args e liga a saida ao SSE + buffer.
 // Lanca se o driver de PTY nao estiver disponivel (sem app desktop) ou se o spawn falhar.
-function subirPtyClaude(a, continuar) {
+// `inicial` (G2): prompt inicial posicional do Claude (ex.: `/orchestra "<feature>"`), so' no primeiro start.
+function subirPtyClaude(a, continuar, inicial) {
     const settingsPath = path.join(AGENTES_DIR, a.id + ".settings.json");
     try {
         fs.mkdirSync(AGENTES_DIR, { recursive: true });
@@ -1111,7 +1175,7 @@ function subirPtyClaude(a, continuar) {
     const prompt = promptClaude(a.instrucao ?? "", a.id, a.nome, a.token ?? "");
     const proc = ptyAtual.spawn({
         comando: "claude",
-        args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar }),
+        args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar, inicial }),
         cwd: a.cwd,
         env: { ...envClaude(), HERMES_EU: `${a.id}:${a.token}` }, // um processo por agente: `canvas` ja' sai identificado
         cols: tamanhoPty.get(a.id)?.cols ?? 120,
@@ -1136,15 +1200,19 @@ function subirPtyClaude(a, continuar) {
     });
 }
 // Cria um agente Claude: registro em disco, PTY e broadcast. Falha vira status 'falhou' (com a mensagem).
-function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao) {
+// `origem`/`inicial`/`pedidoPor` (G2): o planejador Claude nasce com origem 'planejador', prompt inicial
+// (/orchestra ...) e o id de quem pediu gravado no registro.
+function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao, origem = "canvas", inicial, pedidoPor) {
     const id = "ag-" + randomUUID().slice(0, 8);
     const reg = {
         id, projeto, cwd, base: "", sessao: "", nome, papel, modelo, instrucao,
-        tipo: "claude", origem: "canvas", token: novoToken(),
+        tipo: "claude", origem, token: novoToken(),
     };
+    if (pedidoPor)
+        reg.pedidoPor = pedidoPor;
     let erro = "";
     try {
-        subirPtyClaude(reg, false);
+        subirPtyClaude(reg, false, inicial);
     }
     catch (e) {
         erro = String(e?.message ?? e);
@@ -1153,6 +1221,25 @@ function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao) {
     gravarAgente(reg);
     broadcast({ agentes: listarAgentes(projeto) });
     return { id, ok: !erro, erro };
+}
+// G2: dispara o pedido de feature e, quando o planejador e' Claude, cria o agente planejador no worktree
+// devolvido pelo executor, com prompt inicial /orchestra "<feature>" (descricao/anexos anexados ao texto).
+async function dispararFeature(projeto, feature, extras, pedidoPor) {
+    const r = await executarNovaFeature(projeto, feature, extras);
+    let agenteId;
+    if (extras.planejador === "claude" && r.cwd) {
+        let texto = feature;
+        if (extras.descricao)
+            texto += "\n\n" + extras.descricao;
+        if (extras.anexosDir)
+            texto += "\n\nAnexos em: " + extras.anexosDir;
+        texto = texto.replace(/"/g, "'"); // aspas duplas dentro do texto fechariam o argumento do /orchestra
+        const inicial = `/orchestra "${texto}"`;
+        const c = criarAgenteClaude(projeto, r.cwd, "livre", feature, extras.modelo, PAPEIS.livre.instrucao, "planejador", inicial, pedidoPor);
+        if (c.ok)
+            agenteId = c.id;
+    }
+    return { url: r.url, agenteId, slug: r.slug, cwd: r.cwd };
 }
 // Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
 // Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
@@ -1550,12 +1637,19 @@ const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
 const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
 // Executor real: roda orchestra-go.ps1 via pwsh e interpreta a ULTIMA linha do stdout como o JSON do
 // registro (que carrega a url do chat). pwsh ausente (ENOENT) ou exit != 0 -> rejeita com o stderr.
-// Descricao/anexos do pedido viram -Descricao/-AnexosDir (so' quando existem).
+// Descricao/anexos do pedido viram -Descricao/-AnexosDir (so' quando existem). G2: o planejador
+// escolhido vai SEMPRE (-Planejador <claude|opencode>) e o modelo quando informado (-Modelo <m>).
+// Modo claude: o worktree nao sobe servidor, entao a url vem vazia e o cwd passa a ser obrigatorio;
+// modo opencode: a url do chat continua obrigatoria (compat com o registro de sempre).
 function executarNovaFeatureReal(projeto, feature, extras) {
     return new Promise((ok, falha) => {
         const script = path.join(RAIZ_BRIDGE, "orchestra-go.ps1");
         // Args base de sempre; -Descricao/-AnexosDir SO' quando existirem (sem eles a chamada fica como hoje).
         const args = ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature];
+        if (extras?.planejador)
+            args.push("-Planejador", extras.planejador);
+        if (extras?.modelo)
+            args.push("-Modelo", extras.modelo);
         if (extras?.descricao)
             args.push("-Descricao", extras.descricao);
         if (extras?.anexosDir)
@@ -1587,11 +1681,20 @@ function executarNovaFeatureReal(projeto, feature, extras) {
                 falha(new Error("saida do orchestra-go.ps1 nao e' JSON: " + linha));
                 return;
             }
+            // Planejador Claude no worktree: nao sobe servidor -> url vazia e o cwd e' o que importa.
+            if (extras?.planejador === "claude") {
+                if (typeof j?.cwd !== "string" || !j.cwd) {
+                    falha(new Error("saida do orchestra-go.ps1 sem cwd (planejador claude)"));
+                    return;
+                }
+                ok({ url: j.url ?? "", cwd: j.cwd, slug: j.slug });
+                return;
+            }
             if (typeof j?.url !== "string" || !j.url) {
                 falha(new Error("saida do orchestra-go.ps1 sem url"));
                 return;
             }
-            ok({ url: j.url });
+            ok({ url: j.url, cwd: j.cwd, slug: j.slug });
         });
     });
 }
@@ -1815,12 +1918,18 @@ function criarServidor() {
                     res.end();
                     return;
                 }
+                const plano = validarPlanejador(j); // G2: o planejador escolhido e' obrigatorio
+                if (!plano) {
+                    res.writeHead(400);
+                    res.end();
+                    return;
+                }
                 novaFeatureEmAndamento = true;
-                const exec = executarNovaFeature;
+                const exec = dispararFeature;
                 // Extras SO' quando o pedido tem descricao e/ou anexos (compat: sem campos novos, sem extras).
-                let extras;
-                if (v.descricao || v.anexos?.length) {
-                    extras = {};
+                // Extras SEMPRE com o planejador escolhido; descricao/anexosDir so' quando o pedido os tem.
+                const extras = { planejador: plano.planejador, modelo: plano.modelo };
+                {
                     if (v.descricao)
                         extras.descricao = v.descricao;
                     if (v.anexos?.length) {
@@ -2337,6 +2446,40 @@ function criarServidor() {
                 }
                 marcarStatusAgente(c.id, estado);
                 responderTexto(res, 200, "status atualizado");
+                return;
+            }
+            if (cmd === "run") {
+                // G2/S2: um agente pede a criacao de uma feature. Dispara o executor com o planejador
+                // escolhido e liga o pedinte ao planejador por uma aresta no canvas (id 'pedido:<planejadorId>').
+                const feature = typeof j?.feature === "string" ? j.feature.trim() : "";
+                const plano = validarPlanejador(j);
+                if (!feature || !plano) {
+                    responderTexto(res, 400, 'uso: canvas run "<feature>" (--claude <padrao|opus|sonnet|haiku> | --opencode <modelo>)');
+                    return;
+                }
+                if (novaFeatureEmAndamento) {
+                    responderTexto(res, 409, "ja existe uma criacao em andamento");
+                    return;
+                }
+                novaFeatureEmAndamento = true;
+                try {
+                    const r = await dispararFeature(c.projeto, feature, { planejador: plano.planejador, modelo: plano.modelo }, c.id);
+                    // Claude: o agente planejador nasce aqui (agenteId). OpenCode: o no' e' 'plan-<slug>'.
+                    const planejadorId = r.agenteId ?? (r.slug ? "plan-" + r.slug : "");
+                    if (planejadorId) {
+                        const agora = Date.now();
+                        const aresta = { id: `pedido:${planejadorId}`, de: "ag:" + c.id, para: "ag:" + planejadorId, dados: { pedido: true }, rev: agora };
+                        // Mesmo mecanismo do flow link: aplica a op no canvas do projeto e faz o broadcast.
+                        aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "aresta", item: aresta }]);
+                    }
+                    responderTexto(res, 200, `planejador criado: ${planejadorId} (cwd ${r.cwd ?? ""})`);
+                }
+                catch (e) {
+                    responderTexto(res, 500, String(e?.message ?? e));
+                }
+                finally {
+                    novaFeatureEmAndamento = false;
+                }
                 return;
             }
             if (cmd === "list") {

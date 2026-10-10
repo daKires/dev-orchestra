@@ -151,7 +151,7 @@ export default function App() {
                   <span className="truncate text-xs text-muted-foreground">{canvasProjeto}</span>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <Canvas projeto={canvasProjeto} />
+                  <Canvas projeto={canvasProjeto} onNovaFeature={() => setNova(true)} />
                 </div>
               </div>
             ) : (
