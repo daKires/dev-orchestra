@@ -432,7 +432,8 @@ export async function agente(
     "Fluxo: ache o que importa (buscar/listar/ler_arquivo); mude arquivo existente com editar_arquivo (trecho " +
     "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); havendo comando de verificacao permitido rode " +
     "com rodar_comando e conserte os erros ate passar. Ao EDITAR arquivo existente, preserve toda a estrutura; " +
-    "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls).";
+    "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls). " +
+    "Se chegar uma mensagem comecando com 'INSTRUCAO DO USUARIO:', ela vem do dono da run durante a execucao e tem prioridade sobre a tarefa original: cumpra-a (mesmo que mude arquivos fora dos alvos) antes de terminar.";
   const user =
     `Feature: ${feature}\nTarefa: ${t.tarefa}\nArquivos-alvo: ${t.arquivos_alvo.join(", ") || "(voce decide)"}\n` +
     `Detalhes: ${t.descricao}\n` +
