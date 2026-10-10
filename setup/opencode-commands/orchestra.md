@@ -1,6 +1,5 @@
 ---
-description: Kimi K3 planeja a feature em slices; o swarm Hermes (agentes DeepSeek) implementa e faz commit local
-model: opencode-go/kimi-k3
+description: O planejador escolhido (modelo do pedido) planeja a feature em slices; o swarm Hermes (agentes DeepSeek) implementa e faz commit local
 ---
 Voce e o ORQUESTRADOR. Voce e o PLANEJADOR; quem IMPLEMENTA e o swarm Hermes
 (agentes DeepSeek V4.1 Flash via API nativa), chamado pela tool `hermes-bridge_executar_orchestra` do servidor MCP
