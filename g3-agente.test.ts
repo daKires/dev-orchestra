@@ -88,3 +88,12 @@ test("sem caixa o agente segue igual (selftest/reparo)", async () => {
   await agente(base, "f", tarefa, () => {}, 1, [], m.fn as any);
   assert.equal(m.chamadas.length, 1);
 });
+
+test("o prompt de sistema manda cumprir a INSTRUCAO DO USUARIO com prioridade (achado da validacao real)", async () => {
+  const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-g3f-"));
+  let sys = "";
+  const fn = async (s: string) => { sys = s; return fim; };
+  await agente(base, "f", tarefa, () => {}, 1, [], fn as any);
+  assert.match(sys, /INSTRUCAO DO USUARIO/);
+  assert.match(sys, /prioridade/i);
+});
