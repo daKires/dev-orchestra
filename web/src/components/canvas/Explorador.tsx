@@ -35,11 +35,7 @@ const lerDados = (data: unknown): No => (data as { no: No }).no;
 
 // Previa do arquivo (Dialog) — reusada pelo Explorador e pelo card de arquivo (Run.tsx)
 
-/**
- * Dialog com a previa de um arquivo em <pre> monospace 12px. Com `projeto` (tela unida), busca
- * GET /arquivo?projeto=<raiz>&caminho=; sem ele, cai no GET /arquivo?agente=&caminho= de sempre.
- * `agenteId` fica opcional (a previa de um projeto nao tem agente).
- */
+/** Previa de um arquivo; com `projeto` le pela raiz do projeto, senao pelo agente. */
 export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
   aberto: boolean; agenteId?: string; projeto?: string; caminho: string; onFechar: () => void;
 }) {
