@@ -1,6 +1,4 @@
-// Sidebar da tela unida (Run A): tres secoes empilhadas com scroll proprio —
-// (a) Explorador do projeto (GET /arvore?projeto=), (b) Runs recentes e (c) Pool de agentes.
-// UI em PT-BR, so' tema escuro, com os tokens do shadcn (bg-sidebar etc.), como o Sidebar anterior.
+// Sidebar: Explorador do projeto, Runs recentes e Pool de agentes.
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { arvoreDeCaminhos, type NoArvore } from "@/lib/colab";
@@ -10,7 +8,6 @@ import { agentesDoPool, badgesArquivos, type Badge } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 import { PontoStatus } from "./StatusIcon";
 
-/** Agente do pool como o dono da tela o entrega (ids/modelos/ocupado/status). */
 type AgenteSidebar = { id: string; nome: string; modelo: string; ocupado: boolean; status: string };
 
 type Props = {
@@ -24,39 +21,31 @@ type Props = {
   onArquivo: (caminho: string) => void;
 };
 
-/** Rotulo de secao (caixa alta, 11px, tracking largo — como no Argon). */
 const ROTULO =
   "flex h-8 shrink-0 items-center justify-between px-3 text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase";
 
-/** Profundidade de um caminho ('src' = 0, 'src/lib' = 1, ...). */
 const profundidade = (caminho: string): number => caminho.split("/").length - 1;
 
-/** Nome da pasta (ultima parte) de um caminho de projeto. */
 function nomePasta(projeto: string): string {
   const partes = String(projeto).replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
   return partes.length ? partes[partes.length - 1] : projeto;
 }
 
 export function Sidebar(p: Props) {
-  // --- badges dos arquivos tocados pela run mostrada (A = novo, M = modificado) ---
   const badges = useMemo(() => badgesArquivos(p.runSel), [p.runSel]);
 
-  // --- runs do projeto (mais recentes primeiro) ---
   const runs = useMemo(
     () => runsDoProjeto(Object.values(p.estado.runs), p.projeto).sort((a, b) => b.inicioTs - a.inicioTs),
     [p.estado, p.projeto],
   );
 
-  // --- pool de agentes (agentes do canvas + Swarm quando ha run rodando) ---
   const pool = useMemo(
     () => agentesDoPool(p.agentes, runsDoProjeto(Object.values(p.estado.runs), p.projeto), p.agora),
     [p.agentes, p.estado, p.projeto, p.agora],
   );
 
-  // --- Explorador: arvore do projeto (GET /arvore?projeto=; refaz ao trocar de projeto) ---
   const [caminhos, setCaminhos] = useState<string[]>([]);
   const [erroArvore, setErroArvore] = useState(false);
-  // Estado explicito de pastas abertas/fechadas (default: abertas ate' 2 niveis, via profundidade()).
   const [abertos, setAbertos] = useState<Map<string, boolean>>(new Map());
 
   useEffect(() => {
@@ -177,7 +166,6 @@ export function Sidebar(p: Props) {
   );
 }
 
-/** Um item da arvore: pasta (chevron + carpeta, recolhivel) ou arquivo (icone + badge A/M, abre a previa). */
 function Ramo({ item, nivel, badges, aberta, onAlternar, onArquivo }: {
   item: NoArvore;
   nivel: number;

@@ -1,7 +1,4 @@
-// Seletor de projeto da topbar (tela unida, Run A): um DropdownMenu com os projetos do hub
-// (GET /canvas/projetos — nome + raiz em mono pequena) e o item "+ Projeto", que abre um Dialog pra
-// criar um projeto novo (mesmo POST /canvas/projetos com X-Hermes: 1 do Projetos.tsx). Ao criar, o
-// projeto novo ja' fica selecionado (onProjeto). UI em PT-BR, so' tema escuro.
+// Seletor de projeto da topbar, com "+ Projeto" (mesmo POST /canvas/projetos da antiga pilha de projetos).
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Folder, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,21 +11,17 @@ import {
 import { Input } from "@/components/ui/input";
 import type { Projeto } from "../../../canvas.ts";
 
-/** Chave canonica de uma raiz (barras '/', sem barra final, minuscula): mesma regra do hub. */
 function canonico(raiz: string): string {
   return String(raiz ?? "").trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
-/** Nome de exibicao da ultima pasta de um caminho (fallback quando o hub ainda nao respondeu). */
 function nomeDaPasta(raiz: string): string {
   const partes = String(raiz ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
   return partes.length ? partes[partes.length - 1] : "";
 }
 
 type Props = {
-  /** Raiz do projeto mostrado (vazio = nenhum escolhido ainda). */
   projeto: string;
-  /** Escolheu um projeto (no dropdown ou recem-criado): o dono da tela grava e troca o canvas. */
   onProjeto: (raiz: string) => void;
 };
 
@@ -52,7 +45,6 @@ export function ProjetoSeletor({ projeto, onProjeto }: Props) {
 
   useEffect(() => { void carregar(); }, []);
 
-  // Nome mostrado no trigger: o salvo pelo hub (mesma raiz) ou a ultima pasta do caminho.
   const rotulo = useMemo(() => {
     const salvo = projetos.find((p) => canonico(p.raiz) === canonico(projeto));
     return salvo?.nome || nomeDaPasta(projeto);
@@ -60,7 +52,6 @@ export function ProjetoSeletor({ projeto, onProjeto }: Props) {
 
   const abrirNovo = () => { setPasta(""); setNome(""); setErro(""); setDlg(true); };
 
-  // Mesmo POST do Projetos.tsx: upsert por raiz (preserva o que nao veio). Ao criar, seleciona o novo.
   const criar = async () => {
     const raiz = pasta.trim();
     if (!raiz) { setErro("Informe a pasta do projeto."); return; }

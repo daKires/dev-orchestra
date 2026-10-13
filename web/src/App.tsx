@@ -1,5 +1,4 @@
-// Tela unida (Run A): UMA tela so' — topbar (seletor de projeto, branch da run, hub, "+ Feature"),
-// sidebar (Explorador do projeto, Runs, Pool de agentes), canvas com painel direito e status bar.
+// Casca da tela unica: topbar, sidebar, canvas (com o painel direito) e status bar.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { Plus } from "lucide-react";
@@ -19,13 +18,11 @@ import { useAgentes } from "@/hooks/useAgentes";
 import { badgesArquivos, projetoInicial } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 
-/** Chave canonica de um caminho (barras '/'), como badgesArquivos usa na sidebar. */
 const caminhoChave = (arquivo: string): string => arquivo.replace(/\\/g, "/");
 
 export default function App() {
   const { estado, conectado } = useRuns();
   const agora = useAgora();
-  // Projeto da tela: o salvo (localStorage) ou, na 1a abertura, a raiz da run ativa.
   const [projeto, setProjeto] = useLocal<string | null>("projeto", null);
   const [runSelId, setRunSelId] = useState<string | null>(null);
   const [paleta, setPaleta] = useState(false);
@@ -35,20 +32,16 @@ export default function App() {
   const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
 
-  // Run mostrada no painel direito do canvas (onRunSel): alimenta o chip de branch e a StatusBar.
   const runSel = runSelId ? estado.runs[runSelId] ?? null : null;
 
-  // Sem projeto salvo: usa projetoInicial(null, runs, agora) do @/lib/unido assim que houver runs.
   const runs = useMemo(() => Object.values(estado.runs), [estado.runs]);
   const projetoPadrao = useMemo(() => projetoInicial(null, runs, agora), [runs, agora]);
   useEffect(() => {
     if (!projeto && projetoPadrao) setProjeto(projetoPadrao);
   }, [projeto, projetoPadrao]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Agentes do pool da sidebar: os do projeto escolhido (GET /agentes?projeto=).
   const { agentes } = useAgentes(projeto ?? "");
 
-  // Atalhos: Ctrl+K/Ctrl+P paleta; Ctrl+B alterna a sidebar (colapsavel).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -64,23 +57,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lateral]);
 
-  /** Abre a run no canvas (expande o card e centraliza) — usado pela sidebar e pela paleta. */
   const abrirRun = (id: string) => { canvasRef.current?.abrirRun(id); };
 
-  /** Foco do pool de agentes: 'run:<id>' abre a run; o resto enquadra o no' (focar). */
   const focar = (noId: string) => {
     if (noId.startsWith("run:")) canvasRef.current?.abrirRun(noId.slice(5));
     else canvasRef.current?.focar(noId);
   };
 
-  /** Arquivo da sidebar: se a run mostrada tocou o arquivo, abre o Diff dela; senao, a previa. */
   const abrirArquivo = (caminho: string) => {
     const tocados = badgesArquivos(runSel);
     if (runSel && tocados.has(caminhoChave(caminho))) canvasRef.current?.abrirDiff(runSel.id, caminho);
     else setArquivo(caminho);
   };
 
-  /** Arquivo escolhido na paleta: o diff dele na run mostrada. */
   const abrirDiff = (caminho: string) => {
     if (runSel) canvasRef.current?.abrirDiff(runSel.id, caminho);
   };
