@@ -35,23 +35,30 @@ const lerDados = (data: unknown): No => (data as { no: No }).no;
 
 // Previa do arquivo (Dialog) — reusada pelo Explorador e pelo card de arquivo (Run.tsx)
 
-/** Dialog com a previa de um arquivo do agente (GET /arquivo?agente=&caminho=) em <pre> monospace 12px. */
-export function ModalArquivo({ aberto, agenteId, caminho, onFechar }: {
-  aberto: boolean; agenteId: string; caminho: string; onFechar: () => void;
+/**
+ * Dialog com a previa de um arquivo em <pre> monospace 12px. Com `projeto` (tela unida), busca
+ * GET /arquivo?projeto=<raiz>&caminho=; sem ele, cai no GET /arquivo?agente=&caminho= de sempre.
+ * `agenteId` fica opcional (a previa de um projeto nao tem agente).
+ */
+export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
+  aberto: boolean; agenteId?: string; projeto?: string; caminho: string; onFechar: () => void;
 }) {
   const [texto, setTexto] = useState<string | null>(null);
   const [erro, setErro] = useState(false);
   useEffect(() => {
-    if (!aberto || !agenteId || !caminho) return;
+    if (!aberto || !caminho || (!projeto && !agenteId)) return;
     let vivo = true;
     setTexto(null);
     setErro(false);
-    fetch(`/arquivo?agente=${encodeURIComponent(agenteId)}&caminho=${encodeURIComponent(caminho)}`)
+    const url = projeto
+      ? `/arquivo?projeto=${encodeURIComponent(projeto)}&caminho=${encodeURIComponent(caminho)}`
+      : `/arquivo?agente=${encodeURIComponent(agenteId ?? "")}&caminho=${encodeURIComponent(caminho)}`;
+    fetch(url)
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
       .then((t) => { if (vivo) setTexto(t); })
       .catch(() => { if (vivo) setErro(true); });
     return () => { vivo = false; };
-  }, [aberto, agenteId, caminho]);
+  }, [aberto, agenteId, projeto, caminho]);
   return (
     <Dialog open={aberto} onOpenChange={(o) => { if (!o) onFechar(); }}>
       <DialogContent

@@ -1,3 +1,5 @@
+// Tela unida (Run A): UMA tela so' — topbar (seletor de projeto, branch da run, hub, "+ Feature"),
+// sidebar (Explorador do projeto, Runs, Pool de agentes), canvas com painel direito e status bar.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { Plus } from "lucide-react";
@@ -5,217 +7,158 @@ import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/Sidebar";
-import { EditorArea, PLANO } from "@/components/EditorArea";
-import { BottomPanel } from "@/components/BottomPanel";
-import { ChatPanel } from "@/components/ChatPanel";
 import { StatusBar } from "@/components/StatusBar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
 import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
-import { Canvas } from "@/components/Canvas";
-import { Projetos } from "@/components/canvas/Projetos";
+import { ProjetoSeletor } from "@/components/ProjetoSeletor";
+import { Canvas, type CanvasHandle } from "@/components/Canvas";
+import { ModalArquivo } from "@/components/canvas/Explorador";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
-import {
-  chatsDoProjeto, chatsEscondidos, chatsVisiveis, filtrarFechados, modoPainelChat, porProjeto, rodando, selecaoAposFechar,
-} from "@/lib/estado";
+import { useAgentes } from "@/hooks/useAgentes";
+import { badgesArquivos, projetoInicial } from "@/lib/unido";
 import { cn } from "@/lib/utils";
+
+/** Chave canonica de um caminho (barras '/'), como badgesArquivos usa na sidebar. */
+const caminhoChave = (arquivo: string): string => arquivo.replace(/\\/g, "/");
 
 export default function App() {
   const { estado, conectado } = useRuns();
   const agora = useAgora();
-  const [runId, setRunId] = useLocal<string | null>("run", null);
-  const [fechados, setFechados] = useLocal<string[]>("fechados", []);
-  const [chatsFechados, setChatsFechados] = useLocal<string[]>("chats-fechados", []);
-  const [sliceSel, setSliceSel] = useState<number | null>(null);
-  const [abasPorRun, setAbasPorRun] = useState<Record<string, { abas: string[]; ativa: string }>>({});
-  const [chatSel, setChatSel] = useState<string | null>(null);
+  // Projeto da tela: o salvo (localStorage) ou, na 1a abertura, a raiz da run ativa.
+  const [projeto, setProjeto] = useLocal<string | null>("projeto", null);
+  const [runSelId, setRunSelId] = useState<string | null>(null);
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
   const [nova, setNova] = useState(false);
-  const [projetoNova, setProjetoNova] = useState(""); // projeto pre-preenchido no dialog de nova feature
-  const [vista, setVista] = useLocal<"ide" | "canvas">("vista", "ide");
-  const [canvasProjeto, setCanvasProjeto] = useLocal<string | null>("canvas-projeto", null);
+  const [arquivo, setArquivo] = useState<string | null>(null); // previa (ModalArquivo) de um arquivo sem diff
+  const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
-  const inferior = usePanelRef();
-  const chatRef = usePanelRef();
 
-  // Sem run escolhida (ou a escolhida sumiu na poda): abre a que esta rodando, senao a mais recente.
-  const r = runId ? estado.runs[runId] ?? null : null;
-  const padrao = useMemo(() => {
-    const todas = porProjeto(estado).flatMap((g) => g.runs).sort((a, b) => b.inicioTs - a.inicioTs);
-    return (todas.find((x) => rodando(x, Date.now())) ?? todas[0])?.id ?? null;
-  }, [estado]);
-  useEffect(() => { if (!r && padrao) setRunId(padrao); }, [r, padrao]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Run mostrada no painel direito do canvas (onRunSel): alimenta o chip de branch e a StatusBar.
+  const runSel = runSelId ? estado.runs[runSelId] ?? null : null;
 
-  const abas = (r && abasPorRun[r.id]) || { abas: [], ativa: PLANO };
-  const setAbas = (v: { abas: string[]; ativa: string }) => r && setAbasPorRun((x) => ({ ...x, [r.id]: v }));
-  const abrirArquivo = (f: string) => setAbas({ abas: abas.abas.includes(f) ? abas.abas : [...abas.abas, f], ativa: f });
-  const fecharAba = (a: string) => {
-    const resto = abas.abas.filter((x) => x !== a);
-    setAbas({ abas: resto, ativa: abas.ativa === a ? resto[resto.length - 1] ?? PLANO : abas.ativa });
-  };
-  const irSlice = (i: number | null) => { setSliceSel(i); if (i != null) setAbas({ ...abas, ativa: PLANO }); };
-
-  // Chats (planejadores) do projeto da run + o selecionado (pode vir de fora do projeto: nova feature).
-  const chatsProjeto = useMemo(() => chatsDoProjeto(estado.planejadores, r?.cwd ?? ""), [estado.planejadores, r?.cwd]);
-  const chatsBase = useMemo(
-    () => chatsVisiveis(estado.planejadores, chatsProjeto, chatSel),
-    [estado.planejadores, chatsProjeto, chatSel],
-  );
-  // Abas de chat visiveis = visiveis do projeto (com o extra selecionado) MENOS os fechados. Fechar so'
-  // esconde (o planejador segue rodando); os fechados destes chats sao o conteudo do menu "reabrir".
-  const chats = useMemo(() => filtrarFechados(chatsBase, chatsFechados), [chatsBase, chatsFechados]);
-  const chatsOcultos = useMemo(() => chatsEscondidos(chatsBase, chatsFechados), [chatsBase, chatsFechados]);
-  const modoChat = modoPainelChat(chats.length, chatsOcultos.length);
-
-  // Fechar uma aba: esconde o slug e, se era a ativa, passa a selecao pro ultimo visivel restante.
-  const fecharChat = (slug: string) => {
-    setChatSel(selecaoAposFechar(chats.filter((c) => c.slug !== slug), slug, chatSel));
-    if (!chatsFechados.includes(slug)) setChatsFechados([...chatsFechados, slug]);
-  };
-
-  // Reabrir pelo menu: tira o slug dos fechados (volta a ser aba) e ja' o seleciona.
-  const reabrirChat = (slug: string) => {
-    setChatsFechados(chatsFechados.filter((s) => s !== slug));
-    setChatSel(slug);
-  };
-
-  // Trocar de run limpa a selecao de chat (os chats sao do projeto da run).
-  useEffect(() => { setChatSel(null); }, [r?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Nova feature concluida: seleciona o chat dela (uma vez) assim que ele aparece na lista.
-  const nfUrl = estado.novaFeature?.status === "ok" ? estado.novaFeature.url : undefined;
-  const nfFeita = useRef<string | null>(null);
+  // Sem projeto salvo: usa projetoInicial(null, runs, agora) do @/lib/unido assim que houver runs.
+  const runs = useMemo(() => Object.values(estado.runs), [estado.runs]);
+  const projetoPadrao = useMemo(() => projetoInicial(null, runs, agora), [runs, agora]);
   useEffect(() => {
-    if (!nfUrl || nfFeita.current === nfUrl) return;
-    const p = estado.planejadores.find((x) => x.url === nfUrl);
-    if (p) { nfFeita.current = nfUrl; setChatSel(p.slug); }
-  }, [nfUrl, estado.planejadores]);
+    if (!projeto && projetoPadrao) setProjeto(projetoPadrao);
+  }, [projeto, projetoPadrao]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Atalhos de editor: Ctrl+K/Ctrl+P paleta, Ctrl+B barra lateral, Ctrl+J painel inferior.
+  // Agentes do pool da sidebar: os do projeto escolhido (GET /agentes?projeto=).
+  const { agentes } = useAgentes(projeto ?? "");
+
+  // Atalhos: Ctrl+K/Ctrl+P paleta; Ctrl+B alterna a sidebar (colapsavel).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
-      const alternar = (p: typeof lateral) => { const h = p.current; if (h) (h.isCollapsed() ? h.expand() : h.collapse()); };
       if (k === "k" || k === "p") { e.preventDefault(); setPaleta((v) => !v); }
-      else if (k === "b") { e.preventDefault(); alternar(lateral); }
-      else if (k === "j") { e.preventDefault(); alternar(inferior); }
+      else if (k === "b") {
+        e.preventDefault();
+        const h = lateral.current;
+        if (h) (h.isCollapsed() ? h.expand() : h.collapse());
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lateral, inferior]);
+  }, [lateral]);
+
+  /** Abre a run no canvas (expande o card e centraliza) — usado pela sidebar e pela paleta. */
+  const abrirRun = (id: string) => { canvasRef.current?.abrirRun(id); };
+
+  /** Foco do pool de agentes: 'run:<id>' abre a run; o resto enquadra o no' (focar). */
+  const focar = (noId: string) => {
+    if (noId.startsWith("run:")) canvasRef.current?.abrirRun(noId.slice(5));
+    else canvasRef.current?.focar(noId);
+  };
+
+  /** Arquivo da sidebar: se a run mostrada tocou o arquivo, abre o Diff dela; senao, a previa. */
+  const abrirArquivo = (caminho: string) => {
+    const tocados = badgesArquivos(runSel);
+    if (runSel && tocados.has(caminhoChave(caminho))) canvasRef.current?.abrirDiff(runSel.id, caminho);
+    else setArquivo(caminho);
+  };
+
+  /** Arquivo escolhido na paleta: o diff dele na run mostrada. */
+  const abrirDiff = (caminho: string) => {
+    if (runSel) canvasRef.current?.abrirDiff(runSel.id, caminho);
+  };
 
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col">
-        {/* barra de titulo da aplicacao (a paleta fica em Ctrl+K/Ctrl+P e no botao da StatusBar) */}
-        <header className="flex h-10 shrink-0 items-center border-b bg-sidebar px-3">
-          <span className="flex items-center gap-2 text-[13px] font-semibold tracking-tight">
+        {/* topbar da tela unida: projeto, branch da run mostrada, estado do hub e "+ Feature" */}
+        <header className="flex h-10 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
+          <span className="flex shrink-0 items-center gap-2 text-[13px] font-semibold tracking-tight">
             <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">H</span>
             Hermes <span className="font-normal text-muted-foreground">Orchestra</span>
           </span>
-          <div className="ml-auto flex items-center gap-2">
-            {/* troca entre a vista IDE (de sempre) e o Canvas (pilha de projetos) */}
-            <div className="flex items-center rounded-md border bg-background/40 p-0.5" role="tablist" aria-label="Vista">
-              {(["ide", "canvas"] as const).map((v) => (
-                <button
-                  key={v} type="button" role="tab" aria-selected={vista === v}
-                  className={cn(
-                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                    vista === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                  onClick={() => setVista(v)}
-                >
-                  {v === "ide" ? "IDE" : "Canvas"}
-                </button>
-              ))}
-            </div>
-            {/* cria worktree + planejador pelo hub (POST /nova-feature); o chat abre no painel direito */}
+          <ProjetoSeletor projeto={projeto ?? ""} onProjeto={setProjeto} />
+          {runSel?.branch && (
+            <span
+              className="shrink-0 truncate rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+              title={runSel.branch}
+            >
+              {runSel.branch}
+            </span>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            {/* indicador do hub: ponto verde enquanto o SSE esta' vivo; amarelo reconectando */}
+            <span
+              className={cn("flex items-center gap-1.5 text-xs", conectado ? "text-muted-foreground" : "text-warn")}
+              title={conectado ? "hub conectado" : "reconectando…"}
+            >
+              <span className={cn("size-1.5 rounded-full", conectado ? "bg-ok" : "bg-warn")} />
+              {conectado ? "hub conectado" : "reconectando…"}
+            </span>
+            {/* cria worktree + planejador pelo hub (POST /nova-feature) com o projeto atual */}
             <Button
               size="sm" variant="outline" className="h-6.5 gap-1.5 px-2.5 text-xs"
-              title="Criar uma feature nova (worktree + planejador)" onClick={() => { setProjetoNova(""); setNova(true); }}
+              title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
             >
-              <Plus className="size-3.5" />Nova feature
+              <Plus className="size-3.5" />Feature
             </Button>
           </div>
         </header>
 
         <div className="min-h-0 flex-1">
-          {vista === "canvas" ? (
-            canvasProjeto ? (
-              <div className="flex h-full flex-col">
-                <div className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
-                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setCanvasProjeto(null)}>
-                    ← Projetos
-                  </Button>
-                  <span className="truncate text-xs text-muted-foreground">{canvasProjeto}</span>
-                </div>
-                <div className="min-h-0 flex-1">
-                  <Canvas projeto={canvasProjeto} onNovaFeature={() => { setProjetoNova(canvasProjeto); setNova(true); }} />
-                </div>
-              </div>
-            ) : (
-              <Projetos onAbrir={setCanvasProjeto} />
-            )
-          ) : (
           <ResizablePanelGroup orientation="horizontal">
-            <ResizablePanel id="lateral" panelRef={lateral} defaultSize={300} minSize={200} maxSize="45" collapsible collapsedSize={0}>
+            <ResizablePanel
+              id="sidebar" panelRef={lateral}
+              defaultSize={280} minSize={200} maxSize="45" collapsible collapsedSize={0}
+            >
               <Sidebar
-                estado={estado} agora={agora} conectado={conectado}
-                runId={r?.id ?? null} onRun={(id) => { setRunId(id); setSliceSel(null); }}
-                sliceSel={sliceSel} onSlice={irSlice} fechados={fechados} onFechados={setFechados}
+                projeto={projeto ?? ""} estado={estado} agora={agora} agentes={agentes} runSel={runSel}
+                onRun={abrirRun} onFocar={focar} onArquivo={abrirArquivo}
               />
             </ResizablePanel>
             <ResizableHandle />
-            <ResizablePanel id="principal" minSize={400}>
-              {r ? (
-                <ResizablePanelGroup orientation="vertical">
-                  <ResizablePanel id="editor" minSize={160}>
-                    <EditorArea
-                      r={r} agora={agora} abas={abas.abas} ativa={abas.ativa}
-                      onAtiva={(a) => setAbas({ ...abas, ativa: a })} onFechar={fecharAba} onArquivo={abrirArquivo}
-                      sliceSel={sliceSel} onSlice={irSlice}
-                    />
-                  </ResizablePanel>
-                  <ResizableHandle />
-                  <ResizablePanel id="inferior" panelRef={inferior} defaultSize="32" minSize={110} collapsible collapsedSize={0}>
-                    <BottomPanel r={r} sliceSel={sliceSel} onSlice={irSlice} />
-                  </ResizablePanel>
-                </ResizablePanelGroup>
+            <ResizablePanel id="canvas" minSize={400}>
+              {projeto ? (
+                <Canvas
+                  ref={canvasRef} projeto={projeto}
+                  onRunSel={setRunSelId} onNovaFeature={() => setNova(true)}
+                />
               ) : (
                 <div className="grid h-full place-items-center">
-                  <div className="text-center">
-                    <p className="text-sm text-muted-foreground">{conectado ? "Nenhuma run nos últimos 7 dias." : "Conectando ao hub…"}</p>
-                    <p className="mt-2 text-xs text-muted-foreground/70">Rode <code className="font-mono">/orchestra "feature"</code> numa sessão do Claude.</p>
-                  </div>
+                  <p className="text-sm text-muted-foreground">Escolha um projeto no seletor acima</p>
                 </div>
               )}
             </ResizablePanel>
-            {modoChat !== "oculto" && (
-              <>
-                <ResizableHandle />
-                <ResizablePanel id="chat" panelRef={chatRef} defaultSize="34" minSize={240} collapsible collapsedSize={0}>
-                  <ChatPanel
-                    chats={chats} escondidos={chatsOcultos} ativo={chatSel ?? chats[0]?.slug ?? ""}
-                    onAtivo={setChatSel} onFechar={fecharChat} onReabrir={reabrirChat}
-                  />
-                </ResizablePanel>
-              </>
-            )}
           </ResizablePanelGroup>
-          )}
         </div>
 
-        <StatusBar r={r} agora={agora} onCancelar={() => setCancelar(true)} onPaleta={() => setPaleta(true)} />
+        <StatusBar r={runSel} agora={agora} onCancelar={() => setCancelar(true)} onPaleta={() => setPaleta(true)} />
       </div>
 
       <CommandPalette
-        aberto={paleta} onAberto={setPaleta} estado={estado} r={r} agora={agora}
-        onRun={(id) => { setRunId(id); setSliceSel(null); }} onSlice={irSlice} onArquivo={abrirArquivo}
+        aberto={paleta} onAberto={setPaleta} estado={estado} r={runSel} agora={agora}
+        onRun={abrirRun} onSlice={() => { if (runSel) abrirRun(runSel.id); }} onArquivo={abrirDiff}
       />
-      <CancelDialog r={r} aberto={cancelar} onAberto={setCancelar} />
-      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} projetoInicial={projetoNova} />
+      <CancelDialog r={runSel} aberto={cancelar} onAberto={setCancelar} />
+      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} projetoInicial={projeto ?? ""} />
+      <ModalArquivo aberto={arquivo !== null} projeto={projeto ?? ""} caminho={arquivo ?? ""} onFechar={() => setArquivo(null)} />
     </TooltipProvider>
   );
 }
