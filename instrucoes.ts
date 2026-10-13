@@ -7,17 +7,13 @@ export type OpcoesEspera = {
   pausada: () => boolean; tetoMs: number; agora?: () => number; dormir?: (ms: number) => Promise<void>; signal?: AbortSignal;
 };
 
-// Caminho do arquivo de instrucoes (jsonl) de uma run.
 export function arquivoInstrucao(dir: string, id: string): string { return path.join(dir, id + ".instrucao.jsonl"); }
-// Caminho do marcador de pausa de uma run.
 export function arquivoPausa(dir: string, id: string): string { return path.join(dir, id + ".pausa"); }
 
-// Acrescenta uma linha JSON com a instrucao endereçada a uma slice.
 export function gravarInstrucao(dir: string, id: string, slice: number, texto: string): void {
   appendFileSync(arquivoInstrucao(dir, id), JSON.stringify({ slice, texto, ts: Date.now() }) + "\n");
 }
 
-// Toma (e consome) as instrucoes da slice, mantendo no arquivo as das outras.
 export function tomarInstrucoes(dir: string, id: string, slice: number): string[] {
   const arq = arquivoInstrucao(dir, id);
   if (!existsSync(arq)) return [];
@@ -35,26 +31,22 @@ export function tomarInstrucoes(dir: string, id: string, slice: number): string[
   return minhas;
 }
 
-// Marca a slice como pausada.
 export function pausarSlice(dir: string, id: string, slice: number): void {
   writeFileSync(arquivoPausa(dir, id), String(slice));
 }
 
-// Remove a pausa e, se houver texto, registra a instrucao de retomada.
 export function retomarSlice(dir: string, id: string, slice: number, texto?: string): void {
   const arq = arquivoPausa(dir, id);
   if (existsSync(arq)) rmSync(arq, { force: true });
   if (texto?.trim()) gravarInstrucao(dir, id, slice, texto);
 }
 
-// Estah pausada somente se o marcador existe e aponta para a slice.
 export function pausada(dir: string, id: string, slice: number): boolean {
   const arq = arquivoPausa(dir, id);
   if (!existsSync(arq)) return false;
   return Number(readFileSync(arq, "utf8")) === slice;
 }
 
-// Valida se uma acao (instruir/pausar/retomar) pode incidir sobre a slice.
 export function validarAcaoSlice(evs: any[] | null, slice: number, cancelado: boolean): ErroAcao | null {
   if (!evs) return { status: 404, erro: "run desconhecida" };
   if (cancelado || evs.some((e) => e.t === "painel")) return { status: 409, erro: "a run já terminou" };
@@ -69,7 +61,6 @@ export function validarAcaoSlice(evs: any[] | null, slice: number, cancelado: bo
   return null;
 }
 
-// Valida o texto de uma instrucao (obrigatorio no instruir, opcional no retomar).
 export function validarTexto(texto: unknown, obrigatorio: boolean): string | null {
   if (texto === undefined || texto === null) return obrigatorio ? "instrução vazia" : null;
   if (typeof texto !== "string") return "instrução inválida";
@@ -78,7 +69,6 @@ export function validarTexto(texto: unknown, obrigatorio: boolean): string | nul
   return null;
 }
 
-// Espera a pausa sumir, respeitando teto de tempo e cancelamento.
 export async function esperarRetomada(o: OpcoesEspera): Promise<"retomada" | "teto"> {
   const agora = o.agora ?? Date.now;
   const dormir = o.dormir ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -92,7 +82,6 @@ export async function esperarRetomada(o: OpcoesEspera): Promise<"retomada" | "te
   return "retomada";
 }
 
-// O ultimo evento de pausa da run decide se ela esta pausada.
 export function estaPausada(evs: any[]): boolean {
   let estado: string | undefined;
   for (const e of evs) if (e.t === "pausa") estado = e.estado;
