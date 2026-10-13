@@ -1,7 +1,7 @@
 // Cards de run/worker/arquivo no canvas (F2 - S5c; G1 - S3): tres nodeTypes do xyflow que leem os
 // dados do no' (dados.runId/idx/arquivo) e o estado das runs de um contexto (RunsCtx) proprio, exportado
 // daqui pra nao mexer no CanvasCtx dos outros cards. Na vista Arvore (G1) a slice vira um card ao vivo
-// com o feedDaSlice e o card da run ganha as acoes (merge/PR/descartar) e o seletor Arvore|Fluxo.
+// com o feedDaSlice e o card da run ganha o seletor Arvore|Fluxo (as acoes da run foram pro PainelRun).
 // Tambem exporta ModalDiff, que abre o DiffView existente num dialog. UI em PT-BR, so' tema escuro.
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
@@ -11,7 +11,6 @@ import { fmtDur, fmtHora, fmtUSD, tomStatus } from "@/lib/formato";
 import { feedDaSlice, linhasDoWorker, type LinhaFeed } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
 import { Alcas } from "./Nos";
@@ -84,61 +83,14 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   );
 }
 
-// Acoes da run (G1 - S2): resultado de POST /runs/acao e /cancel mostrado no proprio card.
-
-type TipoAcao = "merge" | "pr" | "descartar" | "cancelar";
-type Resultado = {
-  tipo: TipoAcao;
-  ok: boolean;
-  base?: string;
-  url?: string;
-  erro?: string;
-  conflitos?: string[];
-};
-
-/** Rotulo curto de sucesso por acao. */
-function rotuloResultado(t: TipoAcao): string {
-  switch (t) {
-    case "pr": return "PR aberto";
-    case "merge": return "Merge feito";
-    case "descartar": return "Worktree descartado";
-    case "cancelar": return "Cancelamento pedido";
-  }
-}
-
-/** Bloco do resultado da acao no card: link do PR clicavel, base, erro em vermelho e conflitos. */
-function ResultadoAcao({ r, onFechar }: { r: Resultado; onFechar: () => void }) {
-  return (
-    <div className="min-w-0 rounded-md px-2 py-1.5" style={{ background: "#191919", border: `1px solid ${BORDA}`, font: FONTE }}>
-      <div className="flex items-center gap-1">
-        <span className="min-w-0 flex-1 truncate" style={{ color: r.ok ? VERDE : VERMELHO }}>
-          {r.ok ? rotuloResultado(r.tipo) : r.erro}
-        </span>
-        <button type="button" className="nodrag shrink-0 rounded px-1 hover:bg-white/10" style={{ color: CINZA }} onClick={onFechar}>✕</button>
-      </div>
-      {r.ok && r.url ? (
-        <a href={r.url} target="_blank" rel="noreferrer" className="nodrag block truncate underline" style={{ color: AZUL }}>{r.url}</a>
-      ) : null}
-      {r.ok && r.base ? <div className="truncate" style={{ color: CINZA }}>base: {r.base}</div> : null}
-      {!r.ok && r.conflitos && r.conflitos.length > 0 ? (
-        <ul className="mt-0.5 list-disc pl-4" style={{ color: VERMELHO }}>
-          {r.conflitos.map((c) => <li key={c} className="truncate">{c}</li>)}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
 // nodeTypes
 
-/** Run: card com status/feature, acoes (Cancelar ou ⋯), metricas e o seletor Arvore|Fluxo. */
+/** Run: card com status/feature, metricas e o seletor Arvore|Fluxo. */
 function NoRun({ data, selected }: NodeProps) {
   const { runs, agora, alternar, vista } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const run = runs[runId];
-  const [resultado, setResultado] = useState<Resultado | null>(null);
-  const [confirmar, setConfirmar] = useState<"merge" | "descartar" | null>(null);
   const [flash, setFlash] = useState(false);
   const gateAnt = useRef<string | undefined>(undefined);
 
@@ -160,35 +112,6 @@ function NoRun({ data, selected }: NodeProps) {
   const expandida = no.dados.expandida === true;
   const vistaAtual: Vista = no.dados.vista === "fluxo" ? "fluxo" : "arvore";
 
-  /** Chama POST /runs/acao?run=<id> {acao} e guarda o resultado pra mostrar no card. */
-  const acao = async (a: "merge" | "pr" | "descartar") => {
-    setResultado(null);
-    try {
-      const r = await fetch(`/runs/acao?run=${encodeURIComponent(runId)}`, {
-        method: "POST",
-        headers: { "X-Hermes": "1", "Content-Type": "application/json" },
-        body: JSON.stringify({ acao: a }),
-      });
-      const j = (await r.json().catch(() => null)) as { ok?: boolean; base?: string; url?: string; erro?: string; conflitos?: string[] } | null;
-      if (j?.ok) setResultado({ tipo: a, ok: true, base: j.base, url: j.url });
-      else setResultado({ tipo: a, ok: false, erro: j?.erro || `O hub recusou a ação (HTTP ${r.status}).`, conflitos: j?.conflitos });
-    } catch (e) {
-      setResultado({ tipo: a, ok: false, erro: "Falha de rede ao executar a ação: " + String((e as Error).message) });
-    }
-  };
-
-  /** Pede o cancelamento da run (POST /cancel com X-Hermes). */
-  const cancelar = async () => {
-    setResultado(null);
-    try {
-      const r = await fetch(`/cancel?run=${encodeURIComponent(runId)}`, { method: "POST", headers: { "X-Hermes": "1" } });
-      if (r.ok || r.status === 204) setResultado({ tipo: "cancelar", ok: true });
-      else setResultado({ tipo: "cancelar", ok: false, erro: `O hub recusou o cancelamento (HTTP ${r.status}).` });
-    } catch (e) {
-      setResultado({ tipo: "cancelar", ok: false, erro: "Falha de rede ao pedir o cancelamento: " + String((e as Error).message) });
-    }
-  };
-
   if (!run) {
     return (
       <div className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel")} style={moldura}>
@@ -203,8 +126,6 @@ function NoRun({ data, selected }: NodeProps) {
   const k = kpis(run);
   const fim = st === "rodando" ? agora : run.ultimoEventoTs;
   const dur = run.inicioTs ? fmtDur(Math.max(0, fim - run.inicioTs)) : "";
-  const rodandoAgora = st === "rodando";
-  const terminada = !rodandoAgora && st !== "aguardando";
   return (
     <>
       <div
@@ -222,19 +143,13 @@ function NoRun({ data, selected }: NodeProps) {
           </button>
         </header>
         <div className="flex min-h-0 flex-1 flex-col justify-center gap-1 px-2.5 py-1.5" style={{ font: FONTE, color: "#dedee3" }}>
-          {resultado ? (
-            <ResultadoAcao r={resultado} onFechar={() => setResultado(null)} />
-          ) : (
-            <>
-              <Campo rotulo="Slices" valor={`${p.feitas}/${p.total}`} />
-              <Campo rotulo="Custo" valor={k.n ? fmtUSD(k.custo) : "—"} />
-              <Campo rotulo="Duração" valor={dur || "—"} />
-              <div className="flex items-center gap-1.5">
-                <StatusIcon status={st} />
-                <span className="truncate">{tomStatus(st).rotulo}</span>
-              </div>
-            </>
-          )}
+          <Campo rotulo="Slices" valor={`${p.feitas}/${p.total}`} />
+          <Campo rotulo="Custo" valor={k.n ? fmtUSD(k.custo) : "—"} />
+          <Campo rotulo="Duração" valor={dur || "—"} />
+          <div className="flex items-center gap-1.5">
+            <StatusIcon status={st} />
+            <span className="truncate">{tomStatus(st).rotulo}</span>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 px-2 py-1" style={{ borderTop: `1px solid ${BORDA}` }}>
           <div className="flex items-center gap-0.5">
@@ -246,57 +161,9 @@ function NoRun({ data, selected }: NodeProps) {
               </button>
             ))}
           </div>
-          <div className="ml-auto flex items-center gap-1">
-            {rodandoAgora ? (
-              <button type="button" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
-                style={{ color: VERMELHO, font: BOTAO }}
-                onClick={() => void cancelar()}>
-                Cancelar
-              </button>
-            ) : terminada ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button type="button" title="Ações da run" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
-                    style={{ color: "#b8b8b8", font: "500 13px/1 ui-sans-serif, system-ui, sans-serif" }}>
-                    ⋯
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="cv-menu">
-                  <DropdownMenuItem disabled={st !== "COMPLETE"} onSelect={() => void acao("pr")}>Abrir PR</DropdownMenuItem>
-                  <DropdownMenuItem disabled={st !== "COMPLETE"} onSelect={() => setConfirmar("merge")}>Merge local</DropdownMenuItem>
-                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirmar("descartar")}>Descartar worktree</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : null}
-          </div>
         </div>
         <Alcas />
       </div>
-
-      {/* Confirmacao das acoes destrutivas (merge e descartar) */}
-      <Dialog open={confirmar !== null} onOpenChange={(o) => { if (!o) setConfirmar(null); }}>
-        <DialogContent className="max-w-sm" style={{ background: FUNDO, border: `1px solid ${BORDA}` }}>
-          <DialogTitle style={{ color: "#eee", font: TITULO }}>
-            {confirmar === "merge" ? "Merge local" : "Descartar worktree"}
-          </DialogTitle>
-          <DialogDescription style={{ color: "#b8b8b8", font: FONTE }}>
-            {confirmar === "merge"
-              ? `Fazer merge --no-ff de ${run.branch || "?"} na base?`
-              : `Apagar ${run.branch || "?"} e o worktree? Isso não pode ser desfeito.`}
-          </DialogDescription>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="rounded px-2 py-1 text-xs hover:bg-white/10"
-              style={{ color: "#b8b8b8", border: `1px solid ${BORDA}` }} onClick={() => setConfirmar(null)}>
-              Cancelar
-            </button>
-            <button type="button" className="rounded px-2 py-1 text-xs"
-              style={{ background: confirmar === "descartar" ? VERMELHO : AZUL, color: "#111", font: BOTAO }}
-              onClick={() => { const a = confirmar; setConfirmar(null); if (a) void acao(a); }}>
-              Confirmar
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
