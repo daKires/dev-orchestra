@@ -1,7 +1,4 @@
-// Painel da run (tela unida, Run A): painel vertical de largura/altura totais do pai, com cabecalho
-// (id curto da run, badge de status via tomStatus e feature), 4 abas (Feed, Diff, Gate, Detalhes) e um
-// rodape FIXO com as acoes da run (Merge/PR/Descartar e Cancelar run). Reaproveita Feed/Gate/Metricas
-// do BottomPanel e as acoes que antes moravam no card da run (Run.tsx). UI em PT-BR, so' tema escuro.
+// Painel direito da run: abas Feed/Diff/Gate/Detalhes e as acoes (merge/PR/descartar/cancelar) no rodape.
 import { useState, type ReactNode } from "react";
 import { kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
 import { fmtDur, fmtUSD, tomStatus } from "@/lib/formato";
@@ -12,7 +9,6 @@ import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
 import { Feed, Gate, Metricas } from "@/components/BottomPanel";
 
-// Pecas comuns (tokens do Castor, como os outros cards/panes)
 
 const FUNDO = "#1c1c1c";
 const BORDA = "#2c2c2c";
@@ -30,13 +26,10 @@ export type PainelRunProps = {
   agora: number;
   arquivoDiff: string | null;
   onArquivoDiff: (arquivo: string) => void;
-  /** Aba ativa controlada (feed/diff/gate/detalhes). Ausente = estado interno (comeca no Feed). */
   aba?: string;
-  /** Avisa a troca de aba (usado quando `aba` e' controlada pelo dono do painel). */
   onAba?: (aba: string) => void;
 };
 
-// Acoes da run: mesmo contrato de POST /runs/acao e /cancel (antes no card de run).
 
 type TipoAcao = "merge" | "pr" | "descartar" | "cancelar";
 export type Resultado = {
@@ -48,7 +41,6 @@ export type Resultado = {
   conflitos?: string[];
 };
 
-/** Rotulo curto de sucesso por acao. */
 function rotuloResultado(t: TipoAcao): string {
   switch (t) {
     case "pr": return "PR aberto";
@@ -58,7 +50,6 @@ function rotuloResultado(t: TipoAcao): string {
   }
 }
 
-/** Bloco do resultado da acao: link do PR clicavel, base, erro em vermelho e conflitos. */
 export function ResultadoAcao({ r, onFechar }: { r: Resultado; onFechar: () => void }) {
   return (
     <div className="min-w-0 rounded-md px-2 py-1.5" style={{ background: "#191919", border: `1px solid ${BORDA}`, font: FONTE }}>
@@ -81,15 +72,12 @@ export function ResultadoAcao({ r, onFechar }: { r: Resultado; onFechar: () => v
   );
 }
 
-/** Id curto da run (como um sha curto do git). */
 function idCurto(id: string): string {
   return id.length > 9 ? id.slice(0, 8) : id;
 }
 
-/** So' o nome base do arquivo (sem pastas). */
 const nomeDoArquivo = (caminho: string): string => caminho.split(/[\\/]+/).filter(Boolean).pop() ?? caminho;
 
-/** Linha "rotulo valor" dos detalhes. */
 function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -107,12 +95,10 @@ function Aba({ valor, children }: { valor: string; children: ReactNode }) {
   );
 }
 
-/** Contador vermelho das abas (mesmo padrao do BottomPanel). */
 function Contador({ children, tom }: { children: ReactNode; tom: string }) {
   return <span className={cn("ml-1.5 rounded px-1 font-mono text-[10px] tracking-normal", tom)}>{children}</span>;
 }
 
-/** Titulo do dialog de confirmacao por acao. */
 function tituloConfirmacao(a: TipoAcao): string {
   switch (a) {
     case "merge": return "Merge --no-ff";
@@ -122,7 +108,6 @@ function tituloConfirmacao(a: TipoAcao): string {
   }
 }
 
-/** Descricao do dialog de confirmacao por acao. */
 function descricaoConfirmacao(a: TipoAcao, run: Run): string {
   switch (a) {
     case "merge": return `Fazer merge --no-ff de ${run.branch || "?"} na base?`;
@@ -132,13 +117,11 @@ function descricaoConfirmacao(a: TipoAcao, run: Run): string {
   }
 }
 
-// PainelRun
 
 export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }: PainelRunProps) {
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [confirmar, setConfirmar] = useState<TipoAcao | null>(null);
   const [sliceSel, setSliceSel] = useState<number | null>(null);
-  // Aba controlada pelo dono (tela unida) ou estado interno quando ninguem manda.
   const [abaInterna, setAbaInterna] = useState("feed");
   const abaAtual = aba ?? abaInterna;
   const trocarAba = (v: string) => {
@@ -157,11 +140,9 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
   const erros = run.feed.filter((f) => f.erro).length;
   const falhasGate = run.gate.filter((g) => g.status === "falha").length;
 
-  // Arquivo do diff: o controlado por props se ainda existir na run; senao o primeiro da ordem.
   const escolhido = arquivoDiff && run.ordemDiffs.includes(arquivoDiff) ? arquivoDiff : run.ordemDiffs[0] ?? null;
   const patchEscolhido = escolhido ? run.diffs[escolhido] ?? "" : "";
 
-  /** Chama POST /runs/acao?run=<id> {acao} e guarda o resultado pra mostrar acima do rodape. */
   const acao = async (a: "merge" | "pr" | "descartar") => {
     setResultado(null);
     try {
@@ -178,7 +159,6 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
     }
   };
 
-  /** Pede o cancelamento da run (POST /cancel com X-Hermes). */
   const cancelar = async () => {
     setResultado(null);
     try {
@@ -190,7 +170,6 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
     }
   };
 
-  /** Executa a acao confirmada no dialog (cancelar usa o endpoint proprio). */
   const confirmarCom = (a: TipoAcao) => {
     if (a === "cancelar") void cancelar();
     else void acao(a);

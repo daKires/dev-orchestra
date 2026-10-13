@@ -85,7 +85,6 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
 
 // nodeTypes
 
-/** Run: card com status/feature, metricas e o seletor Arvore|Fluxo. */
 function NoRun({ data, selected }: NodeProps) {
   const { runs, agora, alternar, vista } = useContext(RunsCtx);
   const no = lerDados(data);
