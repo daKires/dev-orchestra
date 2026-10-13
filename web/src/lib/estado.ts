@@ -10,9 +10,9 @@ export type GateItem = Extract<Evento, { t: "gate" }>;
 export type SliceEstado = {
   idx: number; tarefa: string; status: StatusSlice; plano?: SlicePlano;
   escritos: string[]; comandos: string[]; motivo?: string; ms?: number; semMudancas?: boolean;
-  inicioTs?: number; metrica?: Metrica;
+  inicioTs?: number; metrica?: Metrica; pausada?: boolean;
 };
-export type FeedItem = { ts: number; slice?: number; tipo: "tool" | "fase" | "slice" | "log"; texto: string; erro: boolean; nome?: string };
+export type FeedItem = { ts: number; slice?: number; tipo: "tool" | "fase" | "slice" | "log" | "instrucao" | "pausa"; texto: string; erro: boolean; nome?: string };
 export type Atividade =
   | { tipo: "gerando"; slice: number; tokens: number; ts: number }
   | { tipo: "comando"; slice: number; cmd: string; desde: number }
@@ -24,7 +24,7 @@ export type Run = {
   plano: SlicePlano[]; cmds: string[]; gateCmds: string[];
   slices: SliceEstado[]; feed: FeedItem[]; gate: GateItem[];
   diffs: Record<string, string>; ordemDiffs: string[];
-  metricas: Metrica[]; painel: string[]; atividade: Atividade;
+  metricas: Metrica[]; painel: string[] | null; atividade: Atividade;
 };
 export type Estado = { runs: Record<string, Run>; planejadores: Planejador[]; novaFeature: NovaFeature | null };
 // Lote de operacoes do canvas de um projeto (o hub emite { canvasOp: { projeto, ops } } no SSE).
@@ -55,7 +55,7 @@ export const vazio: Estado = { runs: {}, planejadores: [], novaFeature: null };
 function nova(id: string): Run {
   return {
     id, feature: id, cwd: "", projeto: "", inicioTs: 0, ultimoEventoTs: 0, status: "aguardando", branch: "", baseline: "",
-    plano: [], cmds: [], gateCmds: [], slices: [], feed: [], gate: [], diffs: {}, ordemDiffs: [], metricas: [], painel: [], atividade: null,
+    plano: [], cmds: [], gateCmds: [], slices: [], feed: [], gate: [], diffs: {}, ordemDiffs: [], metricas: [], painel: null, atividade: null,
   };
 }
 
@@ -144,6 +144,23 @@ function mutar(r: Run, ev: Evento): void {
     case "log":
       if (ev.texto) feed("log", ev.texto, /ERRO|tentativa/.test(ev.texto));
       break;
+    case "instrucao":
+      // Instrucao entregue a slice viva; descartada = chegou tarde (a slice ja' terminou).
+      feed("instrucao", ev.descartada ? `descartada (slice terminou) · ${ev.texto}` : ev.texto, !!ev.descartada, ev.slice);
+      break;
+    case "pausa": {
+      const s = r.slices.find((x) => x.idx === ev.slice);
+      if (ev.estado === "pausada") {
+        if (s) s.pausada = true;
+        r.status = "pausada";
+        feed("pausa", "pausada", false, ev.slice);
+      } else {
+        if (s) s.pausada = false;
+        if (r.status === "pausada") r.status = "rodando";
+        feed("pausa", ev.motivo ? `retomada: ${ev.motivo}` : "retomada", false, ev.slice);
+      }
+      break;
+    }
   }
 }
 

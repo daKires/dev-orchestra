@@ -28,6 +28,7 @@ export const fmtPct = (v: number | null) => (v == null ? "—" : Math.round(v * 
 export function tomStatus(st: string): { texto: string; ponto: string; rotulo: string } {
   switch (st) {
     case "rodando": return { texto: "text-run", ponto: "bg-run", rotulo: "rodando" };
+    case "pausada": return { texto: "text-warn", ponto: "bg-warn", rotulo: "pausada" };
     case "COMPLETE": case "ok": return { texto: "text-ok", ponto: "bg-ok", rotulo: st === "ok" ? "ok" : "completa" };
     case "NEEDS-REVIEW": case "incompleta": return { texto: "text-warn", ponto: "bg-warn", rotulo: st === "incompleta" ? "incompleta" : "revisar" };
     case "GATE-FAILED": return { texto: "text-err", ponto: "bg-err", rotulo: "gate falhou" };

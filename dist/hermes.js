@@ -9,6 +9,8 @@ const pexec = promisify(execFile); // git
 const pshell = promisify(exec); // comandos allowlisted / gate (build/teste/typecheck)
 const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
 const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
+// G3/S2: teto de tempo que uma slice pode ficar pausada antes de retomar sozinha.
+export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
 export const REPAIR_TRIES = Number(process.env.HERMES_REPAIR_TRIES ?? "1");
 export function podeReparar(tentativa, tries = REPAIR_TRIES) {
     return tentativa < tries;
@@ -478,12 +480,13 @@ export async function execFerramenta(ctx, nome, input) {
 // msgFn injetavel pro selftest (client fake, sem rede). sliceIdx identifica o card/feed no dashboard
 // (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa). cmds e' a allowlist resolvida.
 // Erro de API/turno vira slice falha COM os tokens ja gastos; cancelamento (CanceladoError) sobe.
-export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal, signal) {
+export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal, signal, caixa) {
     const sys = "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
         "Fluxo: ache o que importa (buscar/listar/ler_arquivo); mude arquivo existente com editar_arquivo (trecho " +
         "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); havendo comando de verificacao permitido rode " +
         "com rodar_comando e conserte os erros ate passar. Ao EDITAR arquivo existente, preserve toda a estrutura; " +
-        "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls).";
+        "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls). " +
+        "Se chegar uma mensagem comecando com 'INSTRUCAO DO USUARIO:', ela vem do dono da run durante a execucao e tem prioridade sobre a tarefa original: cumpra-a (mesmo que mude arquivos fora dos alvos) antes de terminar.";
     const user = `Feature: ${feature}\nTarefa: ${t.tarefa}\nArquivos-alvo: ${t.arquivos_alvo.join(", ") || "(voce decide)"}\n` +
         `Detalhes: ${t.descricao}\n` +
         (cmds.length ? `Comandos de verificacao permitidos: ${cmds.join(" | ")}` : "Sem comandos de verificacao disponiveis.");
@@ -505,48 +508,73 @@ export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = men
     };
     const messages = [{ role: "user", content: user }];
     try {
-        for (let turno = 0; turno < MAX_TURNS; turno++) {
-            if (signal?.aborted)
-                throw new CanceladoError();
-            const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS, opts);
-            if (usage) {
-                ctx.tokensIn += Number(usage.in ?? 0);
-                ctx.tokensOut += Number(usage.out ?? 0);
+        try {
+            for (let turno = 0; turno < MAX_TURNS; turno++) {
+                if (signal?.aborted)
+                    throw new CanceladoError();
+                // G3/S2: pausa entre turnos e instrucoes do usuario, sempre no INICIO do turno (inclusive o 0).
+                if (caixa?.pausada()) {
+                    emit({ t: "pausa", slice: sliceIdx, estado: "pausada" });
+                    const r = await caixa.esperar();
+                    emit({ t: "pausa", slice: sliceIdx, estado: "retomada", ...(r === "teto" ? { motivo: `teto de ${Math.round(PAUSA_MAX_MS / 60000)} min` } : {}) });
+                }
+                const ins = caixa?.tomar() ?? [];
+                if (ins.length) {
+                    const instr = "INSTRUCAO DO USUARIO: " + ins.join("\n");
+                    const ultima = messages[messages.length - 1];
+                    if (typeof ultima.content === "string")
+                        ultima.content = ultima.content + "\n\n" + instr;
+                    else
+                        ultima.content = [...ultima.content, { type: "text", text: instr }];
+                    for (const i of ins)
+                        emit({ t: "instrucao", slice: sliceIdx, texto: i });
+                }
+                const { blocos, stop, usage } = await msgFn(sys, messages, FERRAMENTAS, opts);
+                if (usage) {
+                    ctx.tokensIn += Number(usage.in ?? 0);
+                    ctx.tokensOut += Number(usage.out ?? 0);
+                }
+                messages.push({ role: "assistant", content: blocos });
+                const usos = blocos.filter((b) => b?.type === "tool_use");
+                if (stop !== "tool_use" || usos.length === 0) {
+                    if (ctx.escritos.size)
+                        return fim(true, "");
+                    // nada escrito: so conta como ok se a ultima verificacao rodada passou (trabalho ja feito antes)
+                    if (ctx.ultimaVerificacaoOk)
+                        return fim(true, "", true);
+                    return fim(false, "nenhum arquivo escrito");
+                }
+                const resultados = [];
+                for (const u of usos) {
+                    const out = await execFerramenta(ctx, u.name, u.input);
+                    resultados.push({ type: "tool_result", tool_use_id: u.id, content: out });
+                }
+                messages.push({ role: "user", content: resultados });
             }
-            messages.push({ role: "assistant", content: blocos });
-            const usos = blocos.filter((b) => b?.type === "tool_use");
-            if (stop !== "tool_use" || usos.length === 0) {
-                if (ctx.escritos.size)
-                    return fim(true, "");
-                // nada escrito: so conta como ok se a ultima verificacao rodada passou (trabalho ja feito antes)
-                if (ctx.ultimaVerificacaoOk)
-                    return fim(true, "", true);
-                return fim(false, "nenhum arquivo escrito");
-            }
-            const resultados = [];
-            for (const u of usos) {
-                const out = await execFerramenta(ctx, u.name, u.input);
-                resultados.push({ type: "tool_result", tool_use_id: u.id, content: out });
-            }
-            messages.push({ role: "user", content: resultados });
+            return fim(false, `teto de ${MAX_TURNS} turnos atingido`);
         }
-        return fim(false, `teto de ${MAX_TURNS} turnos atingido`);
+        catch (e) {
+            if (e instanceof CanceladoError || signal?.aborted)
+                throw new CanceladoError();
+            if (e instanceof AmbienteError) {
+                e.tokensIn = ctx.tokensIn;
+                e.tokensOut = ctx.tokensOut;
+                throw e;
+            } // custo da slice nao some
+            return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
+        }
     }
-    catch (e) {
-        if (e instanceof CanceladoError || signal?.aborted)
-            throw new CanceladoError();
-        if (e instanceof AmbienteError) {
-            e.tokensIn = ctx.tokensIn;
-            e.tokensOut = ctx.tokensOut;
-            throw e;
-        } // custo da slice nao some
-        return fim(false, `erro: ${String(e?.message ?? e).slice(0, 120)}`);
+    finally {
+        // G3/S2: instrucao que chegou depois do ultimo turno nao entra em lugar nenhum: emite como descartada.
+        if (caixa)
+            for (const t of caixa.tomar())
+                emit({ t: "instrucao", slice: sliceIdx, texto: t, descartada: true });
     }
 }
 // Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida, depois
 // "rodando"/"ok"/"incompleta" conforme cada uma processa, e uma "metrica" por slice. PARA na primeira
 // slice que falhar (as seguintes costumam depender dela) ou no cancelamento: o resto vira "pulada".
-export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn = mensagemReal) {
+export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn = mensagemReal, caixaDe) {
     const base = path.resolve(cwd);
     const escritos = [];
     const rejeitados = [];
@@ -566,7 +594,7 @@ export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn =
         emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "rodando" });
         let r;
         try {
-            r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal);
+            r = await agente(base, feature, t, emit, sliceIdx, cmds, msgFn, signal, caixaDe?.(sliceIdx));
         }
         catch (e) {
             if (e instanceof AmbienteError) {

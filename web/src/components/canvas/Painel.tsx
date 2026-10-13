@@ -36,6 +36,7 @@ const texto = (v: unknown): string => (typeof v === "string" ? v : "");
 function corStatus(status: string): string {
   switch (status) {
     case "rodando": return AZUL;
+    case "pausada": return AMARELO;
     case "COMPLETE": case "ok": return VERDE;
     case "NEEDS-REVIEW": case "incompleta": case "COMMIT-SKIP": return AMARELO;
     case "GATE-FAILED": case "ENV-FAILED": case "FAILED": case "INTERROMPIDA": return VERMELHO;

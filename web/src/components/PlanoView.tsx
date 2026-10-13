@@ -131,7 +131,7 @@ export function PlanoView({ r, agora, sliceSel, onSlice, onArquivo }: Props) {
           </>
         )}
 
-        {r.painel.length > 0 && <Painel r={r} status={st} />}
+        {r.painel && r.painel.length > 0 && <Painel r={r} status={st} />}
       </div>
     </div>
   );
@@ -171,7 +171,7 @@ function Painel({ r, status }: { r: Run; status: string }) {
     <>
       <h2 className="mt-9 mb-3 text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">Painel final</h2>
       <div className="overflow-hidden rounded-lg border bg-card/60">
-        <pre className="overflow-x-auto px-4 py-3 font-mono text-[11.5px] leading-5 text-foreground/80">{"STATUS: " + status + "\n" + r.painel.join("\n")}</pre>
+        <pre className="overflow-x-auto px-4 py-3 font-mono text-[11.5px] leading-5 text-foreground/80">{"STATUS: " + status + "\n" + (r.painel ?? []).join("\n")}</pre>
         {cmd && (
           <div className="flex items-center gap-3 border-t px-4 py-2.5 text-xs">
             <span className="text-muted-foreground">Reverter pro estado antes da run:</span>
