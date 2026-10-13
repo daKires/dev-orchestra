@@ -180,10 +180,10 @@ export function layoutRuns(runs: Run[], snap: Snapshot, agora?: number): LayoutR
     };
     nos.push(card);
 
-    // Expandida: o boolean salvo no card vence; sem valor salvo, a run ATIVA (rodando/aguardando =
-    // sem evento painel) abre sozinha e a terminada fica recolhida. Com `agora`, uma run ativa PARADA
-    // (sem evento ha mais de 10 min) nao abre sozinha.
-    const ativa = (run.status === "rodando" || run.status === "aguardando")
+    // Expandida: o boolean salvo no card vence; sem valor salvo, a run ATIVA (ainda sem o painel final
+    // — inclui a 'pausada' da G3, que nao e' fim) abre sozinha e a terminada fica recolhida. Com `agora`,
+    // uma run ativa PARADA (sem evento ha mais de 10 min) nao abre sozinha.
+    const ativa = !temPainel(run)
       && !(agora !== undefined && run.ultimoEventoTs < agora - RUN_PARADA_MS);
     const expandida = typeof salvos.get(cardId)?.dados?.expandida === "boolean"
       ? salvos.get(cardId)!.dados!.expandida === true
@@ -345,10 +345,10 @@ function cwdChave(cwd: string): string {
   return cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
-// Uma run "tem painel" quando ja' recebeu o evento final: o status deixa de ser de andamento (o
-// evento 'painel' grava o status final em Run.status; ver mutar() em estado.ts).
+// Uma run "tem painel" quando ja' recebeu o evento final: o evento 'painel' preenche Run.painel (que
+// nasce null; ver mutar() em estado.ts). NAO usar o status: 'pausada' (G3) nao e' fim de run.
 function temPainel(r: Run): boolean {
-  return r.status !== "rodando" && r.status !== "aguardando";
+  return r.painel !== null;
 }
 
 /**
@@ -414,13 +414,15 @@ export type ResumoPainel = {
 };
 
 /**
- * Ultimas 200 linhas de uma slice (tipos tool/slice/log), em ordem cronologica. `ferramenta` e' o nome
- * da ferramenta (tool) ou o proprio tipo; `texto` e' o resto (para tool, sem o nome no inicio).
+ * Ultimas 200 linhas de uma slice (tipos tool/slice/log/instrucao/pausa), em ordem cronologica.
+ * `ferramenta` e' o nome da ferramenta (tool), 'instrução'/'pausa' para os eventos da G3, ou o proprio tipo;
+ * `texto` e' o resto (para tool, sem o nome no inicio).
  */
 export function feedDaSlice(run: Run, idx: number): LinhaFeed[] {
-  const itens = run.feed.filter((f) => f.slice === idx && (f.tipo === "tool" || f.tipo === "slice" || f.tipo === "log"));
+  const itens = run.feed.filter((f) => f.slice === idx &&
+    (f.tipo === "tool" || f.tipo === "slice" || f.tipo === "log" || f.tipo === "instrucao" || f.tipo === "pausa"));
   return itens.slice(-200).map((f) => {
-    const ferramenta = f.tipo === "tool" ? f.nome ?? "tool" : f.tipo;
+    const ferramenta = f.tipo === "tool" ? f.nome ?? "tool" : f.tipo === "instrucao" ? "instrução" : f.tipo;
     let texto = f.texto;
     if (f.tipo === "tool" && f.nome && texto.startsWith(f.nome)) texto = texto.slice(f.nome.length).trim();
     return { ts: f.ts, ferramenta, texto, erro: f.erro };

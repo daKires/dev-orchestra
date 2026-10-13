@@ -29,6 +29,8 @@ import {
 import { argsClaude, settingsHooks, textoParaPty, MODELOS_CLAUDE } from "./claude-pty.js";
 // Acoes da run no card (G1/S2): merge local, abrir PR e descartar (modulo puro rodado no mesmo processo).
 import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-run.js";
+// G3: caixa de instrucoes e pausa por slice (arquivos no RUNS_DIR, mesmo padrao do <runId>.cancel).
+import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
@@ -85,6 +87,8 @@ export type Evento = { ts?: number } & (
   | { t: "diff"; arquivo: string; patch: string }
   | { t: "painel"; status: string; branch: string; baseline?: string; linhas: string[] }
   | { t: "metrica"; slice: number; iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente?: number; tokensIn: number; tokensOut: number; custoUSD: number; ms?: number }
+  | { t: "instrucao"; slice: number; texto: string; descartada?: boolean }
+  | { t: "pausa"; slice: number; estado: "pausada" | "retomada"; motivo?: string }
   | { t: "log"; texto: string }
 );
 
@@ -237,6 +241,8 @@ export function linhaDe(ev: Evento): string {
     case "diff": return "";
     case "painel": return "";
     case "metrica": return `[T${ev.slice}] metrica: ${ev.iteracoes} iter, ${ev.passouDePrimeira ? "1a" : "reparo"}, teste:${ev.tocouNoTeste}, amb:${ev.falhasAmbiente ?? 0}, ${ev.tokensIn}+${ev.tokensOut} tok, $ ${ev.custoUSD.toFixed(4)}`;
+    case "instrucao": return `[T${ev.slice}] instrucao: ${ev.texto}${ev.descartada ? " (descartada)" : ""}`;
+    case "pausa": return `[T${ev.slice}] pausa ${ev.estado}${ev.motivo ? ": " + ev.motivo : ""}`;
     case "log": return ev.texto;
   }
 }
@@ -393,7 +399,7 @@ function podar(): void {
   const limite = Date.now() - PODA_MS;
   try {
     for (const f of fs.readdirSync(RUNS_DIR)) {
-      if (!f.endsWith(".jsonl") && !f.endsWith(".cancel")) continue;
+      if (!f.endsWith(".jsonl") && !f.endsWith(".cancel") && !f.endsWith(".pausa")) continue;
       const p = path.join(RUNS_DIR, f);
       try { if (fs.statSync(p).mtimeMs < limite) fs.unlinkSync(p); } catch {}
     }
@@ -1601,6 +1607,38 @@ function criarServidor(): http.Server {
       res.writeHead(r.ok ? 200 : 409, { "Content-Type": "application/json" });
       res.end(JSON.stringify(r));
       return;
+    }
+    // G3: instruir e pausar a slice RODANDO pelo card do canvas (POST /runs/instrucao e /runs/pausa).
+    // Ordem: drena o corpo -> X-Hermes -> JSON -> slice inteiro >= 1 -> validarAcaoSlice -> acao/texto.
+    if (caminho === "/runs/instrucao" || caminho === "/runs/pausa") {
+      const corpo = await lerCorpo(req, LIMITE_BODY);
+      if (corpo === null) { res.writeHead(400); res.end(); return; }
+      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
+      let j: any = null;
+      try { j = JSON.parse(corpo); } catch {}
+      if (!j || typeof j !== "object") { res.writeHead(400); res.end(); return; }
+      const slice = Number(j.slice);
+      if (!Number.isInteger(slice) || slice < 1) { res.writeHead(400); res.end(); return; }
+      const id = new URL(url, "http://x").searchParams.get("run") || "";
+      if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return; }
+      const cancelado = fs.existsSync(arquivoCancel(id));
+      const erro = validarAcaoSlice(eventosDaRun(id), slice, cancelado);
+      if (erro) { responderTexto(res, erro.status, erro.erro); return; }
+      if (caminho === "/runs/instrucao") {
+        const e = validarTexto(j.texto, true);
+        if (e) { responderTexto(res, 400, e); return; }
+        gravarInstrucao(RUNS_DIR, id, slice, j.texto.trim());
+        res.writeHead(204); res.end(); return;
+      }
+      const acao = typeof j.acao === "string" ? j.acao : "";
+      if (acao === "pausar") { pausarSlice(RUNS_DIR, id, slice); res.writeHead(204); res.end(); return; }
+      if (acao === "retomar") {
+        const e = validarTexto(j.texto, false);
+        if (e) { responderTexto(res, 400, e); return; }
+        retomarSlice(RUNS_DIR, id, slice, typeof j.texto === "string" ? j.texto.trim() : undefined);
+        res.writeHead(204); res.end(); return;
+      }
+      res.writeHead(400); res.end(); return;
     }
     if (url === "/nova-feature") {
       if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
