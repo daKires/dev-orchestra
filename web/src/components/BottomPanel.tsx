@@ -38,7 +38,7 @@ function Contador({ children, tom }: { children: React.ReactNode; tom: string })
   return <span className={cn("ml-1.5 rounded px-1 font-mono text-[10px] tracking-normal", tom)}>{children}</span>;
 }
 
-function Feed({ r, sliceSel, onSlice }: Props) {
+export function Feed({ r, sliceSel, onSlice }: Props) {
   const [busca, setBusca] = useState("");
   const [soErros, setSoErros] = useState(false);
   const caixa = useRef<HTMLDivElement>(null);
@@ -88,7 +88,7 @@ function Feed({ r, sliceSel, onSlice }: Props) {
   );
 }
 
-function Gate({ r }: { r: Run }) {
+export function Gate({ r }: { r: Run }) {
   if (!r.gate.length) return <p className="px-3 py-2 font-mono text-[11.5px] text-muted-foreground">O gate roda depois de todas as slices{r.gateCmds.length ? `: ${r.gateCmds.length} comando(s)` : ""}.</p>;
   // so' o estado final de cada (cmd, tentativa)
   const finais = r.gate.filter((g, i) => !r.gate.slice(i + 1).some((h) => h.cmd === g.cmd && h.tentativa === g.tentativa));
@@ -108,7 +108,7 @@ function Gate({ r }: { r: Run }) {
   );
 }
 
-function Metricas({ r }: { r: Run }) {
+export function Metricas({ r }: { r: Run }) {
   if (!r.metricas.length) return <p className="px-3 py-2 font-mono text-[11.5px] text-muted-foreground">As métricas aparecem quando cada slice termina.</p>;
   const nome = (i: number) => r.slices.find((s) => s.idx === i)?.tarefa ?? (i > r.plano.length ? "reparo do gate" : "");
   return (
