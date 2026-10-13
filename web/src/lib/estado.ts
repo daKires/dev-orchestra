@@ -68,7 +68,7 @@ function copiar(r: Run): Run {
 }
 
 // Worktree do Claude Code (<proj>/.claude/worktrees/<nome>) conta como o proprio projeto.
-function raiz(cwd: string): string {
+export function raiz(cwd: string): string {
   return cwd.replace(/[\\/]+$/, "").replace(/[\\/]\.claude[\\/]worktrees[\\/][^\\/]+$/i, "");
 }
 
