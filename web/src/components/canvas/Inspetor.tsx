@@ -1,10 +1,5 @@
-// Inspetor do canvas no estilo Castor (F1.5 - S3): painel de propriedades do painel direito da tela
-// unida (nao e' mais flutuante: ocupa a largura e a altura do <aside> que o hospeda). Abre quando ha
-// EXATAMENTE 1 no' INSPECIONAVEL (ou 1 aresta) selecionado e mostra os campos do tipo; com 2+ itens
-// vira o painel de acoes (Agrupar / Apagar). Nos automaticos (run, worker, arquivo, agente,
-// regiao/fluxo) nao abrem o painel (F2.1). Toda a logica de edicao vem pronta do Canvas (upsert via
-// enviar) — aqui so' montamos os campos e commitamos no blur/Enter (a cor e' imediata). UI em PT-BR,
-// so' tema escuro.
+// Inspetor do canvas no painel direito: campos do no' inspecionavel (ou aresta) selecionado; com 2+ itens,
+// Agrupar/Apagar. A edicao em si vem pronta do Canvas.
 import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { X } from "lucide-react";
 import {

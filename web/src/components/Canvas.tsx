@@ -181,7 +181,6 @@ function lerBase64(arquivo: Blob): Promise<string> {
   });
 }
 
-// Controle de zoom proprio (canto inferior direito): −  N%  +  Centralizar (na run ativa).
 
 function ControleZoom({ temRun, onCentralizar }: { temRun: boolean; onCentralizar: () => void }) {
   const { zoom } = useViewport();
@@ -212,11 +211,9 @@ function ControleZoom({ temRun, onCentralizar }: { temRun: boolean; onCentraliza
   );
 }
 
-// Painel direito (tela unida): aberto/recolhido persistido em localStorage 'hermes.painel'.
 
 const CHAVE_PAINEL = "hermes.painel";
 
-/** Le o estado do painel (padrao aberto); storage indisponivel/ invalido = aberto. */
 function lerPainel(): boolean {
   try {
     const s = localStorage.getItem(CHAVE_PAINEL);
@@ -226,28 +223,21 @@ function lerPainel(): boolean {
   }
 }
 
-/** Grava o estado do painel (falha de storage = so' nao persiste). */
 function gravarPainel(aberto: boolean) {
   try { localStorage.setItem(CHAVE_PAINEL, JSON.stringify(aberto)); } catch {}
 }
 
 // Canvas
 
-/** Props do Canvas (tela unida Run A). */
 export type CanvasProps = {
   projeto: string;
   onNovaFeature?: () => void;
-  /** Avisa quando a run mostrada no painel direito muda (id ou null sem run). */
   onRunSel?: (runId: string | null) => void;
 };
 
-/** Alca imperativa do Canvas (usada pela tela unida: sidebar, pool, centralizar). */
 export type CanvasHandle = {
-  /** Enquadra um no' (fitView com folga 0.4 e maxZoom 1). */
   focar(noId: string): void;
-  /** Abre a run no canvas (expande o card e centraliza nela). */
   abrirRun(runId: string): void;
-  /** Mostra a run no painel direito com a aba Diff aberta no arquivo. */
   abrirDiff(runId: string, arquivo: string): void;
 };
 
@@ -284,11 +274,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
   const [novoAgenteAberto, setNovoAgenteAberto] = useState(false);
   const [novoNavegadorAberto, setNovoNavegadorAberto] = useState(false);
-  // Painel direito (tela unida): aberto/recolhido (localStorage 'hermes.painel').
   const [painel, setPainel] = useState<boolean>(lerPainel);
-  // Run mostrada no painel direito: a da selecao, a pedida explicitamente (abrirDiff) ou a ativa.
   const [runSelId, setRunSelId] = useState<string | null>(null);
-  // Aba do PainelRun e arquivo do diff que o card de arquivo pediu (abrirDiff do RunsCtx).
   const [abaPedida, setAbaPedida] = useState<{ runId: string; aba: string } | null>(null);
   const [arquivoPedido, setArquivoPedido] = useState<{ runId: string; arquivo: string } | null>(null);
   // Agentes de planejador JA' persistidos uma vez (nao re-upsertamos a cada render).
@@ -300,7 +287,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     [runsEstado, projeto],
   );
 
-  // Run ativa do projeto (a rodando mais recente; senao a mais recente; sem run = null).
   const runAtivaProjeto = useMemo(() => runAtiva(runsProjeto, agora), [runsProjeto, agora]);
 
   // Modelo exibido = snapshot mesclado com o layout das runs + o layout dos agentes (mesclarComLayout):
@@ -872,16 +858,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const nosSelecionados = modelo.nos.filter((n) => idsNos.has(n.id));
   const arestasSelecionadas = modelo.arestas.filter((a) => idsArestas.has(a.id));
 
-  // --- painel direito (tela unida): Inspetor pela selecao x PainelRun pela run mostrada ---
-  // Inspetor quando a selecao e' UM no' INSPECIONAVEL, uma aresta ou 2+ nos; senao o painel da run.
   const inspecionaveis = nosSelecionados.filter(inspecionavel);
   const usaInspetor = inspecionaveis.length > 0 || arestasSelecionadas.length > 0 || nosSelecionados.length >= 2;
-  // Run mostrada no painel: a do no' selecionado (runDaSelecao) > a pedida (abrirDiff/abrirRun) > a ativa.
   const runDaSelId = runDaSelecao(nosSelecionados);
   const runDaSelecaoAqui = runDaSelId ? runsProjeto.find((r) => r.id === runDaSelId) ?? null : null;
   const runPedida = runSelId ? runsProjeto.find((r) => r.id === runSelId) ?? null : null;
   const runMostrada = runDaSelecaoAqui ?? runPedida ?? runAtivaProjeto;
-  // Aba/arquivo valem so' pra run mostrada (trocar de run volta pra aba Feed).
   const abaPainel = runMostrada && abaPedida?.runId === runMostrada.id ? abaPedida.aba : "feed";
   const arquivoDiff = runMostrada && arquivoPedido?.runId === runMostrada.id ? arquivoPedido.arquivo : null;
   const onRunSelRef = useRef(onRunSel);
@@ -890,14 +872,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   // Avisa o dono da tela quando a run mostrada no painel muda (o relogio nao redispara: o id e' estavel).
   useEffect(() => { onRunSelRef.current?.(runMostrada?.id ?? null); }, [runMostrada?.id]);
 
-  /** Recolhe/abre o painel direito (persistido em localStorage 'hermes.painel'). */
   const alternarPainel = () => {
     const aberto = !painel;
     setPainel(aberto);
     gravarPainel(aberto);
   };
 
-  /** Centralizar (ControleZoom): abre a run ativa do projeto no canvas. */
   const centralizarRun = () => {
     if (runAtivaProjeto) abrirRun(runAtivaProjeto.id);
   };
@@ -951,12 +931,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     if (!painel) { setPainel(true); gravarPainel(true); }
   };
 
-  /** Centraliza a vista num no' (fitView com folga 0.4 e maxZoom 1). */
   const focar = (noId: string) => {
     void instancia.current?.fitView({ nodes: [{ id: noId }], maxZoom: 1, padding: 0.4 });
   };
 
-  // Alca imperativa (tela unida): focar um no', abrir a run e abrir o diff de um arquivo.
   useImperativeHandle(ref, () => ({ focar, abrirRun, abrirDiff }), [abrirRun, abrirDiff]);
 
   /** ✕ do card do agente: abre o dialog de ocultar/encerrar. */
