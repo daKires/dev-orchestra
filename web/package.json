@@ -25,7 +25,6 @@
     "test:g3": "node --experimental-strip-types --test src/lib/g3.test.ts",
     "test:unido": "node --experimental-strip-types --test src/lib/unido.test.ts",
     "test:fases": "node --experimental-strip-types --test src/lib/fases.test.ts",
-    "pretest:limpeza": "node scripts/limpar-vista-antiga.mjs",
     "test:limpeza": "node --experimental-strip-types --test src/lib/limpeza.test.ts"
   },
   "dependencies": {
