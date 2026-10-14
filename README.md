@@ -52,6 +52,8 @@ Inside any git project:
 | `hermes` | Opens only the dashboard |
 
 Desktop app: `npm run desktop:dist` builds `release\Hermes Setup *.exe` (unsigned; SmartScreen will warn).
+If it fails with `electron.exe` not found, npm skipped the Electron binary download: run
+`node node_modules/electron/install.js` and try again.
 
 ## Configuration
 
