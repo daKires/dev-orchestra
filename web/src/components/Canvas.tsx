@@ -37,7 +37,10 @@ import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContex
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
 import { AgentesCtx, NoAgente } from "./canvas/Agente";
 import { NoClaude } from "./canvas/Claude";
-import { RunsCtx, nodeTypes as runNodeTypes, type Vista } from "./canvas/Run";
+import { RunsCtx, nodeTypes as runNodeTypes } from "./canvas/Run";
+import { nodeTypes as pedidoNodeTypes } from "./canvas/Pedido";
+import { nodeTypes as gateNodeTypes } from "./canvas/Gate";
+import { nodeTypes as diffNodeTypes } from "./canvas/DiffRun";
 import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
 import { ProjetoCtx, nodeTypes as navegadorNodeTypes } from "./canvas/Navegador";
 import { nodeTypes as painelNodeTypes } from "./canvas/Painel";
@@ -63,11 +66,15 @@ function NoAgenteTipo(props: NodeProps) {
 }
 
 // nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b, F4 S6) + run/worker/arquivo
-// (S5c) + o explorador de arquivos (F3 S5) + o navegador (F4 S6) + o painel de runs (G1 S4).
+// (S5c) + pedido/gate/diff das fases da run (Run B) + o explorador de arquivos (F3 S5) + o navegador
+// (F4 S6) + o painel de runs (G1 S4).
 const nodeTypes = {
   ...nosNodeTypes,
   agente: NoAgenteTipo,
   ...runNodeTypes,
+  ...pedidoNodeTypes,
+  ...gateNodeTypes,
+  ...diffNodeTypes,
   ...exploradorNodeTypes,
   ...navegadorNodeTypes,
   ...painelNodeTypes,
@@ -76,7 +83,7 @@ const nodeTypes = {
 // Modelo (No/Aresta) <-> react-flow (nodes/edges)
 
 // Tipos que tem render proprio; os demais caem no card de nota como fallback.
-const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "explorador", "navegador", "painel"]);
+const TEM_CARD = new Set<TipoNo>(["nota", "imagem", "forma", "grupo", "texto", "agente", "run", "worker", "arquivo", "pedido", "gate", "diff", "explorador", "navegador", "painel"]);
 const tipoVisual = (t: TipoNo): string => (TEM_CARD.has(t) ? t : "nota");
 
 // Ferramentas que criam um no' por clique/arrasto no pane (as demais so' mudam o modo do canvas).
@@ -182,7 +189,10 @@ function lerBase64(arquivo: Blob): Promise<string> {
 }
 
 
-function ControleZoom({ temRun, onCentralizar }: { temRun: boolean; onCentralizar: () => void }) {
+// Controles de zoom (Run B): −/+/% e o botao "Ajustar" (fitView em TODOS os nos, padding 0.2,
+// maxZoom 1 — habilitado quando ha nos). O `bottom` fica acima da barra de ferramentas inferior
+// (bottom-4 + ~48px de altura) pra o painel nunca ser coberto por ela.
+function ControleZoom({ temNos, onAjustar }: { temNos: boolean; onAjustar: () => void }) {
   const { zoom } = useViewport();
   const { zoomTo } = useReactFlow();
   const pct = Math.round(limitarZoom(zoom) * 100);
@@ -191,21 +201,21 @@ function ControleZoom({ temRun, onCentralizar }: { temRun: boolean; onCentraliza
     <Panel
       position="bottom-right"
       className="flex items-center gap-0.5 px-1 py-0.5"
-      style={{ background: "#222", border: "1px solid #303030", borderRadius: 8 }}
+      style={{ background: "#222", border: "1px solid #303030", borderRadius: 8, bottom: 72 }}
     >
       <button type="button" title="Diminuir zoom" onClick={() => passo(-0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>−</button>
       <span className="w-10 text-center tabular-nums" style={{ fontSize: 12, color: "#b8b8b8" }}>{pct}%</span>
       <button type="button" title="Aumentar zoom" onClick={() => passo(0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>+</button>
       <button
         type="button"
-        title="Centralizar na run"
-        aria-label="Centralizar"
-        disabled={!temRun}
-        onClick={onCentralizar}
+        title="Ajustar (enquadrar tudo)"
+        aria-label="Ajustar"
+        disabled={!temNos}
+        onClick={onAjustar}
         className="rounded px-1.5 py-1 text-xs hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         style={{ color: "#b8b8b8" }}
       >
-        Centralizar
+        Ajustar
       </button>
     </Panel>
   );
@@ -293,12 +303,19 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   // os nos ocultos ficam de fora, o automatico salvo usa a versao do layout e o conteudo do usuario
   // segue o salvo (nada de duplicar). As arestas do layout entram so' se forem novas (as do snapshot ganham).
   const modelo = useMemo<Snapshot>(() => {
-    const lr = layoutRuns(runsProjeto, estado, Date.now());
-    const la = layoutAgentes(agentes, estado);
     // Arestas planejador -> run (G2/S4b): o planejador roda no worktree e dispara a run naquele cwd.
     const plans = agentes.filter((a) => a.origem === "planejador").map((a) => ({ agId: `ag:${a.id}`, cwd: a.cwd }));
+    // O layout das runs recebe os planejadores: cada um vai pro slot da fase 1 da run do cwd dele.
+    const lr = layoutRuns(runsProjeto, estado, Date.now(), plans);
+    const la = layoutAgentes(agentes, estado);
     const ap = arestasPlanejadorRun(plans, runsProjeto);
-    const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]);
+    // Planejadores posicionados pela fase 1 da run do cwd deles (lr.agentes): por cima dos nos
+    // mesclados, troca so' x/y/pai do no' `ag:<id>` (w/h seguem os do card do agente).
+    const posAgentes = new Map(lr.agentes.map((a) => [a.id, a]));
+    const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]).map((n) => {
+      const a = posAgentes.get(n.id);
+      return a ? { ...n, x: a.x, y: a.y, pai: a.pai } : n;
+    });
     const idsNos = new Set(nos.map((n) => n.id));
     const idsArestas = new Set(estado.arestas.map((a) => a.id));
     const arestasExtras: Aresta[] = [...lr.arestas, ...ap]
@@ -878,8 +895,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     gravarPainel(aberto);
   };
 
-  const centralizarRun = () => {
-    if (runAtivaProjeto) abrirRun(runAtivaProjeto.id);
+  /** "Ajustar" do ControleZoom: enquadra TODOS os nos do canvas (padding 0.2, maxZoom 1). */
+  const ajustarVista = () => {
+    void instancia.current?.fitView({ maxZoom: 1, padding: 0.2 });
   };
 
   // --- F2 S5d: controles do agente (ocultar/encerrar/reabrir), expandir run e diff ---
@@ -894,12 +912,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const alternarRun = (runId: string) => {
     const no = buscarNo(`run:${runId}`);
     if (no) upsertNo(no, { expandida: no.dados.expandida !== true });
-  };
-
-  /** Arvore|Fluxo do card de run (G1/S3): grava `dados.vista` do no' run:<id> (mesmo upsert do expandir). */
-  const trocarVista = (runId: string, vista: Vista) => {
-    const no = buscarNo(`run:${runId}`);
-    if (no) upsertNo(no, { vista });
   };
 
   /** Clique na slice (G1/S3): alterna `dados.aberta` do no' worker:<id>:<idx> (card ao vivo x compacto). */
@@ -928,6 +940,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     setAbaPedida({ runId, aba: "diff" });
     setArquivoPedido({ runId, arquivo });
     // Painel recolhido: abre pra que a aba Diff fique visivel.
+    if (!painel) { setPainel(true); gravarPainel(true); }
+  };
+
+  /**
+   * abrirDetalhes (RunsCtx): o painel direito passa a mostrar a run pedida com a aba Detalhes aberta
+   * (usada pelo no' Commit da pipeline do card da run).
+   */
+  const abrirDetalhes = (runId: string) => {
+    setRunSelId(runId);
+    setAbaPedida({ runId, aba: "detalhes" });
     if (!painel) { setPainel(true); gravarPainel(true); }
   };
 
@@ -1052,10 +1074,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     runs: runsEstado.runs,
     agora,
     alternar: alternarRun,
-    vista: trocarVista,
     alternarSlice,
     abrirDiff,
     abrirRun,
+    focar,
+    abrirDetalhes,
   };
 
   return (
@@ -1113,7 +1136,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
           className="h-full w-full"
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#303030" />
-          <ControleZoom temRun={!!runAtivaProjeto} onCentralizar={centralizarRun} />
+          <ControleZoom temNos={modelo.nos.length > 0} onAjustar={ajustarVista} />
           {agentesOcultos.length > 0 && (
             <Panel position="top-right">
               <DropdownMenu>

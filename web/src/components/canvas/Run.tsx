@@ -1,63 +1,71 @@
-// Cards de run/worker/arquivo no canvas (F2 - S5c; G1 - S3): tres nodeTypes do xyflow que leem os
-// dados do no' (dados.runId/idx/arquivo) e o estado das runs de um contexto (RunsCtx) proprio, exportado
-// daqui pra nao mexer no CanvasCtx dos outros cards. Na vista Arvore (G1) a slice vira um card ao vivo
-// com o feedDaSlice e o card da run ganha o seletor Arvore|Fluxo (as acoes da run foram pro PainelRun).
+// Cards de run/worker/arquivo no canvas (F2 - S5c; G1 - S3; Run B - S3): tres nodeTypes do xyflow que
+// leem os dados do no' (dados.runId/idx/arquivo) e o estado das runs de um contexto (RunsCtx) proprio,
+// exportado daqui pra nao mexer no CanvasCtx dos outros cards. A slice vira um card ao vivo com o
+// feedDaSlice (as acoes da run foram pro PainelRun). O card da run mostra a pipeline das fases
+// (pipelineDaRun) com o clique navegando pros cards (pedido/plano/slice/gate/commit).
 // Tambem exporta ModalDiff, que abre o DiffView existente num dialog. UI em PT-BR, so' tema escuro.
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { FileCode } from "lucide-react";
 import { kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
 import { fmtDur, fmtHora, fmtUSD, tomStatus } from "@/lib/formato";
-import { feedDaSlice, linhasDoWorker, type LinhaFeed } from "@/lib/layout";
+import { feedDaSlice, pipelineDaRun, type LinhaFeed, type StatusPipeline } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
 import { Alcas } from "./Nos";
+import { AgentesCtx } from "./Agente";
 import { ModalArquivo } from "./Explorador";
 import type { No } from "../../../../canvas.ts";
 
-// Vista da arvore: 'arvore' (padrao, cards de slice) ou 'fluxo' (fluxograma historico).
-export type Vista = "arvore" | "fluxo";
-
-// Contexto (S5c/G1): runs por id + relogio + acoes do canvas (expansao, vista, slice aberta e diff)
+// Contexto (S5c/G1/Run B): runs por id + relogio + acoes do canvas (expansao, slice aberta, diff,
+// foco num no' e abertura da aba Detalhes do painel).
 
 export const RunsCtx = createContext<{
   runs: Record<string, Run>;
   agora: number;
   alternar: (runId: string) => void;
-  vista: (runId: string, vista: Vista) => void;
   alternarSlice: (runId: string, idx: number) => void;
   abrirDiff: (runId: string, arquivo: string) => void;
   /** Abre a run no canvas: grava expandida=true no card run:<id> e centraliza nele (painel Runs). */
   abrirRun: (runId: string) => void;
+  /** Centraliza a vista num no' do canvas (fitView) pelo id. */
+  focar: (noId: string) => void;
+  /** Mostra a run no painel direito com a aba Detalhes aberta. */
+  abrirDetalhes: (runId: string) => void;
 }>({
   runs: {}, agora: Date.now(),
-  alternar: () => {}, vista: () => {}, alternarSlice: () => {}, abrirDiff: () => {}, abrirRun: () => {},
+  alternar: () => {}, alternarSlice: () => {}, abrirDiff: () => {}, abrirRun: () => {},
+  focar: () => {}, abrirDetalhes: () => {},
 });
 
 // Pecas comuns (tokens do Castor, como os outros cards)
 
-const FUNDO = "#1c1c1c";
-const BORDA = "#2c2c2c";
-const CABECALHO = "#222";
-const CINZA = "#858585";
-const AZUL = "#74aaff";
-const VERDE = "#5fd29a";
-const AMARELO = "#d9b45a";
-const VERMELHO = "#ff7b72";
-const FONTE = "400 12px/1.45 ui-sans-serif, system-ui, sans-serif";
-const MONO = "400 12px/1.5 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-const TITULO = "500 12px/1 ui-sans-serif, system-ui, sans-serif";
-const BOTAO = "500 11px/1 ui-sans-serif, system-ui, sans-serif";
+export const FUNDO = "#1c1c1c";
+export const BORDA = "#2c2c2c";
+export const CABECALHO = "#222";
+export const CINZA = "#858585";
+export const AZUL = "#74aaff";
+export const VERDE = "#5fd29a";
+export const AMARELO = "#d9b45a";
+export const VERMELHO = "#ff7b72";
+export const FONTE = "400 12px/1.45 ui-sans-serif, system-ui, sans-serif";
+export const MONO = "400 12px/1.5 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export const TITULO = "500 12px/1 ui-sans-serif, system-ui, sans-serif";
+export const BOTAO = "500 11px/1 ui-sans-serif, system-ui, sans-serif";
 
 /** Card #1c1c1c, borda #2c2c2c, raio 12 (mesmo chrome dos outros nos do canvas). */
-const moldura = { background: FUNDO, border: `1px solid ${BORDA}`, borderRadius: 12 } as const;
+export const moldura = { background: FUNDO, border: `1px solid ${BORDA}`, borderRadius: 12 } as const;
 
-const lerDados = (data: unknown): No => (data as { no: No }).no;
-const texto = (v: unknown): string => (typeof v === "string" ? v : "");
+export const lerDados = (data: unknown): No => (data as { no: No }).no;
+export const texto = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** Cor da slice pelo status (mesma regra do fluxo): rodando azul, ok verde, ruim vermelho, fila cinza. */
+/** Chave canonica do cwd (mesma normalizacao do layout): separadores '/', sem barra final, minusculo. */
+export const cwdChave = (cwd: string): string =>
+  cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/** Cor da slice pelo status (mesma regra do layout): rodando azul, pausada amarelo, ok verde, ruim vermelho, fila cinza. */
 function corDaSlice(status: string): string {
   if (status === "rodando") return AZUL;
   if (status === "pausada") return AMARELO;
@@ -71,22 +79,18 @@ const corFerramenta = (ferramenta: string): string =>
   ferramenta === "log" ? CINZA : ferramenta === "slice" ? VERDE : AZUL;
 
 /** So' o nome base do arquivo (sem pastas). */
-const nomeDoArquivo = (caminho: string): string => caminho.split(/[\\/]+/).filter(Boolean).pop() ?? caminho;
-
-/** Linha "rotulo .......... valor" do corpo do card de run. */
-function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="flex-1 truncate" style={{ color: CINZA }}>{rotulo}</span>
-      <span className="font-mono tabular-nums">{valor}</span>
-    </div>
-  );
-}
+export const nomeDoArquivo = (caminho: string): string => caminho.split(/[\\/]+/).filter(Boolean).pop() ?? caminho;
 
 // nodeTypes
 
+/** Cor da pilula do pipeline por status (mesmas cores dos cards/layout). */
+const COR_PIPELINE: Record<StatusPipeline, string> = {
+  fila: CINZA, rodando: AZUL, ok: VERDE, falha: VERMELHO, pausada: AMARELO,
+};
+
 function NoRun({ data, selected }: NodeProps) {
-  const { runs, agora, alternar, vista } = useContext(RunsCtx);
+  const { runs, agora, alternar, alternarSlice, focar, abrirDetalhes } = useContext(RunsCtx);
+  const { agentes } = useContext(AgentesCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const run = runs[runId];
@@ -109,7 +113,6 @@ function NoRun({ data, selected }: NodeProps) {
   }, [gateStatus]);
 
   const expandida = no.dados.expandida === true;
-  const vistaAtual: Vista = no.dados.vista === "fluxo" ? "fluxo" : "arvore";
 
   if (!run) {
     return (
@@ -125,10 +128,27 @@ function NoRun({ data, selected }: NodeProps) {
   const k = kpis(run);
   const fim = st === "rodando" ? agora : run.ultimoEventoTs;
   const dur = run.inicioTs ? fmtDur(Math.max(0, fim - run.inicioTs)) : "";
+  const pipe = pipelineDaRun(run);
+  // Planejador deste cwd (fase 1): o clique no "Plano" foca o card dele (`ag:<id>`).
+  const planejador = agentes.find((a) => a.origem === "planejador" && cwdChave(a.cwd) === cwdChave(run.cwd));
+
+  /** Clique numa pilula do pipeline: foca o card da fase (ou abre a aba Detalhes, no commit). */
+  const aoClicarPipeline = (id: string) => {
+    if (id === "pedido") focar(`pedido:${runId}`);
+    else if (id === "plano") focar(planejador ? `ag:${planejador.id}` : `pedido:${runId}`);
+    else if (id === "gate") focar(`gate:${runId}`);
+    else if (id === "commit") abrirDetalhes(runId);
+    else if (/^s\d+$/.test(id)) {
+      const idx = Number(id.slice(1));
+      alternarSlice(runId, idx);
+      focar(`worker:${runId}:${idx}`);
+    }
+  };
+
   return (
     <>
       <div
-        className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", flash && "cv-gate-ok")}
+        className={cn("relative flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", st === "rodando" && "cv-rodando", flash && "cv-gate-ok")}
         style={moldura}
       >
         <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
@@ -141,24 +161,31 @@ function NoRun({ data, selected }: NodeProps) {
             {expandida ? "Recolher" : "Expandir"}
           </button>
         </header>
-        <div className="flex min-h-0 flex-1 flex-col justify-center gap-1 px-2.5 py-1.5" style={{ font: FONTE, color: "#dedee3" }}>
-          <Campo rotulo="Slices" valor={`${p.feitas}/${p.total}`} />
-          <Campo rotulo="Custo" valor={k.n ? fmtUSD(k.custo) : "—"} />
-          <Campo rotulo="Duração" valor={dur || "—"} />
-          <div className="flex items-center gap-1.5">
-            <StatusIcon status={st} />
-            <span className="truncate">{tomStatus(st).rotulo}</span>
+        <div className="flex min-h-0 flex-1 flex-col justify-center gap-1.5 px-2.5 py-1.5" style={{ font: FONTE, color: "#dedee3" }}>
+          <div className="flex flex-wrap items-center gap-1">
+            {pipe.map((n, i) => {
+              const cor = COR_PIPELINE[n.status];
+              return (
+                <Fragment key={n.id}>
+                  {i > 0 && <span className="shrink-0" style={{ color: CINZA, font: BOTAO }}>→</span>}
+                  <button
+                    type="button" title={n.rotulo}
+                    className="nodrag shrink-0 rounded-full px-1.5 py-0.5 hover:brightness-125"
+                    style={{ background: "#191919", border: `1px solid ${cor}`, color: cor, font: BOTAO }}
+                    onClick={() => aoClicarPipeline(n.id)}
+                  >
+                    {n.rotulo}
+                  </button>
+                </Fragment>
+              );
+            })}
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1 px-2 py-1" style={{ borderTop: `1px solid ${BORDA}` }}>
-          <div className="flex items-center gap-0.5">
-            {(["arvore", "fluxo"] as const).map((v) => (
-              <button key={v} type="button" className="nodrag rounded px-1.5 py-0.5 hover:bg-white/10"
-                style={{ color: vistaAtual === v ? "#fff" : "#b8b8b8", background: vistaAtual === v ? "#333" : "transparent", font: BOTAO }}
-                onClick={() => vista(runId, v)}>
-                {v === "arvore" ? "Árvore" : "Fluxo"}
-              </button>
-            ))}
+          <div className="flex items-center gap-1.5 font-mono tabular-nums" style={{ color: CINZA }}>
+            <span title="Slices">{p.feitas}/{p.total}</span>
+            <span>·</span>
+            <span title="Custo">{k.n ? fmtUSD(k.custo) : "—"}</span>
+            <span>·</span>
+            <span title="Duração">{dur || "—"}</span>
           </div>
         </div>
         <Alcas />
@@ -167,16 +194,13 @@ function NoRun({ data, selected }: NodeProps) {
   );
 }
 
-/** Worker: na vista Arvore vira card compacto/ao vivo da slice; na vista Fluxo, o mini-terminal. */
+/** Worker: card compacto (fechado) ou ao vivo (aberto) da slice, seguindo `dados.aberta` do layout. */
 function NoWorker({ data, selected }: NodeProps) {
   const { runs, alternarSlice } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const idx = typeof no.dados.idx === "number" ? no.dados.idx : 0;
   const run = runs[runId];
-  // A presenca de `dados.aberta` marca a vista Arvore (o layout so' a escreve nessa vista).
-  const emArvore = typeof no.dados.aberta === "boolean";
-  const [aberto, setAberto] = useState(false);
   const [campo, setCampo] = useState("");
   const [pausando, setPausando] = useState(false);
   const [pendentes, setPendentes] = useState<string[]>([]);
@@ -188,14 +212,14 @@ function NoWorker({ data, selected }: NodeProps) {
   const tarefa = slice?.tarefa ?? run?.plano[idx - 1]?.tarefa ?? "";
   const cor = corDaSlice(status);
   const linhas = run ? feedDaSlice(run, idx) : [];
-  // Arvore: aberta segue dados.aberta (default do layout). Fluxo: recolhe sozinha quando ok.
-  const aberta = emArvore ? no.dados.aberta === true : !(status === "ok" && !aberto);
+  // Aberta/fechada segue `dados.aberta` (o layout abre sozinha a slice rodando).
+  const aberta = no.dados.aberta === true;
 
   // Auto-scroll do feed: desce pro fim quando chega linha nova, mas PARA se o usuario rolou pra cima.
   useEffect(() => {
     const el = corpo.current;
     if (el && noFim.current) el.scrollTop = el.scrollHeight;
-  }, [linhas.length, aberta, emArvore]);
+  }, [linhas.length, aberta]);
 
   const aoRolar = () => {
     const el = corpo.current;
@@ -256,12 +280,12 @@ function NoWorker({ data, selected }: NodeProps) {
     }
   };
 
-  if (emArvore && !aberta) {
+  if (!aberta) {
     // Compacto: 'S<idx> · <tarefa>' + status colorido + ultima linha do feed. Clique alterna aberta.
     const ultima = linhas.length ? linhas[linhas.length - 1] : undefined;
     return (
       <div
-        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso", slice?.pausada && "cv-pausada")}
+        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-rodando", slice?.pausada && "cv-pausada")}
         style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
       >
         <header className="flex shrink-0 cursor-pointer items-center gap-1.5 px-2 py-1.5"
@@ -279,86 +303,60 @@ function NoWorker({ data, selected }: NodeProps) {
     );
   }
 
-  if (emArvore) {
-    // Aberto: card ao vivo com feedDaSlice (hora, ferramenta colorida, texto; erro em vermelho).
-    const m = slice?.metrica;
-    return (
-      <div
-        className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-pulso", slice?.pausada && "cv-pausada")}
-        style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
-      >
-        <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
-          style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
-          <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
-          <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
-          {slice?.pausada ? <span className="shrink-0" style={{ color: AMARELO }}>pausada</span> : null}
-          {m ? <span className="shrink-0 font-mono tabular-nums" style={{ color: CINZA }}>{fmtUSD(m.custoUSD)} · {m.iteracoes} it.</span> : null}
-          <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
-            style={{ color: "#b8b8b8", font: BOTAO }}
-            onClick={() => alternarSlice(runId, idx)}>
-            Recolher
-          </button>
-        </header>
-        <div ref={corpo} onScroll={aoRolar}
-          className="nodrag nowheel min-h-0 flex-1 overflow-auto px-2 py-1.5" style={{ font: MONO }}>
-          {linhas.length === 0 ? (
-            <p style={{ color: CINZA }}>aguardando…</p>
-          ) : linhas.map((l: LinhaFeed, i) => (
-            <div key={i} className="grid items-start gap-x-2" style={{ gridTemplateColumns: "auto auto 1fr" }}>
-              <span className="tabular-nums" style={{ color: CINZA }}>{fmtHora(l.ts)}</span>
-              <span className="truncate" style={{ color: corFerramenta(l.ferramenta) }}>{l.ferramenta}</span>
-              <span className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : "#dedee3" }}>{l.texto}</span>
-            </div>
-          ))}
-          {pendentes.map((t, i) => (
-            <div key={`pend-${i}`} className="truncate" style={{ color: CINZA }}>instrução na fila · {t}</div>
-          ))}
-        </div>
-        {status === "rodando" && (
-          <div className="nodrag nowheel flex shrink-0 flex-col gap-1 px-2 py-1.5" style={{ borderTop: `1px solid ${BORDA}` }}>
-            <textarea rows={2} maxLength={4000} value={campo}
-              className="cv-campo w-full resize-none rounded-md px-2 py-1 outline-none"
-              style={{ background: "#191919", border: `1px solid ${BORDA}`, color: "#dedee3", font: MONO }}
-              placeholder="Instrua o agente desta slice…"
-              onChange={(e) => setCampo(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void instruir(); } }} />
-            {erro ? <div className="truncate" title={erro} style={{ color: VERMELHO, font: FONTE }}>{erro}</div> : null}
-            <div className="flex items-center gap-1">
-              <button type="button" className="nodrag rounded px-2 py-0.5 hover:bg-white/10"
-                style={{ color: AZUL, font: BOTAO }} onClick={() => void instruir()}>
-                Instruir agora
-              </button>
-              <button type="button" disabled={pausando}
-                className="nodrag ml-auto rounded px-2 py-0.5 hover:bg-white/10 disabled:opacity-50"
-                style={{ color: slice?.pausada ? VERDE : AMARELO, font: BOTAO }} onClick={() => void pausar()}>
-                {slice?.pausada ? "Retomar" : pausando ? "pausando…" : "Pausar"}
-              </button>
-            </div>
-          </div>
-        )}
-        <Alcas />
-      </div>
-    );
-  }
-
-  // Vista Fluxo (historico): mini-terminal por slice. Slice ok comeca recolhida; clique expande.
-  const linhasFluxo = run ? linhasDoWorker(run, idx) : [];
-  const recolhida = !aberta;
+  // Aberto: card ao vivo com feedDaSlice (hora, ferramenta colorida, texto; erro em vermelho).
+  const m = slice?.metrica;
   return (
-    <div className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel")}
-      style={{ ...moldura, opacity: status === "fila" ? 0.5 : 1 }}>
-      <header className="flex shrink-0 cursor-pointer items-center gap-1.5 px-2 py-1.5"
-        style={{ background: CABECALHO, color: cor, font: TITULO, borderBottom: recolhida ? "1px solid transparent" : `1px solid ${BORDA}` }}
-        onClick={() => setAberto((a) => !a)}>
+    <div
+      className={cn("flex h-full w-full flex-col overflow-hidden", selected && "cv-sel", status === "rodando" && "cv-rodando", slice?.pausada && "cv-pausada")}
+      style={{ ...moldura, opacity: status === "fila" ? 0.6 : 1 }}
+    >
+      <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
+        style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
         <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
-        <span className="min-w-0 flex-1 truncate">Slice {idx}{tarefa ? ` · ${tarefa}` : ""}</span>
-        {slice?.metrica ? <span className="shrink-0 font-mono" style={{ color: "#b8b8b8" }}>{fmtUSD(slice.metrica.custoUSD)}</span> : null}
+        <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+        {slice?.pausada ? <span className="shrink-0" style={{ color: AMARELO }}>pausada</span> : null}
+        {m ? <span className="shrink-0 font-mono tabular-nums" style={{ color: CINZA }}>{fmtUSD(m.custoUSD)} · {m.iteracoes} it.</span> : null}
+        <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
+          style={{ color: "#b8b8b8", font: BOTAO }}
+          onClick={() => alternarSlice(runId, idx)}>
+          Recolher
+        </button>
       </header>
-      {!recolhida && (
-        <div ref={corpo} onScroll={aoRolar} className="nodrag nowheel min-h-0 flex-1 overflow-auto p-2" style={{ font: MONO, color: "#dedee3" }}>
-          {linhasFluxo.length === 0
-            ? <p style={{ color: CINZA }}>aguardando…</p>
-            : linhasFluxo.map((l, i) => <p key={i} className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : undefined }}>{l.texto}</p>)}
+      <div ref={corpo} onScroll={aoRolar}
+        className="nodrag nowheel min-h-0 flex-1 overflow-auto px-2 py-1.5" style={{ font: MONO }}>
+        {linhas.length === 0 ? (
+          <p style={{ color: CINZA }}>aguardando…</p>
+        ) : linhas.map((l: LinhaFeed, i) => (
+          <div key={i} className="grid items-start gap-x-2" style={{ gridTemplateColumns: "auto auto 1fr" }}>
+            <span className="tabular-nums" style={{ color: CINZA }}>{fmtHora(l.ts)}</span>
+            <span className="truncate" style={{ color: corFerramenta(l.ferramenta) }}>{l.ferramenta}</span>
+            <span className="whitespace-pre-wrap" style={{ color: l.erro ? VERMELHO : "#dedee3" }}>{l.texto}</span>
+          </div>
+        ))}
+        {pendentes.map((t, i) => (
+          <div key={`pend-${i}`} className="truncate" style={{ color: CINZA }}>instrução na fila · {t}</div>
+        ))}
+      </div>
+      {status === "rodando" && (
+        <div className="nodrag nowheel flex shrink-0 flex-col gap-1 px-2 py-1.5" style={{ borderTop: `1px solid ${BORDA}` }}>
+          <textarea rows={2} maxLength={4000} value={campo}
+            className="cv-campo w-full resize-none rounded-md px-2 py-1 outline-none"
+            style={{ background: "#191919", border: `1px solid ${BORDA}`, color: "#dedee3", font: MONO }}
+            placeholder="Instrua o agente desta slice…"
+            onChange={(e) => setCampo(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void instruir(); } }} />
+          {erro ? <div className="truncate" title={erro} style={{ color: VERMELHO, font: FONTE }}>{erro}</div> : null}
+          <div className="flex items-center gap-1">
+            <button type="button" className="nodrag rounded px-2 py-0.5 hover:bg-white/10"
+              style={{ color: AZUL, font: BOTAO }} onClick={() => void instruir()}>
+              Instruir agora
+            </button>
+            <button type="button" disabled={pausando}
+              className="nodrag ml-auto rounded px-2 py-0.5 hover:bg-white/10 disabled:opacity-50"
+              style={{ color: slice?.pausada ? VERDE : AMARELO, font: BOTAO }} onClick={() => void pausar()}>
+              {slice?.pausada ? "Retomar" : pausando ? "pausando…" : "Pausar"}
+            </button>
+          </div>
         </div>
       )}
       <Alcas />

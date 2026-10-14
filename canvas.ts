@@ -16,7 +16,10 @@ export type TipoNo =
   | "arquivo"
   | "explorador"
   | "navegador"
-  | "painel";
+  | "painel"
+  | "pedido"
+  | "gate"
+  | "diff";
 
 /** Lista canonica de tipos de no', usado tambem na validacao. */
 export const TIPOS_NO: readonly TipoNo[] = [
@@ -32,6 +35,9 @@ export const TIPOS_NO: readonly TipoNo[] = [
   "explorador",
   "navegador",
   "painel",
+  "pedido",
+  "gate",
+  "diff",
 ];
 
 export type No = {
