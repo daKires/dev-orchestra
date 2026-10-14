@@ -4,10 +4,8 @@
 import type { No, Snapshot } from "../../../canvas.ts";
 import type { Run, SliceEstado } from "./estado.ts";
 
-// Layout das runs (CA-4b, 13a, 15 a 18): coluna de cards + as 3 fases da run expandida
 
 export type ArestaLayout = { id: string; de: string; para: string };
-/** Posicao do card de um planejador na fase 1 da run do cwd dele (card 620x420). */
 export type AgenteLayout = { id: string; x: number; y: number; pai: string };
 export type LayoutRuns = { nos: No[]; arestas: ArestaLayout[]; agentes: AgenteLayout[] };
 
@@ -25,7 +23,6 @@ const MARGEM_CONTEUDO = 80;   // folga minima entre a coluna de runs e o conteud
 const ESPACO_REGIAO = 40;     // folga extra reservada pras fases nao invadirem o conteudo
 const RUN_PARADA_MS = 10 * 60_000; // sem evento nem painel por 10 min: run "parada" (processo morreu)
 
-// Fase 1: pedido + (abaixo) o card do planejador. Fase 3: gate + (abaixo) o diff.
 const PEDIDO_W = 300;
 const PEDIDO_H = 170;
 const GATE_W = 420;
@@ -36,20 +33,16 @@ const AGENTE_W = 620;         // card do planejador (mesmo tamanho do no' de age
 const AGENTE_H = 420;
 const AGENTE_GAP = 40;
 
-// Fase 2: slices compactas (260x64) e abertas/ao vivo (620x380), como na arvore do G1.
 const SLICE_W_COMPACTA = 260;
 const SLICE_H_COMPACTA = 64;
 const SLICE_W_ABERTA = 620;
 const SLICE_H_ABERTA = 380;
 
-// Largura reservada por fase (a maior possivel): pedido/planejador, slice aberta, diff.
 const FASE1_W = PAD + Math.max(PEDIDO_W, AGENTE_W) + PAD;
 const FASE2_W = PAD + SLICE_W_ABERTA + PAD;
 const FASE3_W = PAD + Math.max(GATE_W, DIFF_W) + PAD;
-// Reserva horizontal da coluna de runs: card + folga + as 3 fases lado a lado (com os gaps).
 const LARGURA_FASES = FASE1_W + FASE_GAP + FASE2_W + FASE_GAP + FASE3_W;
 
-// Titulos das fases, na ordem (fase 1 = indice 0).
 const TITULOS_FASE = ["FASE 1 · PLANEJAMENTO", "FASE 2 · EXECUÇÃO DO SWARM", "FASE 3 · GATE E ENTREGA"] as const;
 
 /** Ids salvos do snapshot (para reusar posicao/dados dos nos ja' existentes). */
@@ -131,14 +124,12 @@ export function layoutRuns(
   const agentes: AgenteLayout[] = [];
 
   // Conteudo criado a mao pelo usuario (notas/imagens/formas/regioes/textos): a coluna de runs
-  // precisa caber inteira (card + as 3 fases) a esquerda de tudo isso.
   const doUsuario = snap.nos.filter((n) => n.dados?.auto !== true && n.tipo !== "agente");
   const minX = doUsuario.length ? Math.min(...doUsuario.map((n) => n.x)) : undefined;
   const colunaX = minX === undefined
     ? COLUNA_X
     : minX - MARGEM_CONTEUDO - CARD_W - ESPACO_REGIAO - LARGURA_FASES;
 
-  // Planejador -> run MAIS RECENTE do mesmo cwd (normalizado): cada um ganha um slot na fase 1 dela.
   const runDoCwd = new Map<string, string>();
   for (const run of ordenadas) {
     const k = cwdChave(run.cwd);
@@ -159,9 +150,6 @@ export function layoutRuns(
   ordenadas.forEach((run) => {
     const cardId = `run:${run.id}`;
     // A posicao salva (x,y) so' vale quando o usuario ARRASTOU o card (`dados.movido === true`); senao
-    // o card segue o empilhamento (cursor y, coluna). Os demais dados salvos (expandida, ...) continuam
-    // sendo mesclados e o tamanho e' SEMPRE o atual: o card tem status e pipeline, uma altura antiga
-    // salva nao pode voltar a valer.
     const salvoCard = salvos.get(cardId);
     const movido = salvoCard?.dados?.movido === true;
     const card = {
@@ -183,7 +171,6 @@ export function layoutRuns(
     const expandida = typeof salvoCard?.dados?.expandida === "boolean"
       ? salvoCard.dados.expandida === true
       : ativa;
-    // Fundo real desta run: o card; sobe pro fundo das fases se elas existirem (o cursor segue ele).
     let fundo = card.y + card.h;
     if (!expandida) { cursorY = fundo + ESPACO_VERTICAL; return; } // recolhida: so' o card
 
@@ -194,7 +181,6 @@ export function layoutRuns(
     const faseX = card.x + card.w + REG_GAP;
     const faseY = card.y; // as 3 fases comecam na mesma altura do card
 
-    // ---- FASE 1: o pedido e, abaixo dele, um slot 620x420 por planejador daquele cwd ----
     const pedidoId = `pedido:${run.id}`;
     const filhos1: No[] = [comSalvo({
       id: pedidoId, tipo: "pedido", x: faseX + PAD, y: faseY + PAD, w: PEDIDO_W, h: PEDIDO_H,
@@ -215,7 +201,6 @@ export function layoutRuns(
     fases1.set(run.id, fase1);
     arestas.push({ id: `${pedidoId}->${cardId}`, de: pedidoId, para: cardId });
 
-    // ---- FASE 2: os workers (slices) em coluna, com as regras compacta/aberta da arvore ----
     const n = Math.max(run.plano.length, run.slices.length);
     const fase2X = faseX + fase1.w + FASE_GAP;
     const filhos2: No[] = [];
@@ -232,7 +217,6 @@ export function layoutRuns(
         id: `worker:${run.id}:${idx}`, tipo: "worker", x: fase2X + PAD, y: colunaY, w, h,
         pai: fase2Id, dados: { auto: true, runId: run.id, idx, aberta }, rev: 0,
       }, salvos);
-      // w/h da slice seguem compacta/aberta (e `dados.aberta` e' sempre devolvido), mesmo com posicao salva.
       worker.w = w; worker.h = h; worker.dados = { ...worker.dados, aberta };
       filhos2.push(worker);
       arestas.push({ id: `${cardId}->${worker.id}`, de: cardId, para: worker.id });
@@ -253,7 +237,6 @@ export function layoutRuns(
     };
     nos.push(fase2, ...filhos2);
 
-    // ---- FASE 3: o gate no topo e o diff abaixo ----
     const fase3X = fase2X + fase2.w + FASE_GAP;
     const gate = comSalvo({
       id: `gate:${run.id}`, tipo: "gate", x: fase3X + PAD, y: faseY + PAD, w: GATE_W, h: GATE_H,
@@ -275,7 +258,6 @@ export function layoutRuns(
     };
     nos.push(fase3, gate, diff);
 
-    // Aresta de entrada do gate: a ultima slice (sem slices, a propria run).
     const antesDoGate = n ? `worker:${run.id}:${n}` : cardId;
     arestas.push({ id: `${antesDoGate}->gate:${run.id}`, de: antesDoGate, para: `gate:${run.id}` });
     arestas.push({ id: `gate:${run.id}->diff:${run.id}`, de: `gate:${run.id}`, para: `diff:${run.id}` });
@@ -284,8 +266,6 @@ export function layoutRuns(
     cursorY = fundo + ESPACO_VERTICAL;
   });
 
-  // Planejadores: cada um abaixo do pedido da fase 1 da run mais recente do cwd dele (so' quando essa
-  // run esta' expandida — recolhida, o planejador fica onde ja' estava).
   for (const p of planejadores) {
     const runId = runDoCwd.get(cwdChave(p.cwd));
     const fase1 = runId ? fases1.get(runId) : undefined;
@@ -420,7 +400,6 @@ export function resumoPainel(runs: Run[], agora: number): ResumoPainel {
   };
 }
 
-// Pipeline do card da run (CA-19) e resumo do gate (CA-18)
 
 export type StatusPipeline = "fila" | "rodando" | "ok" | "falha" | "pausada";
 export type NoPipeline = { id: string; rotulo: string; status: StatusPipeline };
@@ -430,7 +409,6 @@ export type ResumoGate = {
   final: "ok" | "falha" | "rodando" | "aguardando";
 };
 
-/** Status de uma slice no pipeline: pausada vence o rodando; incompleta/pulada = falha. */
 function statusDaSlice(slice: SliceEstado | undefined): StatusPipeline {
   if (!slice || slice.status === "fila") return "fila";
   if (slice.status === "incompleta" || slice.status === "pulada") return "falha";

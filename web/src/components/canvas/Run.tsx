@@ -19,8 +19,6 @@ import { AgentesCtx } from "./Agente";
 import { ModalArquivo } from "./Explorador";
 import type { No } from "../../../../canvas.ts";
 
-// Contexto (S5c/G1/Run B): runs por id + relogio + acoes do canvas (expansao, slice aberta, diff,
-// foco num no' e abertura da aba Detalhes do painel).
 
 export const RunsCtx = createContext<{
   runs: Record<string, Run>;
@@ -30,9 +28,7 @@ export const RunsCtx = createContext<{
   abrirDiff: (runId: string, arquivo: string) => void;
   /** Abre a run no canvas: grava expandida=true no card run:<id> e centraliza nele (painel Runs). */
   abrirRun: (runId: string) => void;
-  /** Centraliza a vista num no' do canvas (fitView) pelo id. */
   focar: (noId: string) => void;
-  /** Mostra a run no painel direito com a aba Detalhes aberta. */
   abrirDetalhes: (runId: string) => void;
 }>({
   runs: {}, agora: Date.now(),
@@ -61,11 +57,9 @@ export const moldura = { background: FUNDO, border: `1px solid ${BORDA}`, border
 export const lerDados = (data: unknown): No => (data as { no: No }).no;
 export const texto = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** Chave canonica do cwd (mesma normalizacao do layout): separadores '/', sem barra final, minusculo. */
 export const cwdChave = (cwd: string): string =>
   cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
-/** Cor da slice pelo status (mesma regra do layout): rodando azul, pausada amarelo, ok verde, ruim vermelho, fila cinza. */
 function corDaSlice(status: string): string {
   if (status === "rodando") return AZUL;
   if (status === "pausada") return AMARELO;
@@ -83,7 +77,6 @@ export const nomeDoArquivo = (caminho: string): string => caminho.split(/[\\/]+/
 
 // nodeTypes
 
-/** Cor da pilula do pipeline por status (mesmas cores dos cards/layout). */
 const COR_PIPELINE: Record<StatusPipeline, string> = {
   fila: CINZA, rodando: AZUL, ok: VERDE, falha: VERMELHO, pausada: AMARELO,
 };
@@ -129,10 +122,8 @@ function NoRun({ data, selected }: NodeProps) {
   const fim = st === "rodando" ? agora : run.ultimoEventoTs;
   const dur = run.inicioTs ? fmtDur(Math.max(0, fim - run.inicioTs)) : "";
   const pipe = pipelineDaRun(run);
-  // Planejador deste cwd (fase 1): o clique no "Plano" foca o card dele (`ag:<id>`).
   const planejador = agentes.find((a) => a.origem === "planejador" && cwdChave(a.cwd) === cwdChave(run.cwd));
 
-  /** Clique numa pilula do pipeline: foca o card da fase (ou abre a aba Detalhes, no commit). */
   const aoClicarPipeline = (id: string) => {
     if (id === "pedido") focar(`pedido:${runId}`);
     else if (id === "plano") focar(planejador ? `ag:${planejador.id}` : `pedido:${runId}`);
@@ -194,7 +185,6 @@ function NoRun({ data, selected }: NodeProps) {
   );
 }
 
-/** Worker: card compacto (fechado) ou ao vivo (aberto) da slice, seguindo `dados.aberta` do layout. */
 function NoWorker({ data, selected }: NodeProps) {
   const { runs, alternarSlice } = useContext(RunsCtx);
   const no = lerDados(data);
@@ -212,7 +202,6 @@ function NoWorker({ data, selected }: NodeProps) {
   const tarefa = slice?.tarefa ?? run?.plano[idx - 1]?.tarefa ?? "";
   const cor = corDaSlice(status);
   const linhas = run ? feedDaSlice(run, idx) : [];
-  // Aberta/fechada segue `dados.aberta` (o layout abre sozinha a slice rodando).
   const aberta = no.dados.aberta === true;
 
   // Auto-scroll do feed: desce pro fim quando chega linha nova, mas PARA se o usuario rolou pra cima.
