@@ -69,7 +69,6 @@ export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
     return () => { vivo = false; };
   }, [aberto, agenteId, projeto, caminho]);
 
-  // Realce sob demanda: so' com linguagem suportada (LANGS) e arquivo ate' MAX_HL linhas.
   useEffect(() => {
     setTokens(null);
     if (texto == null || !lang || !LANGS[lang]) return;
@@ -84,7 +83,6 @@ export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
 
   const linhas = texto == null ? [] : texto.split("\n");
 
-  /** Copia o caminho RELATIVO recebido (nao o absoluto do servidor) e mostra "Copiado" por 1,5s. */
   const copiar = () => {
     void navigator.clipboard?.writeText(caminho);
     setCopiado(true);
