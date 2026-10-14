@@ -1,7 +1,10 @@
 // Vista Canvas (S4): o grafo do projeto renderizado com @xyflow/react. O modelo do hub (No/Aresta)
 // vira nodes/edges, e as edicoes (mover, redimensionar, editar, conectar, apagar, imagem) voltam como
 // operacoes pro hub (useCanvas). UI em PT-BR, so' tema escuro.
-import { useContext, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  forwardRef, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  type DragEvent, type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Background, BackgroundVariant, ConnectionMode, MarkerType, Panel, ReactFlow, ViewportPortal,
   applyEdgeChanges, applyNodeChanges,
@@ -9,15 +12,17 @@ import {
   type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { WifiOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, WifiOff } from "lucide-react";
 import {
-  alternarFixado, checarImagem, duplicarNos, ferramentaDoAtalho, limitarZoom, mesclarNosRf, noNovo,
-  ordemZ, organizarPorTipo, paiDoNo, pontaDaAresta, retanguloDeArrasto, TAMANHO_PADRAO,
+  alternarFixado, checarImagem, duplicarNos, ferramentaDoAtalho, inspecionavel, limitarZoom,
+  mesclarNosRf, noNovo, ordemZ, organizarPorTipo, paiDoNo, pontaDaAresta, retanguloDeArrasto,
+  TAMANHO_PADRAO,
   type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
 import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
 import { arestasEmConversa, type EmConversa } from "@/lib/colab";
+import { runAtiva, runDaSelecao } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 import { useAgentes } from "@/hooks/useAgentes";
 import { useAgora, useRuns } from "@/hooks/useRuns";
@@ -25,13 +30,14 @@ import { useCanvas } from "@/hooks/useCanvas";
 import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../canvas.ts";
 import { Barra } from "./canvas/Barra";
 import { Inspetor } from "./canvas/Inspetor";
+import { PainelRun } from "./canvas/PainelRun";
 import { NovoAgente } from "./canvas/NovoAgente";
 import { NovoNavegador } from "./canvas/NovoNavegador";
 import { MenuContexto, type MenuAcoes, type MenuAlvo } from "./canvas/MenuContexto";
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
 import { AgentesCtx, NoAgente } from "./canvas/Agente";
 import { NoClaude } from "./canvas/Claude";
-import { RunsCtx, ModalDiff, nodeTypes as runNodeTypes, type Vista } from "./canvas/Run";
+import { RunsCtx, nodeTypes as runNodeTypes, type Vista } from "./canvas/Run";
 import { MIME_ARQUIVO, nodeTypes as exploradorNodeTypes } from "./canvas/Explorador";
 import { ProjetoCtx, nodeTypes as navegadorNodeTypes } from "./canvas/Navegador";
 import { nodeTypes as painelNodeTypes } from "./canvas/Painel";
@@ -175,9 +181,8 @@ function lerBase64(arquivo: Blob): Promise<string> {
   });
 }
 
-// Controle de zoom proprio (canto inferior direito): −  N%  +
 
-function ControleZoom() {
+function ControleZoom({ temRun, onCentralizar }: { temRun: boolean; onCentralizar: () => void }) {
   const { zoom } = useViewport();
   const { zoomTo } = useReactFlow();
   const pct = Math.round(limitarZoom(zoom) * 100);
@@ -191,13 +196,54 @@ function ControleZoom() {
       <button type="button" title="Diminuir zoom" onClick={() => passo(-0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>−</button>
       <span className="w-10 text-center tabular-nums" style={{ fontSize: 12, color: "#b8b8b8" }}>{pct}%</span>
       <button type="button" title="Aumentar zoom" onClick={() => passo(0.2)} className="grid size-6 place-items-center rounded text-sm hover:bg-white/10" style={{ color: "#b8b8b8" }}>+</button>
+      <button
+        type="button"
+        title="Centralizar na run"
+        aria-label="Centralizar"
+        disabled={!temRun}
+        onClick={onCentralizar}
+        className="rounded px-1.5 py-1 text-xs hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        style={{ color: "#b8b8b8" }}
+      >
+        Centralizar
+      </button>
     </Panel>
   );
 }
 
+
+const CHAVE_PAINEL = "hermes.painel";
+
+function lerPainel(): boolean {
+  try {
+    const s = localStorage.getItem(CHAVE_PAINEL);
+    return s == null ? true : JSON.parse(s) !== false;
+  } catch {
+    return true;
+  }
+}
+
+function gravarPainel(aberto: boolean) {
+  try { localStorage.setItem(CHAVE_PAINEL, JSON.stringify(aberto)); } catch {}
+}
+
 // Canvas
 
-export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeature?: () => void }) {
+export type CanvasProps = {
+  projeto: string;
+  onNovaFeature?: () => void;
+  onRunSel?: (runId: string | null) => void;
+};
+
+export type CanvasHandle = {
+  focar(noId: string): void;
+  abrirRun(runId: string): void;
+  abrirDiff(runId: string, arquivo: string): void;
+};
+
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
+  { projeto, onNovaFeature, onRunSel }, ref,
+) {
   const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
   const [arestas, setArestas] = useState<Edge[]>([]);
@@ -228,7 +274,10 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
   const [novoAgenteAberto, setNovoAgenteAberto] = useState(false);
   const [novoNavegadorAberto, setNovoNavegadorAberto] = useState(false);
-  const [diff, setDiff] = useState<{ runId: string; arquivo: string } | null>(null);
+  const [painel, setPainel] = useState<boolean>(lerPainel);
+  const [runSelId, setRunSelId] = useState<string | null>(null);
+  const [abaPedida, setAbaPedida] = useState<{ runId: string; aba: string } | null>(null);
+  const [arquivoPedido, setArquivoPedido] = useState<{ runId: string; arquivo: string } | null>(null);
   // Agentes de planejador JA' persistidos uma vez (nao re-upsertamos a cada render).
   const agentesUpsertados = useRef<Set<string>>(new Set());
 
@@ -237,6 +286,8 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
     () => runsDoProjeto(Object.values(runsEstado.runs), projeto),
     [runsEstado, projeto],
   );
+
+  const runAtivaProjeto = useMemo(() => runAtiva(runsProjeto, agora), [runsProjeto, agora]);
 
   // Modelo exibido = snapshot mesclado com o layout das runs + o layout dos agentes (mesclarComLayout):
   // os nos ocultos ficam de fora, o automatico salvo usa a versao do layout e o conteudo do usuario
@@ -807,6 +858,30 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
   const nosSelecionados = modelo.nos.filter((n) => idsNos.has(n.id));
   const arestasSelecionadas = modelo.arestas.filter((a) => idsArestas.has(a.id));
 
+  const inspecionaveis = nosSelecionados.filter(inspecionavel);
+  const usaInspetor = inspecionaveis.length > 0 || arestasSelecionadas.length > 0 || nosSelecionados.length >= 2;
+  const runDaSelId = runDaSelecao(nosSelecionados);
+  const runDaSelecaoAqui = runDaSelId ? runsProjeto.find((r) => r.id === runDaSelId) ?? null : null;
+  const runPedida = runSelId ? runsProjeto.find((r) => r.id === runSelId) ?? null : null;
+  const runMostrada = runDaSelecaoAqui ?? runPedida ?? runAtivaProjeto;
+  const abaPainel = runMostrada && abaPedida?.runId === runMostrada.id ? abaPedida.aba : "feed";
+  const arquivoDiff = runMostrada && arquivoPedido?.runId === runMostrada.id ? arquivoPedido.arquivo : null;
+  const onRunSelRef = useRef(onRunSel);
+  onRunSelRef.current = onRunSel;
+
+  // Avisa o dono da tela quando a run mostrada no painel muda (o relogio nao redispara: o id e' estavel).
+  useEffect(() => { onRunSelRef.current?.(runMostrada?.id ?? null); }, [runMostrada?.id]);
+
+  const alternarPainel = () => {
+    const aberto = !painel;
+    setPainel(aberto);
+    gravarPainel(aberto);
+  };
+
+  const centralizarRun = () => {
+    if (runAtivaProjeto) abrirRun(runAtivaProjeto.id);
+  };
+
   // --- F2 S5d: controles do agente (ocultar/encerrar/reabrir), expandir run e diff ---
 
   /** Upsert de um no' com dados extras (usado pelos controles das runs e dos agentes). */
@@ -838,10 +913,29 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
    * a vista nele (fitView no proprio card, com folga). O atraso curto deixa o modelo/layout assentar.
    */
   const abrirRun = (runId: string) => {
+    setRunSelId(runId);
     const no = buscarNo(`run:${runId}`);
     if (no && no.dados.expandida !== true) upsertNo(no, { expandida: true });
     setTimeout(() => void instancia.current?.fitView({ nodes: [{ id: `run:${runId}` }], maxZoom: 1, padding: 0.4 }), 60);
   };
+
+  /**
+   * abrirDiff do card de arquivo (RunsCtx): o painel direito passa a mostrar a run daquele arquivo com
+   * a aba Diff aberta nele (no lugar do antigo ModalDiff).
+   */
+  const abrirDiff = (runId: string, arquivo: string) => {
+    setRunSelId(runId);
+    setAbaPedida({ runId, aba: "diff" });
+    setArquivoPedido({ runId, arquivo });
+    // Painel recolhido: abre pra que a aba Diff fique visivel.
+    if (!painel) { setPainel(true); gravarPainel(true); }
+  };
+
+  const focar = (noId: string) => {
+    void instancia.current?.fitView({ nodes: [{ id: noId }], maxZoom: 1, padding: 0.4 });
+  };
+
+  useImperativeHandle(ref, () => ({ focar, abrirRun, abrirDiff }), [abrirRun, abrirDiff]);
 
   /** ✕ do card do agente: abre o dialog de ocultar/encerrar. */
   const pedirFecharAgente = (noId: string, agenteId: string) => setFecharAgente({ noId, agenteId });
@@ -960,20 +1054,14 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
     alternar: alternarRun,
     vista: trocarVista,
     alternarSlice,
-    abrirDiff: (runId: string, arquivo: string) => setDiff({ runId, arquivo }),
+    abrirDiff,
     abrirRun,
   };
 
-  // Diff aberto pelo card de arquivo (ModalDiff controlado por estado local).
-  const runDoDiff = diff ? runsEstado.runs[diff.runId] : undefined;
-  const patchDiff = diff && runDoDiff ? runDoDiff.diffs[diff.arquivo] ?? "" : "";
-
   return (
     <MenuContexto alvo={alvoMenu} no={noDoMenu} acoes={acoesMenu} onFechar={() => setAlvoMenu(null)}>
-    <div
-      ref={container}
-      className={cn("cv relative h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}
-    >
+    <div className={cn("cv flex h-full w-full", criando && "cv-pane-criacao", efetiva === "mao" && "cv-pane-mao")}>
+    <div ref={container} className="relative min-w-0 flex-1 overflow-hidden">
       <CanvasCtx.Provider value={ctx}>
       <ProjetoCtx.Provider value={projeto}>
       <AgentesCtx.Provider value={agentesValor}>
@@ -1025,7 +1113,7 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
           className="h-full w-full"
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#303030" />
-          <ControleZoom />
+          <ControleZoom temRun={!!runAtivaProjeto} onCentralizar={centralizarRun} />
           {agentesOcultos.length > 0 && (
             <Panel position="top-right">
               <DropdownMenu>
@@ -1098,17 +1186,6 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
         onCriar={criarNavegadorNo}
       />
 
-      <Inspetor
-        nos={nosSelecionados}
-        arestas={arestasSelecionadas}
-        bloquear={bloqueado}
-        editar={aoEditar}
-        rotular={aoRotular}
-        apagar={apagarSelecao}
-        agrupar={agruparSelecao}
-        fechar={deselecionar}
-      />
-
       {bloqueado && (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center p-2">
           <div className="flex items-center gap-2 rounded-full border border-warn/40 bg-warn/10 px-3 py-1 text-xs text-warn">
@@ -1122,6 +1199,70 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
           <div className="rounded-md border border-destructive/40 bg-destructive/15 px-3 py-1.5 text-xs text-destructive">{aviso}</div>
         </div>
       )}
+    </div>
+
+    {/* Painel direito (tela unida): Inspetor pela selecao ou o PainelRun da run mostrada. Recolhivel. */}
+    <aside
+      className="flex shrink-0 flex-col overflow-hidden"
+      aria-label="Painel"
+      style={{ width: painel ? 380 : 34, background: "#1c1c1c", borderLeft: "1px solid #2c2c2c" }}
+    >
+      <header
+        className="flex h-9 shrink-0 items-center gap-2 px-2"
+        style={{ borderBottom: painel ? "1px solid #2c2c2c" : "none" }}
+      >
+        <button
+          type="button"
+          title={painel ? "Recolher painel" : "Expandir painel"}
+          aria-label={painel ? "Recolher painel" : "Expandir painel"}
+          aria-expanded={painel}
+          onClick={alternarPainel}
+          className="grid size-6 shrink-0 place-items-center rounded hover:bg-white/10"
+          style={{ color: "#b8b8b8" }}
+        >
+          {painel ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+        </button>
+        {painel && (
+          <span
+            className="min-w-0 flex-1 truncate text-xs"
+            style={{ color: "#858585" }}
+            title={usaInspetor ? "Inspetor" : runMostrada?.feature ?? ""}
+          >
+            {usaInspetor ? "Inspetor" : runMostrada?.feature ?? "Painel"}
+          </span>
+        )}
+      </header>
+
+      {painel && (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {usaInspetor ? (
+            <Inspetor
+              nos={nosSelecionados}
+              arestas={arestasSelecionadas}
+              bloquear={bloqueado}
+              editar={aoEditar}
+              rotular={aoRotular}
+              apagar={apagarSelecao}
+              agrupar={agruparSelecao}
+              fechar={deselecionar}
+            />
+          ) : runMostrada ? (
+            <PainelRun
+              run={runMostrada}
+              agora={agora}
+              arquivoDiff={arquivoDiff}
+              onArquivoDiff={(arquivo) => setArquivoPedido({ runId: runMostrada.id, arquivo })}
+              aba={abaPainel}
+              onAba={(aba) => setAbaPedida({ runId: runMostrada.id, aba })}
+            />
+          ) : (
+            <p className="grid flex-1 place-items-center px-4 text-center text-xs" style={{ color: "#858585" }}>
+              Nenhuma run neste projeto
+            </p>
+          )}
+        </div>
+      )}
+    </aside>
 
       {/* ✕ do agente: ocultar (some do canvas) ou encerrar (fala com o hub e remove o no'). */}
       <AlertDialog open={!!fecharAgente} onOpenChange={(o) => { if (!o) setFecharAgente(null); }}>
@@ -1139,12 +1280,9 @@ export function Canvas({ projeto, onNovaFeature }: { projeto: string; onNovaFeat
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Diff do arquivo aberto pelo card de arquivo (controlado por estado local). */}
-      <ModalDiff aberto={!!diff} patch={patchDiff} arquivo={diff?.arquivo ?? ""} onFechar={() => setDiff(null)} />
     </div>
     </MenuContexto>
   );
-}
+});
 
 export default Canvas;

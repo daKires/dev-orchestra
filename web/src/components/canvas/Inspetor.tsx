@@ -1,9 +1,5 @@
-// Inspetor do canvas no estilo Castor (F1.5 - S3): painel de propriedades flutuante no canto
-// superior direito. Abre quando ha EXATAMENTE 1 no' INSPECIONAVEL (ou 1 aresta) selecionado e mostra
-// os campos do tipo; com 2+ itens vira o painel de acoes (Agrupar / Apagar). Nos automaticos (run,
-// worker, arquivo, agente, regiao/fluxo) nao abrem o painel (F2.1). Toda a logica de edicao vem pronta
-// do Canvas (upsert via enviar) — aqui so' montamos os campos e commitamos no blur/Enter (a cor e'
-// imediata). UI em PT-BR, so' tema escuro.
+// Inspetor do canvas no painel direito: campos do no' inspecionavel (ou aresta) selecionado; com 2+ itens,
+// Agrupar/Apagar. A edicao em si vem pronta do Canvas.
 import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { X } from "lucide-react";
 import {
@@ -18,8 +14,6 @@ const FUNDO = "#1c1c1c";
 const CABECALHO = "#222";
 const BORDA = "#414141";
 const DIVISOR = "#303030";
-const RAIO = 14;
-const SOMBRA = "0 18px 50px #0009";
 
 /** Estilo base dos campos (input/textarea): fundo #111, borda #414141, raio 7, texto #fff. */
 const CAMPO: CSSProperties = {
@@ -294,24 +288,14 @@ export function Inspetor({ nos, arestas, bloquear, editar, rotular, apagar, agru
 
   return (
     <aside
-      className="cv-insp absolute z-30 flex flex-col"
+      className="cv-insp flex h-full w-full flex-col"
       aria-label="Inspetor"
-      style={{
-        top: 60,
-        right: 16,
-        width: 360,
-        maxHeight: "calc(100% - 145px)",
-        overflowY: "auto",
-        background: FUNDO,
-        border: `1px solid ${BORDA}`,
-        borderRadius: RAIO,
-        boxShadow: SOMBRA,
-      }}
+      style={{ background: FUNDO, overflowY: "auto" }}
       onPointerDownCapture={(e) => e.stopPropagation()}
     >
       <header
         className="cv-insp-head sticky top-0 z-10 flex items-center gap-2"
-        style={{ background: CABECALHO, borderBottom: `1px solid ${DIVISOR}`, padding: "8px 12px", borderTopLeftRadius: RAIO - 1, borderTopRightRadius: RAIO - 1 }}
+        style={{ background: CABECALHO, borderBottom: `1px solid ${DIVISOR}`, padding: "8px 12px" }}
       >
         <span style={{ fontSize: 13, fontWeight: 600, color: "#eee" }}>{titulo}</span>
         <button
