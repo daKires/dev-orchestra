@@ -39,7 +39,7 @@ export function projetoInicial(salvo: string | null, runs: Run[], agora: number)
 }
 
 // Prefixos de id de no' que carregam a run logo depois do primeiro ':'.
-const PREFIXOS_RUN = ["run", "fase1", "fase2", "fase3", "gate", "pedido"];
+const PREFIXOS_RUN = ["run", "fase1", "fase2", "fase3", "gate", "pedido", "diff"];
 
 /** Run da selecao do canvas: so' com exatamente 1 no'; dados.runId vence, senao o prefixo do id. */
 export function runDaSelecao(nos: { id: string; dados?: Record<string, unknown> }[]): string | null {

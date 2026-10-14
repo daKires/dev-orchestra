@@ -1,4 +1,4 @@
-// Spec do F2.1 (front): inspetor so' para itens editaveis; regiao da run nomeada e sem cobrir o conteudo.
+// Spec do F2.1 (front): inspetor so' para itens editaveis; fases da run sem cobrir o conteudo.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inspecionavel } from "./canvas.ts";
@@ -15,7 +15,7 @@ test("inspecionavel: so nota/forma/imagem/grupo/texto feitos a mao", () => {
   assert.equal(inspecionavel(no("grupo", { auto: true })), false, "regiao automatica da run");
 });
 
-test("layoutRuns: regiao tem o nome da feature e nao cobre os itens do usuario", () => {
+test("layoutRuns: as fases nao cobrem os itens do usuario", () => {
   const T = 1_000_000;
   const msgs: Msg[] = [{ swarm: "r1", ev: { t: "run", feature: "Tela de login", cwd: "D:/p", total: 2, ts: T, plano: [
     { tarefa: "a", arquivos_alvo: [], descricao: "" }, { tarefa: "b", arquivos_alvo: [], descricao: "" },
@@ -30,9 +30,8 @@ test("layoutRuns: regiao tem o nome da feature e nao cobre os itens do usuario",
   assert.ok(card.x + card.w <= 0 - 80, "coluna de runs a esquerda de todo o conteudo do usuario");
 
   const exp = layoutRuns([run], { nos: [...usuario, { ...card, dados: { ...card.dados, expandida: true } }], arestas: [] });
-  const reg = exp.nos.find((n) => n.id === "reg:r1")!;
-  assert.equal(reg.dados.titulo, "Tela de login");
-  assert.ok(reg.x >= card.x + card.w, "regiao a direita do card");
-  assert.ok(reg.x + reg.w <= 0 - 40, "regiao nao invade o conteudo do usuario (menor x = 0)");
+  const f1 = exp.nos.find((n) => n.id === "fase1:r1")!, f3 = exp.nos.find((n) => n.id === "fase3:r1")!;
+  assert.ok(f1.x >= card.x + card.w, "fases a direita do card");
+  assert.ok(f3.x + f3.w <= 0 - 40, "as 3 fases nao invadem o conteudo do usuario (menor x = 0)");
 
 });
