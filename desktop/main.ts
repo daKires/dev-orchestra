@@ -37,14 +37,14 @@ let ui: any = null; // modulo dist/ui.js (para chamar pararUI antes de sair)
 const sessoesComDownload = new WeakSet<Session>();
 
 // Sobe o hub (dist/ui.js) na porta da UI, assumindo a porta de qualquer hub Hermes anterior.
-// Sem HERMES_REPO no app instalado: pede a pasta do mcp-hermes-bridge uma vez e grava (setx).
+// Sem HERMES_REPO no app instalado: pede a pasta do repositório Dev Orchestra uma vez e grava (setx).
 async function resolverRepo(): Promise<boolean> {
   const valido = (p: string) => !!p && fs.existsSync(path.join(p, "dist", "ui.js"));
   if (valido(REPO)) return true;
-  const r = await dialog.showOpenDialog({ title: "Onde está a pasta do mcp-hermes-bridge?", properties: ["openDirectory"] });
+  const r = await dialog.showOpenDialog({ title: "Onde está a pasta do repositório Dev Orchestra?", properties: ["openDirectory"] });
   const p = r.filePaths[0] ?? "";
   if (r.canceled || !valido(p)) {
-    dialog.showErrorBox("Hermes", "Pasta do mcp-hermes-bridge não encontrada (precisa ter dist/ui.js). Rode o install.ps1 do repositório.");
+    dialog.showErrorBox("Hermes", "Pasta do repositório Dev Orchestra não encontrada (precisa ter dist/ui.js). Rode o install.ps1 do repositório.");
     return false;
   }
   REPO = p;
