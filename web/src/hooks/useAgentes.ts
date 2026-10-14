@@ -67,8 +67,6 @@ export function useAgentes(projeto: string): Agentes {
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const atual = useRef(projeto); // pro handler do SSE (o stream nao e' reaberto ao trocar de projeto)
   atual.current = projeto;
-  // Sem projeto (string vazia/so' espacos) NADA de agentes: nenhum GET /agentes e nenhum SSE — a lista
-  // fica vazia. Assim que o projeto aparece, o snapshot e o stream ligam (o stream segue unico).
   const ativo = canonico(projeto) !== "";
   // Assinantes da saida do PTY por id (card Claude, F4/S6): o SSE {pty} entrega so' pra quem assinou.
   const ouvintesPty = useRef(new Map<string, Set<(dados: string) => void>>());
@@ -88,7 +86,6 @@ export function useAgentes(projeto: string): Agentes {
   }, [ativo, projeto]);
 
   // SSE: so' {agentes} (lista inteira), {agenteLinhas} (transcricao inteira de um id) e {conversas}
-  // (pendentes entre agentes) importam. Sem projeto nao abre o stream (nada de SSE de agentes).
   useEffect(() => {
     if (!ativo) return;
     const es = new EventSource("/events");
