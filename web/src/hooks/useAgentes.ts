@@ -67,6 +67,7 @@ export function useAgentes(projeto: string): Agentes {
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const atual = useRef(projeto); // pro handler do SSE (o stream nao e' reaberto ao trocar de projeto)
   atual.current = projeto;
+  const ativo = canonico(projeto) !== "";
   // Assinantes da saida do PTY por id (card Claude, F4/S6): o SSE {pty} entrega so' pra quem assinou.
   const ouvintesPty = useRef(new Map<string, Set<(dados: string) => void>>());
 
@@ -76,16 +77,17 @@ export function useAgentes(projeto: string): Agentes {
     setAgentes([]);
     setLinhasPorId({});
     setConversas([]);
+    if (!ativo) return () => { vivo = false; };
     fetch(`/agentes?projeto=${encodeURIComponent(projeto)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: AgenteVisivel[] | null) => { if (vivo && Array.isArray(j)) setAgentes(j); })
       .catch(() => {});
     return () => { vivo = false; };
-  }, [projeto]);
+  }, [ativo, projeto]);
 
   // SSE: so' {agentes} (lista inteira), {agenteLinhas} (transcricao inteira de um id) e {conversas}
-  // (pendentes entre agentes) importam.
   useEffect(() => {
+    if (!ativo) return;
     const es = new EventSource("/events");
     es.onmessage = (m) => {
       let d: {
@@ -113,12 +115,13 @@ export function useAgentes(projeto: string): Agentes {
       }
     };
     return () => es.close();
-  }, []);
+  }, [ativo]);
 
   // Recarrega a lista do projeto atual (GET /agentes?projeto=): usado pelo reiniciar pra refletir o
   // status novo sem esperar o SSE (que so' chega quando o hub mudar algo).
   const recarregar = useCallback(() => {
     const projeto = atual.current;
+    if (!canonico(projeto)) return; // projeto vazio: nada de GET /agentes
     void fetch(`/agentes?projeto=${encodeURIComponent(projeto)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: AgenteVisivel[] | null) => { if (Array.isArray(j)) setAgentes(j); })

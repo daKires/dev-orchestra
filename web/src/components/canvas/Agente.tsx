@@ -189,7 +189,7 @@ export function NoAgente({ id, data, selected }: NodeProps) {
   const parado = status === "encerrado" || status === "falhou";
 
   return (
-    <div className={cn("cv-card relative flex h-full w-full flex-col overflow-hidden", !!selected && "cv-sel")}>
+    <div className={cn("cv-card relative flex h-full w-full flex-col overflow-hidden", !!selected && "cv-sel", ocupado && "cv-rodando")}>
       <header
         className="flex shrink-0 items-center gap-2 px-2.5"
         style={{ height: 32, background: "#222", borderBottom: "1px solid #303030", color: "#eee", font: "500 12px/1 ui-sans-serif, system-ui, sans-serif" }}

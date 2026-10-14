@@ -5,7 +5,7 @@ import { linguagemDe, parseDiff, type LinhaDiff } from "@/lib/estado";
 import { cn } from "@/lib/utils";
 
 // Linguagens carregadas sob demanda (cada uma vira um chunk proprio no build).
-const LANGS: Record<string, () => Promise<unknown>> = {
+export const LANGS: Record<string, () => Promise<unknown>> = {
   luau: () => import("shiki/dist/langs/luau.mjs"),
   lua: () => import("shiki/dist/langs/lua.mjs"),
   typescript: () => import("shiki/dist/langs/typescript.mjs"),
@@ -17,8 +17,8 @@ const LANGS: Record<string, () => Promise<unknown>> = {
   css: () => import("shiki/dist/langs/css.mjs"),
   markdown: () => import("shiki/dist/langs/markdown.mjs"),
 };
-const TEMA = "github-dark-default";
-const MAX_HL = 4000; // acima disso fica so com cores de +/- (highlight de diff gigante trava a aba)
+export const TEMA = "github-dark-default";
+export const MAX_HL = 4000; // acima disso fica so com cores de +/- (highlight de diff gigante trava a aba)
 
 let hl: Promise<HighlighterCore> | null = null;
 function highlighter(): Promise<HighlighterCore> {
@@ -30,9 +30,18 @@ function highlighter(): Promise<HighlighterCore> {
   return hl;
 }
 
-async function tokenizar(linhas: LinhaDiff[], lang: string): Promise<ThemedToken[][] | null> {
+/**
+ * Highlighter compartilhado (o DiffView e a previa de arquivo do Explorador usam o MESMO): devolve a
+ * instancia e garante a linguagem carregada sob demanda (LANGS). `lang` fora de LANGS nem chega aqui.
+ */
+export async function highlighterPara(lang: string): Promise<HighlighterCore> {
   const h = await highlighter();
   if (!h.getLoadedLanguages().includes(lang)) await h.loadLanguage((await LANGS[lang]()) as any);
+  return h;
+}
+
+async function tokenizar(linhas: LinhaDiff[], lang: string): Promise<ThemedToken[][] | null> {
+  const h = await highlighterPara(lang);
   // ponytail: tokeniza o texto do diff como um documento so; comentario de bloco cortado no meio do hunk pode colorir errado
   const codigo = linhas.map((l) => (l.tipo === "hunk" || l.tipo === "meta" ? "" : l.texto)).join("\n");
   return h.codeToTokensBase(codigo, { lang: lang as any, theme: TEMA });
