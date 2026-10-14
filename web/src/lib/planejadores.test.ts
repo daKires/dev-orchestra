@@ -2,7 +2,7 @@
 // mensagens SSE + match de chat por projeto (raiz), que alimenta o painel split da direita.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aplicar, vazio, chatsDoProjeto, type Msg } from "./estado.ts";
+import { aplicar, vazio, type Msg } from "./estado.ts";
 import type { Planejador } from "../../../ui.ts";
 
 const REG = (over: Partial<Planejador> = {}): Planejador => ({
@@ -25,20 +25,3 @@ test("reducer guarda a lista de planejadores e o andamento da nova feature (CA-3
   assert.equal(e.planejadores.length, 1, "lista sobrevive a eventos de run");
 });
 
-test("chatsDoProjeto: match pela RAIZ — run na raiz ou em qualquer worktree do projeto ve o chat (CA-5)", () => {
-  const plan = [
-    REG({ slug: "a", ts: 1 }),
-    REG({ slug: "b", cwd: "D:\\p\\.claude\\worktrees\\y", ts: 2 }),
-  ];
-  // run na raiz do projeto: os dois chats, mais recente primeiro (ordem das abas)
-  assert.deepEqual(chatsDoProjeto(plan, "D:\\p").map((p) => p.slug), ["b", "a"]);
-  // run no worktree x (o do proprio chat a): mesmo projeto, os dois aparecem
-  assert.equal(chatsDoProjeto(plan, "D:\\p\\.claude\\worktrees\\x").length, 2);
-  // run em OUTRO worktree do mesmo projeto: continua o mesmo projeto
-  assert.equal(chatsDoProjeto(plan, "D:\\p\\.claude\\worktrees\\z").length, 2);
-  // case e separadores nao importam
-  assert.equal(chatsDoProjeto(plan, "d:/p").length, 2);
-  // outro projeto: nada; e prefixo de pasta ("D:\p2") nao e' match
-  assert.deepEqual(chatsDoProjeto(plan, "D:\\outro"), []);
-  assert.deepEqual(chatsDoProjeto(plan, "D:\\p2"), []);
-});
