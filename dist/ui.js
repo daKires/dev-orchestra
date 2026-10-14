@@ -1512,6 +1512,13 @@ function listarArvore(cwd) {
     catch { }
     return [...out].slice(0, 5000);
 }
+// Raiz absoluta de um projeto a partir de ?projeto=<raiz>: so' vale se idProjeto(<projeto>) bater com
+// idProjeto(p.raiz) de algum item de mesclarProjetos(raizesDescobertas(), lerProjetosSalvos()); caso
+// contrario undefined (o chamador responde 404). Grafias diferentes da mesma pasta casam pelo id.
+function raizDeProjeto(projeto) {
+    const id = idProjeto(projeto);
+    return mesclarProjetos(raizesDescobertas(), lerProjetosSalvos()).find((p) => idProjeto(p.raiz) === id)?.raiz;
+}
 function responderTexto(res, status, texto) {
     res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
     res.end(texto);
@@ -2850,31 +2857,36 @@ function criarServidor() {
         }
         // ---- arvore e preview de arquivo do agente (F3/S2) ----
         if (caminho === "/arvore") {
-            const c = colabDe(new URL(url, "http://x").searchParams.get("agente") || "");
-            if (!c) {
+            const params = new URL(url, "http://x").searchParams;
+            const c = colabDe(params.get("agente") || "");
+            // ./agente (comportamento de sempre) ou, na falta dele, ?projeto=<raiz> conhecido.
+            const cwd = c?.cwd ?? (params.get("projeto") ? raizDeProjeto(params.get("projeto")) : undefined);
+            if (!cwd) {
                 res.writeHead(404);
                 res.end();
                 return;
             }
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(listarArvore(c.cwd)));
+            res.end(JSON.stringify(listarArvore(cwd)));
             return;
         }
         if (caminho === "/arquivo") {
             const params = new URL(url, "http://x").searchParams;
             const c = colabDe(params.get("agente") || "");
-            if (!c) {
+            // ./agente (comportamento de sempre) ou, na falta dele, ?projeto=<raiz> conhecido.
+            const cwd = c?.cwd ?? (params.get("projeto") ? raizDeProjeto(params.get("projeto")) : undefined);
+            if (!cwd) {
                 res.writeHead(404);
                 res.end();
                 return;
             }
-            const limpo = validarCaminho(c.cwd, params.get("caminho") || "");
+            const limpo = validarCaminho(cwd, params.get("caminho") || "");
             if (!limpo) {
                 res.writeHead(400);
                 res.end();
                 return;
             }
-            const raiz = path.resolve(c.cwd);
+            const raiz = path.resolve(cwd);
             const alvo = path.resolve(raiz, limpo);
             if (alvo !== raiz && !alvo.startsWith(raiz + path.sep)) {
                 res.writeHead(400);

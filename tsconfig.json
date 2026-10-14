@@ -40,6 +40,7 @@
     "ui-g2.test.ts",
     "ui-g3.test.ts",
     "g3-agente.test.ts",
+    "ui-arvore-projeto.test.ts",
     "acoes-run.ts"
   ]
 }
