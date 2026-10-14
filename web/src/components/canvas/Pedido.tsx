@@ -1,7 +1,4 @@
-// Card do pedido da feature (Run B): o nodeType 'pedido' da fase 1 (planejamento). Le' a run do
-// RunsCtx por dados.runId e mostra a feature, o planejador (do AgentesCtx, casando o cwd da run) com o
-// modelo, o estado do plano ("Plano aprovado · n slices" ou "Planejando…"), a branch e a hora de inicio.
-// Mesmo chrome dos cards existentes (#1c1c1c, borda #2c2c2c, raio 12, cabecalho #222, <Alcas/>).
+// Card Pedido da fase 1: feature, planejador e modelo, estado do plano, branch e hora de inicio.
 import { useContext, type ReactNode } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { fmtHora } from "@/lib/formato";
@@ -10,7 +7,6 @@ import { Alcas } from "./Nos";
 import { AgentesCtx } from "./Agente";
 import { BORDA, CABECALHO, CINZA, FONTE, RunsCtx, TITULO, cwdChave, lerDados, moldura, texto } from "./Run";
 
-/** Linha "rotulo .......... valor" do corpo do card. */
 function Linha({ rotulo, children }: { rotulo: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -20,7 +16,6 @@ function Linha({ rotulo, children }: { rotulo: string; children: ReactNode }) {
   );
 }
 
-/** Card 'pedido': o pedido original da feature, o planejador/modelo e o estado do plano. */
 function NoPedido({ data, selected }: NodeProps) {
   const { runs } = useContext(RunsCtx);
   const { agentes } = useContext(AgentesCtx);
@@ -40,7 +35,6 @@ function NoPedido({ data, selected }: NodeProps) {
     );
   }
 
-  // Planejador do MESMO cwd da run (mesma normalizacao do layout); sem ele, "—".
   const planejador = agentes.find((a) => a.origem === "planejador" && cwdChave(a.cwd) === cwdChave(run.cwd));
   const n = run.plano.length;
 
@@ -72,5 +66,4 @@ function NoPedido({ data, selected }: NodeProps) {
   );
 }
 
-/** Mapa de nodeTypes do xyflow (o Canvas registra 'pedido' apontando pra este card). */
 export const nodeTypes = { pedido: NoPedido };

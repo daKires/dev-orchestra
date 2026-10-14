@@ -66,8 +66,6 @@ function NoAgenteTipo(props: NodeProps) {
 }
 
 // nodeTypes registrados no xyflow: os cards base (Nos) + o agente (F2 S5b, F4 S6) + run/worker/arquivo
-// (S5c) + pedido/gate/diff das fases da run (Run B) + o explorador de arquivos (F3 S5) + o navegador
-// (F4 S6) + o painel de runs (G1 S4).
 const nodeTypes = {
   ...nosNodeTypes,
   agente: NoAgenteTipo,
@@ -189,9 +187,6 @@ function lerBase64(arquivo: Blob): Promise<string> {
 }
 
 
-// Controles de zoom (Run B): −/+/% e o botao "Ajustar" (fitView em TODOS os nos, padding 0.2,
-// maxZoom 1 — habilitado quando ha nos). O `bottom` fica acima da barra de ferramentas inferior
-// (bottom-4 + ~48px de altura) pra o painel nunca ser coberto por ela.
 function ControleZoom({ temNos, onAjustar }: { temNos: boolean; onAjustar: () => void }) {
   const { zoom } = useViewport();
   const { zoomTo } = useReactFlow();
@@ -305,12 +300,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const modelo = useMemo<Snapshot>(() => {
     // Arestas planejador -> run (G2/S4b): o planejador roda no worktree e dispara a run naquele cwd.
     const plans = agentes.filter((a) => a.origem === "planejador").map((a) => ({ agId: `ag:${a.id}`, cwd: a.cwd }));
-    // O layout das runs recebe os planejadores: cada um vai pro slot da fase 1 da run do cwd dele.
     const lr = layoutRuns(runsProjeto, estado, Date.now(), plans);
     const la = layoutAgentes(agentes, estado);
     const ap = arestasPlanejadorRun(plans, runsProjeto);
-    // Planejadores posicionados pela fase 1 da run do cwd deles (lr.agentes): por cima dos nos
-    // mesclados, troca so' x/y/pai do no' `ag:<id>` (w/h seguem os do card do agente).
     const posAgentes = new Map(lr.agentes.map((a) => [a.id, a]));
     const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]).map((n) => {
       const a = posAgentes.get(n.id);
@@ -895,7 +887,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     gravarPainel(aberto);
   };
 
-  /** "Ajustar" do ControleZoom: enquadra TODOS os nos do canvas (padding 0.2, maxZoom 1). */
   const ajustarVista = () => {
     void instancia.current?.fitView({ maxZoom: 1, padding: 0.2 });
   };

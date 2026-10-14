@@ -1,8 +1,4 @@
-// Card do gate (Run B): o nodeType 'gate' da fase 3. Le' a run do RunsCtx por dados.runId e resume a
-// ULTIMA tentativa com resumoGate (so' a tentativa mais alta, na ordem dos gateCmds): cada comando com
-// ✓ verde / ✗ vermelho / spinner azul / • cinza (fila) e a saida num <pre> recolhivel (a que falhou
-// comeca aberta). Selo amarelo "reparo k" quando houve reparo e rodape com o veredito final.
-// Mesmo chrome dos cards existentes (#1c1c1c, borda #2c2c2c, raio 12, cabecalho #222, <Alcas/>).
+// Card Gate da fase 3: comandos da ultima tentativa, saida recolhivel (a que falhou vem aberta) e veredito.
 import { useContext, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { resumoGate, type ResumoGate } from "@/lib/layout";
@@ -12,7 +8,6 @@ import { AMARELO, AZUL, BORDA, BOTAO, CABECALHO, CINZA, FONTE, MONO, RunsCtx, TI
 
 type Comando = ResumoGate["comandos"][number];
 
-/** Marca do status do comando: ✓ ok (verde), ✗ falha (vermelho), spinner (rodando, azul), • fila (cinza). */
 function Marca({ status }: { status: Comando["status"] }) {
   if (status === "ok") return <span className="shrink-0" style={{ color: VERDE }}>✓</span>;
   if (status === "falha") return <span className="shrink-0" style={{ color: VERMELHO }}>✗</span>;
@@ -28,7 +23,6 @@ function Marca({ status }: { status: Comando["status"] }) {
   return <span className="shrink-0" style={{ color: CINZA }}>•</span>;
 }
 
-/** Rodape pelo veredito do gate: aprovado (verde), falhou (vermelho), rodando (azul) ou aguardando (cinza). */
 function rodapeDoGate(final: ResumoGate["final"]): { texto: string; cor: string } {
   if (final === "ok") return { texto: "GATE APROVADO", cor: VERDE };
   if (final === "falha") return { texto: "GATE FALHOU", cor: VERMELHO };
@@ -36,13 +30,11 @@ function rodapeDoGate(final: ResumoGate["final"]): { texto: string; cor: string 
   return { texto: "aguardando", cor: CINZA };
 }
 
-/** Card 'gate': comandos da ultima tentativa, saida recolhivel, reparo e veredito final. */
 function NoGate({ data, selected }: NodeProps) {
   const { runs } = useContext(RunsCtx);
   const no = lerDados(data);
   const runId = texto(no.dados.runId);
   const run = runs[runId];
-  // Comandos abertos a mao (cmd -> aberto): sem valor salvo, so' aquele que FALHOU comeca aberto.
   const [abertos, setAbertos] = useState<Record<string, boolean>>({});
 
   if (!run) {
@@ -107,5 +99,4 @@ function NoGate({ data, selected }: NodeProps) {
   );
 }
 
-/** Mapa de nodeTypes do xyflow (o Canvas registra 'gate' apontando pra este card). */
 export const nodeTypes = { gate: NoGate };

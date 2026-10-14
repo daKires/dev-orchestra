@@ -1,8 +1,4 @@
-// Card do diff da run (Run B): o nodeType 'diff' da fase 3. Le' a run do RunsCtx por dados.runId e
-// mostra uma aba por arquivo de run.ordemDiffs (nome base), com o <DiffView arquivo patch> do arquivo
-// ativo dentro de uma area com rolagem (nodrag nowheel). O ↗ do cabecalho chama o abrirDiff do RunsCtx,
-// que abre o mesmo arquivo na aba Diff do painel direito. Sem arquivos: "Nenhum arquivo alterado".
-// Mesmo chrome dos cards existentes (#1c1c1c, borda #2c2c2c, raio 12, cabecalho #222, <Alcas/>).
+// Card Diff da fase 3: uma aba por arquivo alterado; o ↗ abre o arquivo na aba Diff do painel.
 import { useContext, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { DiffView } from "@/components/DiffView";
@@ -10,7 +6,6 @@ import { cn } from "@/lib/utils";
 import { Alcas } from "./Nos";
 import { AZUL, BORDA, BOTAO, CABECALHO, CINZA, FONTE, RunsCtx, TITULO, lerDados, moldura, nomeDoArquivo, texto } from "./Run";
 
-/** Card 'diff': abas pelos arquivos alterados da run e o diff do arquivo ativo. */
 function NoDiff({ data, selected }: NodeProps) {
   const { runs, abrirDiff } = useContext(RunsCtx);
   const no = lerDados(data);
@@ -19,7 +14,6 @@ function NoDiff({ data, selected }: NodeProps) {
   const [ativo, setAtivo] = useState<string | null>(null);
 
   const arquivos = run?.ordemDiffs ?? [];
-  // Aba ativa: a escolhida, se ainda existir; senao a primeira (ou nenhuma).
   const escolhido = ativo && arquivos.includes(ativo) ? ativo : arquivos[0] ?? null;
   const patch = escolhido ? run?.diffs[escolhido] ?? "" : "";
 
@@ -76,5 +70,4 @@ function NoDiff({ data, selected }: NodeProps) {
   );
 }
 
-/** Mapa de nodeTypes do xyflow (o Canvas registra 'diff' apontando pra este card). */
 export const nodeTypes = { diff: NoDiff };
