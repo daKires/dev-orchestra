@@ -255,52 +255,6 @@ export function runsDoProjeto(runs: Run[], projeto: string): Run[] {
   return runs.filter((r) => r.cwd !== "" && chaveRaiz(r.cwd) === alvo);
 }
 
-// Chats (planejadores) do projeto da run: mesma RAIZ do cwd da run — a run na raiz do projeto ou em
-// qualquer worktree dele ve os chats daquele projeto. Mais recente primeiro (ordem das abas).
-export function chatsDoProjeto(planejadores: Planejador[], cwdRun: string): Planejador[] {
-  const alvo = chaveRaiz(cwdRun);
-  return planejadores.filter((p) => chaveRaiz(p.raiz) === alvo).sort((a, b) => b.ts - a.ts);
-}
-
-// Chats visiveis no painel da direita, dada a lista GLOBAL de planejadores, os chats do projeto da run
-// (chatsDoProjeto) e o selecionado. A lista NUNCA filtra pelo selecionado: clicar numa aba nao pode
-// sumir com as outras. Sem sel (ou sel invalido, que nao existe em planejadores) devolve doProjeto;
-// sel que ja' esta em doProjeto devolve doProjeto INTEIRO; sel valido fora de doProjeto (ex.: nova
-// feature recem-criada, ainda sem run no projeto) entra como extra NA FRENTE.
-export function chatsVisiveis(planejadores: Planejador[], doProjeto: Planejador[], sel: string | null): Planejador[] {
-  if (!sel) return doProjeto;
-  if (doProjeto.some((p) => p.slug === sel)) return doProjeto;
-  const extra = planejadores.find((p) => p.slug === sel);
-  return extra ? [extra, ...doProjeto] : doProjeto;
-}
-
-// Fechar uma aba de chat so' ESCONDE o planejador (o chat segue rodando no fundo): remove os slugs
-// fechados da lista, preservando a ordem dos que ficam. Slug fechado que nao esta na lista nao muda
-// nada. E' o complemento de chatsEscondidos.
-export function filtrarFechados(lista: Planejador[], fechados: string[]): Planejador[] {
-  return lista.filter((p) => !fechados.includes(p.slug));
-}
-
-// Chats escondidos QUE estao nesta lista, na ordem dela — e' o conteudo do menu "reabrir". Fechado
-// de outro projeto (fora da lista) nao entra aqui.
-export function chatsEscondidos(lista: Planejador[], fechados: string[]): Planejador[] {
-  return lista.filter((p) => fechados.includes(p.slug));
-}
-
-// Selecao depois de fechar um chat: fechou a aba ATIVA -> passa pro ULTIMO dos restantes (null se nao
-// sobrou nenhum); fechou outra (ou um slug fora da lista) -> mantem a selecao atual.
-export function selecaoAposFechar(restantes: Planejador[], fechado: string, sel: string | null): string | null {
-  if (sel === fechado) return restantes.length ? restantes[restantes.length - 1].slug : null;
-  return sel;
-}
-
-// Modo de exibicao do painel de chat: 'normal' ha visiveis; 'so-menu' quando todos foram fechados
-// (fica so' a barra com o menu de reabrir); 'oculto' quando nao ha nenhum chat (o painel some).
-export function modoPainelChat(nVisiveis: number, nEscondidos: number): "normal" | "so-menu" | "oculto" {
-  if (nVisiveis > 0) return "normal";
-  return nEscondidos > 0 ? "so-menu" : "oculto";
-}
-
 // Projetos conhecidos (datalist da "Nova feature") = raizes dos registros de planejadores + raizes
 // das runs (mesma regra raiz(): worktree conta como o projeto). O dedupe e' case-insensitive pela
 // chave canonica, mas PRESERVA a primeira forma vista (o caminho aparece legivel no formulario);
