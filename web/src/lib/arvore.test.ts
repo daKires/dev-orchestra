@@ -19,43 +19,27 @@ test("a run ativa abre sozinha; terminadas ficam recolhidas; fechar a ativa a ma
   const ativa = runDe("ra");
   const pronta = runDe("rp", [fim("rp")], T - 1000);
   const l = layoutRuns([ativa, pronta], vazioS);
-  assert.ok(l.nos.some((n) => n.id === "reg:ra"), "ativa expandida sem precisar clicar");
-  assert.ok(!l.nos.some((n) => n.id === "reg:rp"), "terminada recolhida");
+  assert.ok(l.nos.some((n) => n.id === "fase2:ra"), "ativa expandida sem precisar clicar");
+  assert.ok(!l.nos.some((n) => n.id === "fase2:rp"), "terminada recolhida");
   const fechada = layoutRuns([ativa], { nos: [salvoCard("ra", { expandida: false })], arestas: [] });
-  assert.ok(!fechada.nos.some((n) => n.id === "reg:ra"), "voce fechou: continua fechada");
+  assert.ok(!fechada.nos.some((n) => n.id === "fase2:ra"), "voce fechou: continua fechada");
   const aberta = layoutRuns([pronta], { nos: [salvoCard("rp", { expandida: true })], arestas: [] });
-  assert.ok(aberta.nos.some((n) => n.id === "reg:rp"), "terminada abre no clique");
+  assert.ok(aberta.nos.some((n) => n.id === "fase2:rp"), "terminada abre no clique");
 });
 
-test("vista Arvore (padrao): slices em coluna, arquivos na linha da slice, conectores run->slice->arquivo (CA-G1a, G1e)", () => {
+test("slices em coluna na fase 2, ligadas a run; arquivos da run nao viram cards (CA-17, G1a)", () => {
   const r = runDe("rx", [
-    { swarm: "rx", ev: { t: "slice", idx: 1, total: 3, tarefa: "t1", status: "ok", escritos: ["a.ts", "a.test.ts"], ts: T + 1 } },
-    { swarm: "rx", ev: { t: "slice", idx: 2, total: 3, tarefa: "t2", status: "ok", escritos: ["b.ts"], ts: T + 2 } },
+    { swarm: "rx", ev: { t: "slice", idx: 1, total: 3, tarefa: "t1", status: "ok", escritos: ["a.ts"], ts: T + 1 } },
     { swarm: "rx", ev: { t: "diff", arquivo: "a.ts", patch: "@@", ts: T + 3 } },
-    { swarm: "rx", ev: { t: "diff", arquivo: "a.test.ts", patch: "@@", ts: T + 3 } },
-    { swarm: "rx", ev: { t: "diff", arquivo: "b.ts", patch: "@@", ts: T + 4 } },
-    { swarm: "rx", ev: { t: "diff", arquivo: "README.md", patch: "@@", ts: T + 5 } },
   ]);
   const l = layoutRuns([r], vazioS);
   const no = (id: string) => l.nos.find((n) => n.id === id)!;
-  assert.ok(!l.nos.some((n) => n.id.startsWith("flow:")), "arvore nao desenha o fluxograma");
   const s = [1, 2, 3].map((i) => no("worker:rx:" + i));
-  assert.ok(s.every((x) => x && x.tipo === "worker" && x.pai === "reg:rx"));
+  assert.ok(s.every((x) => x && x.tipo === "worker" && x.pai === "fase2:rx"));
   assert.ok(s[0].x === s[1].x && s[1].x === s[2].x, "slices na mesma coluna");
-  assert.ok(s[0].y < s[1].y && s[1].y < s[2].y, "slices em ordem, de cima pra baixo");
-  for (let i = 0; i < 2; i++) assert.ok(s[i].y + s[i].h <= s[i + 1].y, "slices nao se sobrepoem");
-  const liga = (de: string, para: string) => l.arestas.some((e) => e.de === de && e.para === para);
-  for (let i = 1; i <= 3; i++) assert.ok(liga("run:rx", "worker:rx:" + i), "run liga em cada slice");
-  for (const [arq, dono] of [["a.ts", 1], ["a.test.ts", 1], ["b.ts", 2]] as const) {
-    const a = no("arq:rx:" + arq), w = no("worker:rx:" + dono);
-    assert.ok(a.x >= w.x + w.w, `${arq} a direita da slice`);
-    assert.ok(a.y >= w.y && a.y < w.y + Math.max(w.h, 64), `${arq} na linha da slice ${dono}`);
-    assert.ok(liga("worker:rx:" + dono, "arq:rx:" + arq), `slice ${dono} liga em ${arq}`);
-  }
-  const solto = no("arq:rx:README.md");
-  assert.ok(solto.y >= s[2].y + s[2].h, "arquivo sem slice abaixo da ultima slice");
-  assert.ok(liga("run:rx", "arq:rx:README.md"));
-  assert.equal(no("reg:rx").dados.titulo, "f-rx");
+  for (let i = 0; i < 2; i++) assert.ok(s[i].y + s[i].h <= s[i + 1].y, "slices em ordem, sem sobrepor");
+  for (let i = 1; i <= 3; i++) assert.ok(l.arestas.some((e) => e.de === "run:rx" && e.para === "worker:rx:" + i), "run liga em cada slice");
+  assert.ok(!l.nos.some((n) => n.id.startsWith("arq:rx:")), "arquivos ficam no card Diff");
 });
 
 test("slice viva: a rodando abre larga; clique abre/fecha (dados.aberta salvo); arquivos andam pra direita (CA-G1d)", () => {
@@ -72,15 +56,8 @@ test("slice viva: a rodando abre larga; clique abre/fecha (dados.aberta salvo); 
   const s1Aberta = layoutRuns([r], { nos: [{ ...fechada, dados: { ...fechada.dados, aberta: true }, rev: 2 }], arestas: [] });
   const w1 = no(s1Aberta, "worker:rv:1");
   assert.ok(w1.w > fechada.w * 1.8, "clique abre a slice terminada");
-  assert.ok(no(s1Aberta, "arq:rv:a.ts").x >= w1.x + w1.w, "arquivo continua a direita da slice aberta");
   const fechouViva = layoutRuns([r], { nos: [{ ...viva, dados: { ...viva.dados, aberta: false }, rev: 2 }], arestas: [] });
   assert.ok(no(fechouViva, "worker:rv:2").w <= fechada.w, "voce fechou a viva: fica compacta");
-});
-
-test("vista Fluxo: card salvo com vista 'fluxo' volta ao fluxograma Inicio->Gate (CA-G1e)", () => {
-  const r = runDe("rf");
-  const l = layoutRuns([r], { nos: [salvoCard("rf", { vista: "fluxo" })], arestas: [] });
-  for (const id of ["flow:rf:inicio", "flow:rf:1", "flow:rf:gate", "flow:rf:fim"]) assert.ok(l.nos.some((n) => n.id === id), id);
 });
 
 test("feedDaSlice: ultimas 200 linhas da slice com hora, ferramenta e texto; erro marcado (CA-G1d)", () => {
@@ -120,16 +97,16 @@ test("runs empilhadas nao se sobrepoem: cada run comeca abaixo da regiao/card da
   const evs = (id: string): Msg[] => [1, 2, 3].map((i) => ({ swarm: id, ev: { t: "slice", idx: i, total: 3, tarefa: "t" + i, status: "ok", escritos: [`f${i}.ts`], ts: T + i } } as Msg));
   const a = runDe("ka", evs("ka"), T + 2000), b = runDe("kb", evs("kb"), T + 1000), c = runDe("kc", [], T);
   const l = layoutRuns([a, b, c], vazioS, T + 3000); // as tres ativas e recentes: todas abertas
-  assert.ok(["ka", "kb", "kc"].every((id) => l.nos.some((n) => n.id === "reg:" + id)), "todas expandidas");
+  assert.ok(["ka", "kb", "kc"].every((id) => l.nos.some((n) => /^fase[123]:/.test(n.id) && n.dados.runId === id)), "todas expandidas");
   const caixa = (id: string) => {
-    const nos = l.nos.filter((n) => n.id === "run:" + id || n.id === "reg:" + id);
+    const nos = l.nos.filter((n) => n.id === "run:" + id || /^fase[123]:/.test(n.id) && n.dados.runId === id);
     return { y1: Math.min(...nos.map((n) => n.y)), y2: Math.max(...nos.map((n) => n.y + n.h)) };
   };
   const ordem = ["ka", "kb", "kc"].map(caixa);
   for (let i = 0; i < 2; i++) assert.ok(ordem[i].y2 <= ordem[i + 1].y1, `run ${i} termina antes da proxima comecar`);
 });
 
-test("card da run comporta status, Arvore|Fluxo e acoes (altura >= 170) (G1 fix)", () => {
+test("card da run comporta status e pipeline (altura >= 170) (G1 fix)", () => {
   const l = layoutRuns([runDe("kh", [fim("kh")])], vazioS);
   assert.ok(l.nos.find((n) => n.id === "run:kh")!.h >= 170);
 });
@@ -137,9 +114,9 @@ test("card da run comporta status, Arvore|Fluxo e acoes (altura >= 170) (G1 fix)
 test("run 'rodando' sem evento ha mais de 10 min (processo morreu) nao abre sozinha (G1 fix)", () => {
   const r = runDe("kz", [{ swarm: "kz", ev: { t: "slice", idx: 1, total: 3, tarefa: "t1", status: "rodando", ts: T + 5 } }]);
   const viva = layoutRuns([r], vazioS, r.ultimoEventoTs + 60_000);
-  assert.ok(viva.nos.some((n) => n.id === "reg:kz"), "ativa recente abre");
+  assert.ok(viva.nos.some((n) => n.id === "fase2:kz"), "ativa recente abre");
   const morta = layoutRuns([r], vazioS, r.ultimoEventoTs + 11 * 60_000);
-  assert.ok(!morta.nos.some((n) => n.id === "reg:kz"), "parada ha 11 min: recolhida");
+  assert.ok(!morta.nos.some((n) => n.id === "fase2:kz"), "parada ha 11 min: recolhida");
   assert.equal(morta.nos.find((n) => n.id === "worker:kz:1"), undefined);
 });
 
@@ -156,7 +133,7 @@ test("card de run so' fica onde foi salvo se voce o arrastou (dados.movido); sen
   // salvos pelo clique em Expandir, com a posicao que tinham quando ainda estavam recolhidos
   const nos = [{ ...salvoCard("ma", { expandida: true }), x: 0, y: 40 }, { ...salvoCard("mb", { expandida: true }), x: 0, y: 250 }];
   const l = layoutRuns([a, b], { nos, arestas: [] });
-  const regA = l.nos.find((n) => n.id === "reg:ma")!, cardB = l.nos.find((n) => n.id === "run:mb")!;
+  const regA = l.nos.filter((n) => n.id.startsWith("fase") && n.dados.runId === "ma").reduce((a, b) => (b.y + b.h > a.y + a.h ? b : a)), cardB = l.nos.find((n) => n.id === "run:mb")!;
   assert.ok(cardB.y >= regA.y + regA.h, "a run de baixo desce quando a de cima abre");
   const movido = layoutRuns([a, b], { nos: [nos[0], { ...nos[1], dados: { ...nos[1].dados, movido: true } }], arestas: [] });
   assert.equal(movido.nos.find((n) => n.id === "run:mb")!.y, 250, "arrastado por voce: fica onde voce pos");

@@ -1,84 +1,49 @@
-// Layout automatico de runs e agentes no canvas (F2 S4). PURO: sem React, sem DOM.
-// Tipos do hub e do modelo entram so' como `import type` (apagados na compilacao, nao vao pro bundle).
+// Layout automatico de runs e agentes no canvas (F2 S4; Run B: run expandida em 3 fases).
+// PURO: sem React, sem DOM. Tipos do hub e do modelo entram so' como `import type` (apagados na
+// compilacao, nao vao pro bundle).
 import type { No, Snapshot } from "../../../canvas.ts";
-import type { Run, SliceEstado, StatusSlice } from "./estado.ts";
+import type { Run, SliceEstado } from "./estado.ts";
 
-// Fluxo do plano (CA-11b): Inicio -> slices -> Gate -> Pronto
-
-export type FormaFluxo = "elipse" | "retangulo" | "losango";
-export type NoFluxo = { id: string; forma: FormaFluxo; texto: string; cor: string };
-export type ArestaFluxo = { de: string; para: string };
-export type Fluxo = { nos: NoFluxo[]; arestas: ArestaFluxo[] };
-
-/** Cor (nome do token de forma) de uma slice pelo status: fila cinza, rodando azul, ok verde, ruim vermelho. */
-function corDaSlice(status: StatusSlice): string {
-  switch (status) {
-    case "rodando": return "azul";
-    case "ok": return "verde";
-    case "incompleta":
-    case "pulada": return "vermelho";
-    default: return "cinza"; // fila
-  }
-}
-
-/**
- * Fluxo linear do plano de uma run: elipse 'Início' verde, uma forma retangular por slice (texto =
- * tarefa, cor pelo status), losango 'Gate' e elipse 'Pronto'. Numero de slices = max(plano, eventos).
- */
-export function fluxoDoPlano(run: Run): Fluxo {
-  const id = run.id;
-  const n = Math.max(run.plano.length, run.slices.length);
-  const nos: NoFluxo[] = [{ id: `flow:${id}:inicio`, forma: "elipse", texto: "Início", cor: "verde" }];
-  for (let i = 1; i <= n; i++) {
-    const s: SliceEstado | undefined = run.slices.find((x) => x.idx === i);
-    const tarefa = s?.tarefa ?? run.plano[i - 1]?.tarefa ?? "";
-    nos.push({ id: `flow:${id}:${i}`, forma: "retangulo", texto: tarefa, cor: corDaSlice(s?.status ?? "fila") });
-  }
-  const ultimoGate = run.gate.length ? run.gate[run.gate.length - 1] : undefined;
-  const corGate = !ultimoGate || ultimoGate.status === "rodando" ? "amarelo"
-    : ultimoGate.status === "ok" ? "verde" : "vermelho";
-  nos.push({ id: `flow:${id}:gate`, forma: "losango", texto: "Gate", cor: corGate });
-  nos.push({ id: `flow:${id}:fim`, forma: "elipse", texto: "Pronto", cor: run.status === "COMPLETE" ? "verde" : "cinza" });
-  const arestas: ArestaFluxo[] = [];
-  for (let i = 0; i < nos.length - 1; i++) arestas.push({ de: nos[i].id, para: nos[i + 1].id });
-  return { nos, arestas };
-}
-
-// Layout das runs (CA-4b, 13a, 15): coluna de cards + regiao expandida
 
 export type ArestaLayout = { id: string; de: string; para: string };
-export type LayoutRuns = { nos: No[]; arestas: ArestaLayout[] };
+export type AgenteLayout = { id: string; x: number; y: number; pai: string };
+export type LayoutRuns = { nos: No[]; arestas: ArestaLayout[]; agentes: AgenteLayout[] };
 
 const CARD_W = 280;
-const CARD_H = 170;           // o card da run agora tem status, Arvore|Fluxo e acoes
+const CARD_H = 170;           // o card da run tem status e o pipeline das fases
 const COLUNA_X = 40;
 const COLUNA_Y = 40;
-const ESPACO_VERTICAL = 40;
+const ESPACO_VERTICAL = 40;   // espaco entre duas runs empilhadas na coluna
 
-const PAD = 24;               // margem interna da regiao
-const GAP = 32;               // espaco entre linhas dentro da regiao
-const STEP = 240;             // passo horizontal entre os nos do fluxo
-const FLOW_W = 160;
-const FLOW_H = 80;
-const WORKER_W = 200;
-const WORKER_H = 140;
-const ARQ_W = 240;
-const ARQ_H = 40;
-const GAP_ARQ = 12;
-const REG_GAP = 40;           // distancia do card ate' a regiao
+const PAD = 24;               // margem interna das fases
+const GAP = 32;               // espaco vertical entre cards da MESMA fase
+const FASE_GAP = 40;          // espaco horizontal entre as 3 fases
+const REG_GAP = 40;           // distancia do card da run ate' a fase 1
 const MARGEM_CONTEUDO = 80;   // folga minima entre a coluna de runs e o conteudo do usuario
-const ESPACO_REGIAO = 40;     // folga extra reservada pra regiao da run nao invadir o conteudo
+const ESPACO_REGIAO = 40;     // folga extra reservada pras fases nao invadirem o conteudo
 const RUN_PARADA_MS = 10 * 60_000; // sem evento nem painel por 10 min: run "parada" (processo morreu)
 
-// Vista Arvore (G1): coluna de slices + arquivos na mesma linha
+const PEDIDO_W = 300;
+const PEDIDO_H = 170;
+const GATE_W = 420;
+const GATE_H = 220;
+const DIFF_W = 620;
+const DIFF_H = 380;
+const AGENTE_W = 620;         // card do planejador (mesmo tamanho do no' de agente)
+const AGENTE_H = 420;
+const AGENTE_GAP = 40;
+
 const SLICE_W_COMPACTA = 260;
 const SLICE_H_COMPACTA = 64;
 const SLICE_W_ABERTA = 620;
 const SLICE_H_ABERTA = 380;
-const SLICE_ARQ_GAP = 48;     // distancia da coluna de slices ate' os arquivos
-const ARQ_COLUNAS = 3;        // arquivos lado a lado antes de descer uma linha dentro da linha da slice
-// Reserva horizontal da arvore: PAD + slice aberta + folga + 3 arquivos + PAD.
-const LARGURA_ARVORE = PAD + SLICE_W_ABERTA + SLICE_ARQ_GAP + ARQ_COLUNAS * (ARQ_W + GAP_ARQ) + PAD;
+
+const FASE1_W = PAD + Math.max(PEDIDO_W, AGENTE_W) + PAD;
+const FASE2_W = PAD + SLICE_W_ABERTA + PAD;
+const FASE3_W = PAD + Math.max(GATE_W, DIFF_W) + PAD;
+const LARGURA_FASES = FASE1_W + FASE_GAP + FASE2_W + FASE_GAP + FASE3_W;
+
+const TITULOS_FASE = ["FASE 1 · PLANEJAMENTO", "FASE 2 · EXECUÇÃO DO SWARM", "FASE 3 · GATE E ENTREGA"] as const;
 
 /** Ids salvos do snapshot (para reusar posicao/dados dos nos ja' existentes). */
 function indexarSalvos(snap: Snapshot): Map<string, No> {
@@ -118,55 +83,73 @@ export function mesclarComLayout(salvos: No[], gerados: No[]): No[] {
 }
 
 /**
- * Largura que a regiao de uma run TERIA (a maior regiao possivel), ignorando posicoes salvas: so'
- * depende do numero de slices (cadeia do fluxo) e dos arquivos. Usada pra reservar espaco a esquerda
- * do conteudo do usuario sem a regiao nunca invadir nada.
+ * Largura/altura de uma fase (grupo): a maior entre o minimo e o bounding box dos filhos + margem.
+ * As posicoes salvas dos filhos vencem, entao a fase cresce pra conter o filho onde ele estiver.
  */
-function larguraRegiao(run: Run): number {
-  const n = Math.max(run.plano.length, run.slices.length);
-  let fim = FLOW_W; // forma "Início" (pos 0); o fluxo sempre tem essa largura minima
-  for (let pos = 0; pos <= n + 2; pos++) fim = Math.max(fim, PAD + pos * STEP + FLOW_W);
-  for (let idx = 1; idx <= n; idx++) fim = Math.max(fim, PAD + idx * STEP + WORKER_W);
-  if (run.ordemDiffs.length) fim = Math.max(fim, PAD + ARQ_W);
-  return Math.max(fim + PAD, LARGURA_ARVORE);
+function caixaDoGrupo(x: number, y: number, minW: number, minH: number, filhos: No[]): { w: number; h: number } {
+  return {
+    w: Math.max(minW, ...filhos.map((f) => f.x + f.w - x + PAD)),
+    h: Math.max(minH, ...filhos.map((f) => f.y + f.h - y + PAD)),
+  };
 }
 
 /**
  * Coluna de cards de run (280x170), mais recente em cima, empilhados sem sobrepor: cada run fica num
- * cursor `y` e, depois de montada, o cursor avanca pro fundo real (fundo do card OU da regiao, o maior)
- * + ESPACO_VERTICAL. Uma run expandida ganha a direita um grupo `reg:<id>` (nomeado pela feature):
- * `dados.expandida` salvo no card vence; sem valor salvo, a run ATIVA (rodando/aguardando) abre sozinha
- * e a terminada fica recolhida. Quando `agora` vem, uma run ativa cujo `ultimoEventoTs` e' anterior a
- * `agora - 10 min` conta como PARADA (processo morreu) e NAO abre sozinha (o salvo continua vencendo);
- * sem `agora`, nao checa. A vista segue `dados.vista` do card: 'fluxo' desenha o fluxograma + workers +
- * arquivos; ausente/'arvore' (padrao) desenha a arvore (coluna de slices 260x64, aberta 620x380, com os
- * arquivos na mesma linha). A coluna fica a ESQUERDA de todo o conteudo do usuario (nos sem dados.auto
- * e que nao sao 'agente'), reservando espaco pra maior regiao possivel; sem conteudo do usuario, mantem
- * a coluna padrao (COLUNA_X). A posicao salva (comSalvo) do card ainda vence para o proprio card, mas o
- * cursor segue o fundo real.
+ * cursor `y` e, depois de montada, o cursor avanca pro fundo real (fundo do card OU das fases, o maior)
+ * + ESPACO_VERTICAL. Uma run expandida ganha a direita, lado a lado e na MESMA altura do card, as 3
+ * fases (`dados.expandida` salvo no card vence; sem valor salvo, a run ATIVA — rodando/aguardando —
+ * abre sozinha e a terminada fica recolhida). Quando `agora` vem, uma run ativa cujo `ultimoEventoTs`
+ * e' anterior a `agora - 10 min` conta como PARADA (processo morreu) e NAO abre sozinha (o salvo
+ * continua vencendo); sem `agora`, nao checa. As fases sao:
+ * - `fase1:<id>`: card `pedido:<id>` (300x170) e, havendo planejador do cwd, os slots 620x420 abaixo;
+ * - `fase2:<id>`: os `worker:<id>:<k>` em coluna (compacta 260x64 / aberta 620x380 pelo `dados.aberta`
+ *   salvo ou pela slice rodando);
+ * - `fase3:<id>`: `gate:<id>` (420x220) e `diff:<id>` (620x380) abaixo.
+ * Arestas: pedido -> run, run -> cada worker, ultimo worker -> gate (sem slices: run -> gate) e
+ * gate -> diff. A coluna fica a ESQUERDA de todo o conteudo do usuario (nos sem dados.auto e que nao
+ * sao 'agente'), reservando espaco pra largura das 3 fases; sem conteudo do usuario, mantem a coluna
+ * padrao (COLUNA_X). A posicao salva (comSalvo) vence apenas pro CARD da run e pros cards das fases
+ * (filhos), nunca pro empilhamento nem pro tamanho das fases.
+ *
+ * Planejadores: cada um vai pra fase 1 da run MAIS RECENTE do cwd dele (normalizado por cwdChave),
+ * abaixo do pedido, e so' quando essa run esta' expandida — devolvidos em `agentes`.
  */
-export function layoutRuns(runs: Run[], snap: Snapshot, agora?: number): LayoutRuns {
+export function layoutRuns(
+  runs: Run[], snap: Snapshot, agora?: number, planejadores: { agId: string; cwd: string }[] = [],
+): LayoutRuns {
   const salvos = indexarSalvos(snap);
   const ordenadas = [...runs].sort((a, b) => b.inicioTs - a.inicioTs);
   const nos: No[] = [];
   const arestas: ArestaLayout[] = [];
+  const agentes: AgenteLayout[] = [];
 
   // Conteudo criado a mao pelo usuario (notas/imagens/formas/regioes/textos): a coluna de runs
-  // precisa caber inteira (card + regiao) a esquerda de tudo isso.
   const doUsuario = snap.nos.filter((n) => n.dados?.auto !== true && n.tipo !== "agente");
   const minX = doUsuario.length ? Math.min(...doUsuario.map((n) => n.x)) : undefined;
-  const larguraRegiaoMax = ordenadas.reduce((m, r) => Math.max(m, larguraRegiao(r)), FLOW_W);
   const colunaX = minX === undefined
     ? COLUNA_X
-    : minX - MARGEM_CONTEUDO - CARD_W - ESPACO_REGIAO - larguraRegiaoMax;
+    : minX - MARGEM_CONTEUDO - CARD_W - ESPACO_REGIAO - LARGURA_FASES;
+
+  const runDoCwd = new Map<string, string>();
+  for (const run of ordenadas) {
+    const k = cwdChave(run.cwd);
+    if (k && !runDoCwd.has(k)) runDoCwd.set(k, run.id);
+  }
+  const planosDoRun = new Map<string, string[]>();
+  for (const p of planejadores) {
+    const runId = runDoCwd.get(cwdChave(p.cwd));
+    if (!runId) continue;
+    const lista = planosDoRun.get(runId);
+    if (lista) { if (!lista.includes(p.agId)) lista.push(p.agId); }
+    else planosDoRun.set(runId, [p.agId]);
+  }
+
+  const fases1 = new Map<string, No>(); // geometria final de cada fase 1 (pros slots dos planejadores)
 
   let cursorY = COLUNA_Y; // topo da proxima run (empilha sem sobrepor, mais nova em cima)
   ordenadas.forEach((run) => {
     const cardId = `run:${run.id}`;
     // A posicao salva (x,y) so' vale quando o usuario ARRASTOU o card (`dados.movido === true`); senao
-    // o card segue o empilhamento (cursor y, coluna). Os demais dados salvos (expandida, vista, ...)
-    // continuam sendo mesclados e o tamanho e' SEMPRE o atual: o card cresceu (status, Arvore|Fluxo e
-    // acoes) e uma altura antiga salva nao pode voltar a valer.
     const salvoCard = salvos.get(cardId);
     const movido = salvoCard?.dados?.movido === true;
     const card = {
@@ -185,157 +168,119 @@ export function layoutRuns(runs: Run[], snap: Snapshot, agora?: number): LayoutR
     // uma run ativa PARADA (sem evento ha mais de 10 min) nao abre sozinha.
     const ativa = !temPainel(run)
       && !(agora !== undefined && run.ultimoEventoTs < agora - RUN_PARADA_MS);
-    const expandida = typeof salvos.get(cardId)?.dados?.expandida === "boolean"
-      ? salvos.get(cardId)!.dados!.expandida === true
+    const expandida = typeof salvoCard?.dados?.expandida === "boolean"
+      ? salvoCard.dados.expandida === true
       : ativa;
-    // Fundo real desta run: o card; sobe pro fundo da regiao se ela existir (o cursor segue ele).
     let fundo = card.y + card.h;
     if (!expandida) { cursorY = fundo + ESPACO_VERTICAL; return; } // recolhida: so' o card
 
-    const regId = `reg:${run.id}`;
-    const regX = card.x + card.w + REG_GAP;
-    const regY = card.y;
-    const filhos: No[] = [];
-    let minLargura = FLOW_W; // largura minima da regiao conforme a vista
-    let minAltura = FLOW_H;
+    const planos = planosDoRun.get(run.id) ?? [];
+    const fase1Id = `fase1:${run.id}`;
+    const fase2Id = `fase2:${run.id}`;
+    const fase3Id = `fase3:${run.id}`;
+    const faseX = card.x + card.w + REG_GAP;
+    const faseY = card.y; // as 3 fases comecam na mesma altura do card
 
-    if (salvos.get(cardId)?.dados?.vista === "fluxo") {
-      // ---- vista Fluxo (comportamento historico): fluxograma + workers + arquivos ----
-      const fluxo = fluxoDoPlano(run);
-      const linhasY = regY + PAD + FLOW_H + GAP; // topo da faixa de workers
-      const arqsY = linhasY + WORKER_H + GAP;    // topo da faixa de arquivos
+    const pedidoId = `pedido:${run.id}`;
+    const filhos1: No[] = [comSalvo({
+      id: pedidoId, tipo: "pedido", x: faseX + PAD, y: faseY + PAD, w: PEDIDO_W, h: PEDIDO_H,
+      pai: fase1Id, dados: { auto: true, runId: run.id }, rev: 0,
+    }, salvos)];
+    const alturaPlanos = planos.length ? planos.length * (AGENTE_H + GAP) : 0;
+    const caixa1 = caixaDoGrupo(
+      faseX, faseY,
+      PAD + Math.max(PEDIDO_W, planos.length ? AGENTE_W : 0) + PAD,
+      PAD + PEDIDO_H + alturaPlanos + PAD,
+      filhos1,
+    );
+    const fase1: No = {
+      id: fase1Id, tipo: "grupo", x: faseX, y: faseY, w: caixa1.w, h: caixa1.h,
+      dados: { auto: true, runId: run.id, fase: 1, titulo: TITULOS_FASE[0] }, rev: 0,
+    };
+    nos.push(fase1, ...filhos1);
+    fases1.set(run.id, fase1);
+    arestas.push({ id: `${pedidoId}->${cardId}`, de: pedidoId, para: cardId });
 
-      // Fluxo: inicio(pos 0), slice idx(pos idx), gate(pos n+1), fim(pos n+2), em cadeia horizontal.
-      fluxo.nos.forEach((fn, pos) => {
-        filhos.push({
-          id: fn.id, tipo: "forma", x: regX + PAD + pos * STEP, y: regY + PAD, w: FLOW_W, h: FLOW_H,
-          pai: regId, dados: { auto: true, forma: fn.forma, texto: fn.texto, cor: fn.cor }, rev: 0,
-        });
-      });
-
-      // Um worker por slice do fluxo (mesmo sem evento ainda), alinhado sob a forma da slice.
-      const n = Math.max(run.plano.length, run.slices.length);
-      for (let idx = 1; idx <= n; idx++) {
-        filhos.push({
-          id: `worker:${run.id}:${idx}`, tipo: "worker", x: regX + PAD + idx * STEP, y: linhasY,
-          w: WORKER_W, h: WORKER_H, pai: regId, dados: { auto: true, runId: run.id, idx }, rev: 0,
-        });
-      }
-
-      // Um arquivo por diff da run, empilhados abaixo dos workers.
-      run.ordemDiffs.forEach((arquivo, k) => {
-        filhos.push({
-          id: `arq:${run.id}:${arquivo}`, tipo: "arquivo", x: regX + PAD, y: arqsY + k * (ARQ_H + GAP_ARQ),
-          w: ARQ_W, h: ARQ_H, pai: regId, dados: { auto: true, runId: run.id, arquivo }, rev: 0,
-        });
-      });
-
-      // Arestas: run -> inicio, a cadeia do fluxo, slice -> worker e worker/run -> arquivo.
-      arestas.push({ id: `${cardId}->flow:${run.id}:inicio`, de: cardId, para: `flow:${run.id}:inicio` });
-      for (const a of fluxo.arestas) arestas.push({ id: `${a.de}->${a.para}`, de: a.de, para: a.para });
-      for (let idx = 1; idx <= n; idx++) {
-        arestas.push({ id: `flow:${run.id}:${idx}->worker:${run.id}:${idx}`, de: `flow:${run.id}:${idx}`, para: `worker:${run.id}:${idx}` });
-      }
-      for (const arquivo of run.ordemDiffs) {
-        const arqId = `arq:${run.id}:${arquivo}`;
-        const dono = run.slices.find((s) => s.escritos.includes(arquivo));
-        arestas.push(dono
-          ? { id: `worker:${run.id}:${dono.idx}->${arqId}`, de: `worker:${run.id}:${dono.idx}`, para: arqId }
-          : { id: `${cardId}->${arqId}`, de: cardId, para: arqId });
-      }
-    } else {
-      // ---- vista Arvore (padrao): coluna de slices + arquivos na mesma linha ----
-      minLargura = SLICE_W_COMPACTA;
-      minAltura = SLICE_H_COMPACTA;
-      const n = Math.max(run.plano.length, run.slices.length);
-      const colunaSlicesX = regX + PAD;
-
-      // Dono de cada arquivo: a primeira slice cujo `escritos` o inclui.
-      const dono = new Map<string, number>();
-      for (const s of run.slices) for (const a of s.escritos) if (!dono.has(a)) dono.set(a, s.idx);
-      const porSlice = new Map<number, string[]>();
-      const semDono: string[] = [];
-      for (const arquivo of run.ordemDiffs) {
-        const idx = dono.get(arquivo);
-        if (idx !== undefined && idx >= 1 && idx <= n) {
-          const lista = porSlice.get(idx);
-          if (lista) lista.push(arquivo); else porSlice.set(idx, [arquivo]);
-        } else semDono.push(arquivo);
-      }
-
-      let y = regY + PAD;
-      for (let idx = 1; idx <= n; idx++) {
-        const slice = run.slices.find((s) => s.idx === idx);
-        const salvaAberta = salvos.get(`worker:${run.id}:${idx}`)?.dados?.aberta;
-        const aberta = typeof salvaAberta === "boolean" ? salvaAberta : slice?.status === "rodando";
-        const w = aberta ? SLICE_W_ABERTA : SLICE_W_COMPACTA;
-        const h = aberta ? SLICE_H_ABERTA : SLICE_H_COMPACTA;
-        const arquivos = porSlice.get(idx) ?? [];
-        const linhasArqs = Math.ceil(arquivos.length / ARQ_COLUNAS);
-        const alturaArqs = linhasArqs ? linhasArqs * ARQ_H + (linhasArqs - 1) * GAP_ARQ : 0;
-        const alturaLinha = Math.max(h, alturaArqs);
-
-        filhos.push({
-          id: `worker:${run.id}:${idx}`, tipo: "worker", x: colunaSlicesX, y, w, h, pai: regId,
-          dados: { auto: true, runId: run.id, idx, aberta }, rev: 0,
-        });
-        arestas.push({ id: `${cardId}->worker:${run.id}:${idx}`, de: cardId, para: `worker:${run.id}:${idx}` });
-
-        const arqX = colunaSlicesX + w + SLICE_ARQ_GAP;
-        arquivos.forEach((arquivo, k) => {
-          const col = k % ARQ_COLUNAS, lin = Math.floor(k / ARQ_COLUNAS);
-          filhos.push({
-            id: `arq:${run.id}:${arquivo}`, tipo: "arquivo",
-            x: arqX + col * (ARQ_W + GAP_ARQ), y: y + lin * (ARQ_H + GAP_ARQ),
-            w: ARQ_W, h: ARQ_H, pai: regId, dados: { auto: true, runId: run.id, arquivo }, rev: 0,
-          });
-          arestas.push({ id: `worker:${run.id}:${idx}->arq:${run.id}:${arquivo}`, de: `worker:${run.id}:${idx}`, para: `arq:${run.id}:${arquivo}` });
-        });
-
-        y += alturaLinha + GAP;
-      }
-
-      // Arquivos sem dono: abaixo da ultima linha, ligados direto na run.
-      semDono.forEach((arquivo, k) => {
-        const col = k % ARQ_COLUNAS, lin = Math.floor(k / ARQ_COLUNAS);
-        filhos.push({
-          id: `arq:${run.id}:${arquivo}`, tipo: "arquivo",
-          x: colunaSlicesX + col * (ARQ_W + GAP_ARQ), y: y + lin * (ARQ_H + GAP_ARQ),
-          w: ARQ_W, h: ARQ_H, pai: regId, dados: { auto: true, runId: run.id, arquivo }, rev: 0,
-        });
-        arestas.push({ id: `${cardId}->arq:${run.id}:${arquivo}`, de: cardId, para: `arq:${run.id}:${arquivo}` });
-      });
+    const n = Math.max(run.plano.length, run.slices.length);
+    const fase2X = faseX + fase1.w + FASE_GAP;
+    const filhos2: No[] = [];
+    let colunaY = faseY + PAD; // cursor dos workers, abaixo da anterior
+    let somaAlturas = 0;       // altura total da coluna (com os gaps), sem posicoes salvas
+    let maiorLargura = SLICE_W_COMPACTA;
+    for (let idx = 1; idx <= n; idx++) {
+      const slice: SliceEstado | undefined = run.slices.find((s) => s.idx === idx);
+      const salvaAberta = salvos.get(`worker:${run.id}:${idx}`)?.dados?.aberta;
+      const aberta = typeof salvaAberta === "boolean" ? salvaAberta : slice?.status === "rodando";
+      const w = aberta ? SLICE_W_ABERTA : SLICE_W_COMPACTA;
+      const h = aberta ? SLICE_H_ABERTA : SLICE_H_COMPACTA;
+      const worker = comSalvo({
+        id: `worker:${run.id}:${idx}`, tipo: "worker", x: fase2X + PAD, y: colunaY, w, h,
+        pai: fase2Id, dados: { auto: true, runId: run.id, idx, aberta }, rev: 0,
+      }, salvos);
+      worker.w = w; worker.h = h; worker.dados = { ...worker.dados, aberta };
+      filhos2.push(worker);
+      arestas.push({ id: `${cardId}->${worker.id}`, de: cardId, para: worker.id });
+      maiorLargura = Math.max(maiorLargura, w);
+      if (idx > 1) somaAlturas += GAP;
+      somaAlturas += h;
+      colunaY += h + GAP;
     }
+    const caixa2 = caixaDoGrupo(
+      fase2X, faseY,
+      PAD + maiorLargura + PAD,
+      PAD + (n ? somaAlturas : SLICE_H_COMPACTA) + PAD,
+      filhos2,
+    );
+    const fase2: No = {
+      id: fase2Id, tipo: "grupo", x: fase2X, y: faseY, w: caixa2.w, h: caixa2.h,
+      dados: { auto: true, runId: run.id, fase: 2, titulo: TITULOS_FASE[1] }, rev: 0,
+    };
+    nos.push(fase2, ...filhos2);
 
-    // Posicoes salvas vencem (comSalvo); mas w/h da slice seguem compacta/aberta e `dados.aberta` e'
-    // sempre devolvido no no' da slice.
-    const resolvidos = filhos.map((f) => {
-      const r = comSalvo(f, salvos);
-      if (f.tipo === "worker" && f.dados.aberta !== undefined) {
-        r.w = f.w; r.h = f.h; r.dados = { ...r.dados, aberta: f.dados.aberta };
-      }
-      return r;
-    });
+    const fase3X = fase2X + fase2.w + FASE_GAP;
+    const gate = comSalvo({
+      id: `gate:${run.id}`, tipo: "gate", x: fase3X + PAD, y: faseY + PAD, w: GATE_W, h: GATE_H,
+      pai: fase3Id, dados: { auto: true, runId: run.id }, rev: 0,
+    }, salvos);
+    const diff = comSalvo({
+      id: `diff:${run.id}`, tipo: "diff", x: fase3X + PAD, y: faseY + PAD + GATE_H + GAP, w: DIFF_W, h: DIFF_H,
+      pai: fase3Id, dados: { auto: true, runId: run.id }, rev: 0,
+    }, salvos);
+    const caixa3 = caixaDoGrupo(
+      fase3X, faseY,
+      PAD + Math.max(GATE_W, DIFF_W) + PAD,
+      PAD + GATE_H + GAP + DIFF_H + PAD,
+      [gate, diff],
+    );
+    const fase3: No = {
+      id: fase3Id, tipo: "grupo", x: fase3X, y: faseY, w: caixa3.w, h: caixa3.h,
+      dados: { auto: true, runId: run.id, fase: 3, titulo: TITULOS_FASE[2] }, rev: 0,
+    };
+    nos.push(fase3, gate, diff);
 
-    const largura = Math.max(minLargura, ...resolvidos.map((f) => f.x + f.w - regX)) + PAD;
-    const altura = Math.max(minAltura, ...resolvidos.map((f) => f.y + f.h - regY)) + PAD;
-    nos.push(comSalvo({
-      id: regId, tipo: "grupo", x: regX, y: regY, w: largura, h: altura,
-      dados: { auto: true, runId: run.id, titulo: run.feature }, rev: 0,
-    }, salvos));
-    nos.push(...resolvidos);
-    fundo = Math.max(fundo, regY + altura);
+    const antesDoGate = n ? `worker:${run.id}:${n}` : cardId;
+    arestas.push({ id: `${antesDoGate}->gate:${run.id}`, de: antesDoGate, para: `gate:${run.id}` });
+    arestas.push({ id: `gate:${run.id}->diff:${run.id}`, de: `gate:${run.id}`, para: `diff:${run.id}` });
+
+    fundo = Math.max(fundo, fase1.y + fase1.h, fase2.y + fase2.h, fase3.y + fase3.h);
     cursorY = fundo + ESPACO_VERTICAL;
   });
 
-  return { nos, arestas };
+  for (const p of planejadores) {
+    const runId = runDoCwd.get(cwdChave(p.cwd));
+    const fase1 = runId ? fases1.get(runId) : undefined;
+    if (!runId || !fase1) continue;
+    const k = (planosDoRun.get(runId) ?? []).indexOf(p.agId);
+    agentes.push({
+      id: p.agId, pai: `fase1:${runId}`, x: fase1.x + PAD,
+      y: fase1.y + PAD + PEDIDO_H + GAP + Math.max(0, k) * (AGENTE_H + GAP),
+    });
+  }
+
+  return { nos, arestas, agentes };
 }
 
 // Layout dos agentes (CA-5b): planejadores ainda sem no' no canvas
-
-const AGENTE_W = 620;
-const AGENTE_H = 420;
-const AGENTE_GAP = 40;
 
 // Ligacao planejador -> run e pedido em andamento (G2/S3)
 
@@ -455,20 +400,65 @@ export function resumoPainel(runs: Run[], agora: number): ResumoPainel {
   };
 }
 
-// Linhas do worker (CA-4b): feed da slice + atividade atual
 
-export type LinhaWorker = { texto: string; erro: boolean };
+export type StatusPipeline = "fila" | "rodando" | "ok" | "falha" | "pausada";
+export type NoPipeline = { id: string; rotulo: string; status: StatusPipeline };
+export type ResumoGate = {
+  comandos: { cmd: string; status: "fila" | "rodando" | "ok" | "falha"; saida: string }[];
+  reparo: number | null;
+  final: "ok" | "falha" | "rodando" | "aguardando";
+};
 
-/** Linhas de uma slice no painel do worker: feed (slice/tool/log) + a atividade corrente, se for dela. */
-export function linhasDoWorker(run: Run, idx: number): LinhaWorker[] {
-  const out: LinhaWorker[] = run.feed
-    .filter((f) => f.slice === idx && (f.tipo === "slice" || f.tipo === "tool" || f.tipo === "log"))
-    .map((f) => ({ texto: f.texto, erro: f.erro }));
-  const a = run.atividade;
-  if (a && a.slice === idx) {
-    out.push(a.tipo === "gerando"
-      ? { texto: `→ gerando ${a.tokens} tokens…`, erro: false }
-      : { texto: `→ ${a.cmd}`, erro: false });
+function statusDaSlice(slice: SliceEstado | undefined): StatusPipeline {
+  if (!slice || slice.status === "fila") return "fila";
+  if (slice.status === "incompleta" || slice.status === "pulada") return "falha";
+  if (slice.pausada) return "pausada";
+  return slice.status; // rodando | ok
+}
+
+/**
+ * Pipeline do card da run (CA-19): Pedido (ok), Plano (ok quando o plano chegou; senao rodando), uma
+ * entrada S1..Sn por slice (n = max(plano, slices); fila/rodando/ok; incompleta|pulada = falha;
+ * pausada = pausada), Gate (de resumoGate: 'aguardando' vira fila, senao o proprio final) e Commit
+ * (painel COMPLETE = ok; outro status com painel = falha; sem painel = fila).
+ */
+export function pipelineDaRun(run: Run): NoPipeline[] {
+  const out: NoPipeline[] = [
+    { id: "pedido", rotulo: "Pedido", status: "ok" },
+    { id: "plano", rotulo: "Plano", status: run.plano.length ? "ok" : "rodando" },
+  ];
+  const n = Math.max(run.plano.length, run.slices.length);
+  for (let idx = 1; idx <= n; idx++) {
+    out.push({ id: `s${idx}`, rotulo: `S${idx}`, status: statusDaSlice(run.slices.find((s) => s.idx === idx)) });
   }
+  const gate = resumoGate(run);
+  out.push({ id: "gate", rotulo: "Gate", status: gate.final === "aguardando" ? "fila" : gate.final });
+  out.push({
+    id: "commit", rotulo: "Commit",
+    status: !temPainel(run) ? "fila" : run.status === "COMPLETE" ? "ok" : "falha",
+  });
   return out;
+}
+
+/**
+ * Resumo do gate (CA-18): so' a TENTATIVA mais alta (k = maior `tentativa` de run.gate; ausente = 0).
+ * Os comandos saem na ordem de run.gateCmds (se vazio, na ordem de aparicao na tentativa k; cmd que
+ * rodou e nao estava na lista entra no fim) e cada um fica com o ULTIMO evento dele na tentativa k
+ * (sem evento: 'fila' e saida ''). `reparo` = k (null quando k = 0). `final`: 'aguardando' sem eventos,
+ * 'falha' se algum falhou, 'ok' se todos ok, senao 'rodando'.
+ */
+export function resumoGate(run: Run): ResumoGate {
+  const k = run.gate.reduce((m, g) => Math.max(m, g.tentativa ?? 0), 0);
+  const daTentativa = run.gate.filter((g) => (g.tentativa ?? 0) === k);
+  const cmds: string[] = [...run.gateCmds];
+  for (const g of daTentativa) if (!cmds.includes(g.cmd)) cmds.push(g.cmd);
+  const comandos = cmds.map((cmd) => {
+    const ultimo = [...daTentativa].reverse().find((g) => g.cmd === cmd);
+    return { cmd, status: (ultimo?.status ?? "fila") as ResumoGate["comandos"][number]["status"], saida: ultimo?.saida ?? "" };
+  });
+  const final: ResumoGate["final"] = !run.gate.length ? "aguardando"
+    : comandos.some((c) => c.status === "falha") ? "falha"
+      : comandos.length && comandos.every((c) => c.status === "ok") ? "ok"
+        : "rodando";
+  return { comandos, reparo: k > 0 ? k : null, final };
 }

@@ -47,7 +47,7 @@ test("runDaSelecao: 1 no' de run (dados.runId ou id fase/gate/pedido/run) -> run
   assert.equal(runDaSelecao([{ id: "worker:r1:2", dados: { runId: "r1", idx: 2 } }]), "r1");
   assert.equal(runDaSelecao([{ id: "arq:r1:a.ts", dados: { runId: "r1" } }]), "r1");
   assert.equal(runDaSelecao([{ id: "run:r9", dados: {} }]), "r9");
-  for (const p of ["fase1", "fase2", "fase3", "gate", "pedido"]) {
+  for (const p of ["fase1", "fase2", "fase3", "gate", "pedido", "diff"]) {
     assert.equal(runDaSelecao([{ id: `${p}:r7`, dados: {} }]), "r7", p);
   }
   assert.equal(runDaSelecao([{ id: "nota1", dados: { titulo: "x" } }]), null, "no' do usuario");
