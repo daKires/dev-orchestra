@@ -201,7 +201,7 @@
   --cv-sombra: 0 1px 2px #0006, 0 6px 16px #0006;
   --cv-texto: #eee;
   --cv-icone: #858585;
-  --cv-selecao: #2979ff;
+  --cv-selecao: #F5A524;
   --cv-aresta: #606060;
   --cv-aresta-ativa: #74aaff;
   --cv-menu: #222;
@@ -209,7 +209,7 @@
   color-scheme: dark;
 }
 
-/* Chrome dos cards: card escuro arredondado, cabecalho #222, selecao por outline azul. */
+/* Chrome dos cards: card escuro arredondado, cabecalho #222, selecao por outline ambar. */
 .cv .cv-card {
   background: var(--cv-card);
   border: 1px solid var(--cv-borda);
@@ -218,7 +218,7 @@
 }
 .cv .cv-card.cv-sel,
 .cv .cv-forma-sel {
-  outline: 2px solid var(--cv-selecao);
+  outline: 1.5px solid var(--cv-selecao);
   outline-offset: 3px;
 }
 .cv .cv-head {
@@ -436,18 +436,20 @@
   color: #fff;
 }
 
-/* Animacoes da arvore de runs (G1 - S3): pulso azul na slice rodando, flash verde quando o gate
-   fica ok e entrada (translateY + fade) dos cards de arquivo. Todas dentro de `.cv` e desligadas
-   por completo quando o usuario pede menos movimento (prefers-reduced-motion). */
-@keyframes cv-pulso {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(116, 170, 255, 0); }
-  50% { box-shadow: 0 0 0 5px rgba(116, 170, 255, 0.35); }
+/* Animacoes da arvore de runs (G1 - S3; Run B): brilho azul naquilo que esta' rodando (slice viva,
+   card da run, Gate e agente ocupado), flash verde quando o gate fica ok e entrada (translateY +
+   fade) dos cards de arquivo. Todas dentro de `.cv` e desligadas quando o usuario pede menos
+   movimento (prefers-reduced-motion) — ai' so' a borda do brilho permanece. */
+@keyframes cv-rodando {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.45), 0 0 18px -2px rgba(88, 166, 255, 0.22); }
+  50% { box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.85), 0 0 24px 2px rgba(88, 166, 255, 0.35); }
 }
-.cv .cv-pulso {
-  animation: cv-pulso 1.6s ease-in-out infinite;
+.cv .cv-rodando {
+  border: 1px solid rgba(88, 166, 255, 0.85);
+  animation: cv-rodando 2s ease-in-out infinite;
 }
-/* Slice pausada (G3 - S4b): sem pulso enquanto a slice esta' parada esperando instrucao/retomada. */
-.cv .cv-pulso.cv-pausada {
+/* Slice pausada (G3 - S4b): sem brilho enquanto a slice esta' parada esperando instrucao/retomada. */
+.cv .cv-rodando.cv-pausada {
   animation: none;
 }
 @keyframes cv-gate-ok {
@@ -465,7 +467,7 @@
   animation: cv-entra 0.28s ease-out both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .cv .cv-pulso,
+  .cv .cv-rodando,
   .cv .cv-gate-ok,
   .cv .cv-entra {
     animation: none;

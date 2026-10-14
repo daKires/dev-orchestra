@@ -4,9 +4,12 @@
 // num Dialog; arrastar um arquivo (application/x-hermes-arquivo) solta no Canvas vira um card 'arquivo'.
 import { useCallback, useContext, useEffect, useMemo, useState, type DragEvent } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { ChevronRight, Ellipsis, FileText, Folder, FolderOpen, Pin, Search, X } from "lucide-react";
+import { ChevronRight, Check, Copy, Ellipsis, FileText, Folder, FolderOpen, Pin, Search, X } from "lucide-react";
+import type { ThemedToken } from "shiki/core";
 import { arvoreDeCaminhos, filtrarArvore, type NoArvore } from "@/lib/colab";
+import { linguagemDe } from "@/lib/estado";
 import { cn } from "@/lib/utils";
+import { highlighterPara, LANGS, MAX_HL, TEMA } from "@/components/DiffView";
 import { AgentesCtx } from "./Agente";
 import { Alcas, CanvasCtx } from "./Nos";
 import {
@@ -35,12 +38,22 @@ const lerDados = (data: unknown): No => (data as { no: No }).no;
 
 // Previa do arquivo (Dialog) — reusada pelo Explorador e pelo card de arquivo (Run.tsx)
 
-/** Previa de um arquivo; com `projeto` le pela raiz do projeto, senao pelo agente. */
+/**
+ * Previa LARGA de um arquivo (Dialog), reusada pelo Explorador, pelo card de arquivo e pelo App:
+ * com `projeto` le pela raiz do projeto, senao pelo agente. O conteudo vem com realce do Shiki pela
+ * linguagem de `linguagemDe(caminho)` (mesmo highlighter/LANGS/TEMA/MAX_HL do DiffView) e numeros de
+ * linha a esquerda; sem quebra de linha (rolagem horizontal). Sem realce quando a linguagem nao e'
+ * suportada ou o arquivo passa de MAX_HL linhas. Cabecalho traz "Copiar caminho" (caminho relativo).
+ */
 export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
   aberto: boolean; agenteId?: string; projeto?: string; caminho: string; onFechar: () => void;
 }) {
   const [texto, setTexto] = useState<string | null>(null);
   const [erro, setErro] = useState(false);
+  const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
+  const [copiado, setCopiado] = useState(false);
+  const lang = linguagemDe(caminho);
+
   useEffect(() => {
     if (!aberto || !caminho || (!projeto && !agenteId)) return;
     let vivo = true;
@@ -55,10 +68,33 @@ export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
       .catch(() => { if (vivo) setErro(true); });
     return () => { vivo = false; };
   }, [aberto, agenteId, projeto, caminho]);
+
+  // Realce sob demanda: so' com linguagem suportada (LANGS) e arquivo ate' MAX_HL linhas.
+  useEffect(() => {
+    setTokens(null);
+    if (texto == null || !lang || !LANGS[lang]) return;
+    const linhas = texto.split("\n");
+    if (linhas.length > MAX_HL) return;
+    let vivo = true;
+    highlighterPara(lang)
+      .then((h) => { if (vivo) setTokens(h.codeToTokensBase(texto, { lang: lang as any, theme: TEMA })); })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [texto, lang]);
+
+  const linhas = texto == null ? [] : texto.split("\n");
+
+  /** Copia o caminho RELATIVO recebido (nao o absoluto do servidor) e mostra "Copiado" por 1,5s. */
+  const copiar = () => {
+    void navigator.clipboard?.writeText(caminho);
+    setCopiado(true);
+    setTimeout(() => setCopiado(false), 1500);
+  };
+
   return (
     <Dialog open={aberto} onOpenChange={(o) => { if (!o) onFechar(); }}>
       <DialogContent
-        className="flex h-[80vh] max-w-3xl flex-col gap-0 overflow-hidden p-0"
+        className="flex h-[80vh] w-[min(1100px,90vw)] max-w-[min(1100px,90vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1100px,90vw)]"
         style={{ background: FUNDO, border: `1px solid ${BORDA}` }}
       >
         <DialogTitle className="sr-only">{caminho}</DialogTitle>
@@ -69,11 +105,38 @@ export function ModalArquivo({ aberto, agenteId, projeto, caminho, onFechar }: {
         >
           <FileText className="size-3.5 shrink-0" style={{ color: AZUL }} />
           <span className="truncate" title={caminho}>{caminho}</span>
+          {lang ? <span className="shrink-0" style={{ color: CINZA }}>{lang}</span> : null}
+          <button
+            type="button" onClick={copiar} title={`Copiar caminho: ${caminho}`}
+            className="nodrag ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-white/10"
+            style={{ color: copiado ? "#5fd29a" : "#b8b8b8", font: FONTE }}
+          >
+            {copiado ? <Check className="size-3" /> : <Copy className="size-3" />}
+            {copiado ? "Copiado" : "Copiar caminho"}
+          </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div className="min-h-0 flex-1 overflow-auto">
           {erro
-            ? <p style={{ color: VERMELHO, font: FONTE }}>não foi possível abrir o arquivo.</p>
-            : <pre className="whitespace-pre-wrap" style={{ font: MONO_PRE, color: "#dedee3" }}>{texto ?? "carregando…"}</pre>}
+            ? <p className="p-3" style={{ color: VERMELHO, font: FONTE }}>não foi possível abrir o arquivo.</p>
+            : texto == null
+              ? <p className="p-3" style={{ color: CINZA, font: FONTE }}>carregando…</p>
+              : (
+                <pre className="w-max min-w-full p-0" style={{ font: MONO_PRE, color: "#dedee3" }}>
+                  {linhas.map((linha, i) => (
+                    <span key={i} className="flex" style={{ whiteSpace: "pre" }}>
+                      <span
+                        className="shrink-0 pr-3 pl-3 text-right"
+                        style={{ color: CINZA, minWidth: 48, userSelect: "none" }}
+                      >{i + 1}</span>
+                      <span className="pr-4">
+                        {tokens?.[i]?.length
+                          ? tokens[i].map((t, j) => <span key={j} style={{ color: t.color }}>{t.content}</span>)
+                          : linha || " "}
+                      </span>
+                    </span>
+                  ))}
+                </pre>
+              )}
         </div>
       </DialogContent>
     </Dialog>
