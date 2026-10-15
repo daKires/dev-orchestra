@@ -21,12 +21,15 @@
     "runs.ts",
     "runs.test.ts",
     "guarda-escrita.test.ts",
-    "diff-revisor.test.ts",
+    "s1-sem-reparo.test.ts",
+    "s2-sem-feature.test.ts",
+    "s3-dashboard.test.ts",
+    
     "hub.test.ts",
-    "ui-nova-feature.test.ts",
-    "ui-nova-feature-anexos.test.ts",
+    
+    
     "ui-assumir.test.ts",
-    "modelo-planejador.test.ts",
+    
     "ui-canvas.test.ts",
     "ui-agentes.test.ts",
     "ui-agentes-f21.test.ts",
@@ -38,7 +41,7 @@
     "ui-claude.test.ts",
     "ui-claude-env.test.ts",
     "ui-acoes-run.test.ts",
-    "ui-g2.test.ts",
+    
     "ui-g3.test.ts",
     "g3-agente.test.ts",
     "ui-arvore-projeto.test.ts",
