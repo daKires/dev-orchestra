@@ -59,9 +59,9 @@ export async function resolverComandos(cwd, override) {
     return { ...resolverDeScripts(scripts, override, envCmds, envGate), scripts: scripts ?? {} };
 }
 // Saida de comando que falhou por AMBIENTE (executavel, node/binding, pacote, servico), nao por codigo. Pura.
-// Import relativo ausente ('./x') NAO e' ambiente: e' o esperado de um teste da spec antes da implementacao.
+// Import local ausente ('./x' ou caminho absoluto, que o ESM do Node imprime no Windows) NAO e' ambiente: e' o esperado de um teste da spec antes da implementacao.
 export function ehFalhaAmbiente(saida) {
-    return /reconhecido|not recognized|command not found|ENOENT|Cannot find native binding|Unsupported engine|requires Node|Command "[^"]+" not found|Cannot find (module|package) ['"][^.'"]|ECONNREFUSED|Can't reach database server/i.test(saida);
+    return /reconhecido|not recognized|command not found|ENOENT|Cannot find native binding|Unsupported engine|requires Node|Command "[^"]+" not found|Cannot find (module|package) ['"](?![.'"\/\\]|[a-z]:[\\/]|file:)|ECONNREFUSED|Can't reach database server/i.test(saida);
 }
 // Comando que a allowlist/gate NAO aceita (motivo) ou null. `exec` do pnpm/npm imprime 'Command "x" not
 // found' ate com teste falhando (falso positivo de ambiente); migrate/seed/... muda estado fora do git, que
@@ -709,6 +709,7 @@ export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
 }
 export async function commit(cwd, feature, emit) {
     await ensureIdentity(cwd);
+    await git(cwd, ["add", "-A"]);
     await git(cwd, ["commit", "-m", "feat: " + feature]);
     emit({ t: "fase", nome: "commit", info: "commit local feito" });
 }
