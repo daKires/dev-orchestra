@@ -148,9 +148,19 @@ export class AmbienteError extends Error {
 
 // Guarda de escrita (motivo ou null): o agente nao "conserta" ambiente criando shim, mexendo em
 // node_modules, gerado/ignorado ou migration. Caminho listado em arquivos_alvo passa (exceto node_modules). Pura.
-export function escritaProibida(rel: string, alvos: string[], ignorado: boolean, exes: Set<string>): string | null {
+// atual/novo (opcionais): conteudo antes/depois; novo=null e' exclusao. package.json nao pode mudar "scripts",
+// nem em arquivos_alvo: pre/post-hook ou corpo trocado faria um `npm run` permitido rodar codigo arbitrario.
+export function escritaProibida(rel: string, alvos: string[], ignorado: boolean, exes: Set<string>,
+  atual?: string, novo?: string | null): string | null {
   const p = rel.replace(/\\/g, "/").replace(/^\.\//, "");
   if (/(^|\/)node_modules\//i.test(p)) return "node_modules nao se edita";
+  if (/(^|\/)(\.npmrc|\.yarnrc(\.yml)?|\.pnpmfile\.c?js)$/i.test(p))
+    return "config do gerenciador de pacotes (.npmrc/.yarnrc/.pnpmfile) nao se edita: node-options/script-shell/hooks burlariam a allowlist de comandos";
+  if (novo !== undefined && /(^|\/)package\.json$/i.test(p)) {
+    const scripts = (s: string | null | undefined) => (s ? JSON.stringify(JSON.parse(s).scripts ?? {}) : "{}");
+    try { if (scripts(atual) !== scripts(novo)) return "a secao \"scripts\" do package.json nao pode ser adicionada/alterada/removida pelo swarm (burlaria a allowlist de comandos); mude so as outras chaves ou peca ao planejador"; }
+    catch { return "package.json precisa continuar JSON valido"; }
+  }
   if (alvos.some((a) => a.replace(/\\/g, "/").replace(/^\.\//, "") === p)) return null;
   const nome = p.split("/").pop() || p;
   if (/\.(cmd|bat|ps1|exe)$/i.test(nome) || (!nome.includes(".") && exes.has(nome.toLowerCase())))
@@ -291,6 +301,8 @@ export const FERRAMENTAS: Ferramenta[] = [
     input_schema: { type: "object", properties: { caminho: { type: "string" }, conteudo: { type: "string" } }, required: ["caminho", "conteudo"] } },
   { name: "editar_arquivo", description: "Troca UM trecho de um arquivo existente: 'antigo' tem que aparecer exatamente uma vez (copie do ler_arquivo, com indentacao; inclua contexto se repetir).",
     input_schema: { type: "object", properties: { caminho: { type: "string" }, antigo: { type: "string" }, novo: { type: "string" } }, required: ["caminho", "antigo", "novo"] } },
+  { name: "apagar_arquivo", description: "Apaga UM arquivo do projeto (caminho relativo). Use quando a tarefa pede remover arquivo; nao crie script pra apagar.",
+    input_schema: { type: "object", properties: { caminho: { type: "string" } }, required: ["caminho"] } },
   { name: "rodar_comando", description: "Roda um comando de verificacao permitido (build/teste/typecheck) na raiz do projeto.",
     input_schema: { type: "object", properties: { comando: { type: "string" } }, required: ["comando"] } },
 ];
@@ -380,7 +392,7 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
         return "RECUSADO (teste imutavel): altere o codigo, nao o teste";
       }
       const ignorado = await gitOk(base, ["check-ignore", "-q", "--", rel]);
-      const proibido = escritaProibida(rel, ctx.alvos, ignorado, ctx.exes);
+      const proibido = escritaProibida(rel, ctx.alvos, ignorado, ctx.exes, atual, conteudo);
       if (proibido) { tool(rel, false, proibido); return `RECUSADO (fora do que o swarm pode escrever): ${proibido}`; }
       const motivo = atual ? destrutivo(rel, atual, conteudo) : (conteudo.trim() ? null : "saida vazia");
       if (motivo) { tool(rel, false, motivo); return `RECUSADO (original preservado): ${motivo}`; }
@@ -391,6 +403,28 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
       const patch = await git(base, ["diff", "--", rel]).catch(() => "(diff indisponivel)");
       emit({ t: "diff", arquivo: rel, patch });
       return "ok";
+    }
+    if (nome === "apagar_arquivo") {
+      const rel = String(input?.caminho ?? "");
+      const alvo = dentro(base, rel);
+      if (!alvo || alvo === base) { tool(rel, false, "fora do projeto"); return "ERRO: caminho fora do projeto"; }
+      let atual: string;
+      try { if (!(await fs.stat(alvo)).isFile()) throw 0; atual = await fs.readFile(alvo, "utf8"); }
+      catch { tool(rel, false, "nao existe"); return "ERRO: arquivo nao existe (so apaga arquivo, nao pasta)"; }
+      if (ehTeste(rel)) {
+        ctx.tocouNoTeste++;
+        tool(rel, false, "arquivo de teste (imutavel)");
+        return "RECUSADO (teste imutavel): altere o codigo, nao o teste";
+      }
+      const ignorado = await gitOk(base, ["check-ignore", "-q", "--", rel]);
+      const proibido = escritaProibida(rel, ctx.alvos, ignorado, ctx.exes, atual, null);
+      if (proibido) { tool(rel, false, proibido); return `RECUSADO (fora do que o swarm pode apagar): ${proibido}`; }
+      await fs.unlink(alvo);
+      ctx.escritos.add(rel);
+      tool(rel, true);
+      const patch = await git(base, ["diff", "--", rel]).catch(() => "(diff indisponivel)");
+      emit({ t: "diff", arquivo: rel, patch });
+      return "ok (apagado)";
     }
     if (nome === "rodar_comando") {
       const cmd = String(input?.comando ?? "").trim();
@@ -430,7 +464,7 @@ export async function agente(
   const sys =
     "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
     "Fluxo: ache o que importa (buscar/listar/ler_arquivo); mude arquivo existente com editar_arquivo (trecho " +
-    "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); havendo comando de verificacao permitido rode " +
+    "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); remova arquivo com apagar_arquivo; havendo comando de verificacao permitido rode " +
     "com rodar_comando e conserte os erros ate passar. Ao EDITAR arquivo existente, preserve toda a estrutura; " +
     "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls). " +
     "Se chegar uma mensagem comecando com 'INSTRUCAO DO USUARIO:', ela vem do dono da run durante a execucao e tem prioridade sobre a tarefa original: cumpra-a (mesmo que mude arquivos fora dos alvos) antes de terminar.";
