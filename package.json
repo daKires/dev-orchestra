@@ -7,13 +7,10 @@
   "scripts": {
     "build": "tsc && npm --prefix web run build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/diff-revisor.test.js dist/hub.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js dist/ui-assumir.test.js dist/modelo-planejador.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js dist/ui-cli.test.js dist/ui-ceder.test.js dist/ui-browser.test.js dist/ui-claude.test.js dist/ui-claude-env.test.js dist/ui-acoes-run.test.js dist/ui-g2.test.js dist/ui-g3.test.js dist/g3-agente.test.js dist/ui-arvore-projeto.test.js dist/guarda-escrita.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts colaboracao.test.ts cli.test.ts cli-sh.test.ts navegador.test.ts claude-pty.test.ts cli-browser.test.ts acoes-run.test.ts cli-run.test.ts instrucoes.test.ts canvas-fases.test.ts && npm --prefix web test",
+    "test": "npm run build && node dist/index.js --selftest && node --test --test-concurrency=1 dist/runs.test.js dist/hub.test.js dist/ui-assumir.test.js dist/ui-canvas.test.js dist/ui-agentes.test.js dist/ui-agentes-f21.test.js dist/ui-agentes-reconecta.test.js dist/ui-agentes-reiniciar.test.js dist/ui-cli.test.js dist/ui-ceder.test.js dist/ui-browser.test.js dist/ui-claude.test.js dist/ui-claude-env.test.js dist/ui-acoes-run.test.js dist/ui-g3.test.js dist/g3-agente.test.js dist/ui-arvore-projeto.test.js dist/guarda-escrita.test.js dist/s1-sem-reparo.test.js dist/s2-sem-feature.test.js dist/s3-dashboard.test.js && node --experimental-strip-types --test canvas.test.ts canvas-texto.test.ts agentes.test.ts contexto.test.ts agentes-delta.test.ts colaboracao.test.ts cli.test.ts cli-sh.test.ts navegador.test.ts claude-pty.test.ts cli-browser.test.ts acoes-run.test.ts instrucoes.test.ts canvas-fases.test.ts && npm --prefix web test",
     "test:runs": "tsc && node --test dist/runs.test.js",
     "test:hub": "tsc && node --test dist/hub.test.js",
-    "test:novafeature": "tsc && node --test dist/ui-nova-feature.test.js",
-    "test:anexos": "tsc && node --test dist/ui-nova-feature-anexos.test.js",
     "test:assumir": "tsc && node --test dist/ui-assumir.test.js",
-    "test:modelo": "tsc && node --test dist/modelo-planejador.test.js",
     "test:canvas-modelo": "node --experimental-strip-types --test canvas.test.ts",
     "test:canvas-hub": "tsc && node --test dist/ui-canvas.test.js",
     "test:canvas-texto": "node --experimental-strip-types --test canvas-texto.test.ts",
@@ -40,13 +37,14 @@
     "desktop:check": "tsc -p desktop/tsconfig.json --noEmit",
     "test:acoes-run": "node --experimental-strip-types --test acoes-run.test.ts",
     "test:acoes-hub": "tsc && node --test dist/ui-acoes-run.test.js",
-    "test:g2-hub": "tsc && node --test --test-concurrency=1 dist/ui-g2.test.js dist/ui-nova-feature.test.js dist/ui-nova-feature-anexos.test.js",
-    "test:cli-run": "node --experimental-strip-types --test cli-run.test.ts",
     "test:g3": "node --experimental-strip-types --test instrucoes.test.ts",
     "test:g3-hub": "tsc && node --test --test-concurrency=1 dist/ui-g3.test.js dist/g3-agente.test.js",
     "test:arvore-projeto": "tsc && node --test dist/ui-arvore-projeto.test.js",
     "test:guarda": "tsc && node --test dist/guarda-escrita.test.js",
-    "test:canvas-fases": "node --experimental-strip-types --test canvas-fases.test.ts"
+    "test:canvas-fases": "node --experimental-strip-types --test canvas-fases.test.ts",
+    "test:s1": "tsc && node --test dist/s1-sem-reparo.test.js",
+    "test:s2": "tsc && node --test dist/s2-sem-feature.test.js",
+    "test:s3": "tsc && node --test dist/s3-dashboard.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

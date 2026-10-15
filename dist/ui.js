@@ -16,24 +16,19 @@ import { randomBytes } from "node:crypto";
 import { conectados, resolverAlvo, slugNome, Conversas, FilaEntregas, fmtPergunta, fmtResposta, fmtMensagem, fmtSemResposta, linhaIdentidade, opsFlowAdd, opsFlowLink, opsFile, opsNote, validarCaminho, } from "./colaboracao.js";
 import { PAPEIS, validarAgente, agenteDePlanejador, normalizarEvento, historicoParaLinhas, aplicarLinhas, separarModelo, itensDeContexto, planoArquivos, diffContexto, FilaAvisos, } from "./agentes.js";
 // Agentes Claude Code via PTY (F4/S3): logica pura importada AQUI (os modulos puros nao importam em runtime).
-import { argsClaude, settingsHooks, textoParaPty, MODELOS_CLAUDE } from "./claude-pty.js";
+import { argsClaude, settingsHooks, textoParaPty } from "./claude-pty.js";
 // Acoes da run no card (G1/S2): merge local, abrir PR e descartar (modulo puro rodado no mesmo processo).
 import { mergeLocal, descartarRun, abrirPr } from "./acoes-run.js";
 // G3: caixa de instrucoes e pausa por slice (arquivos no RUNS_DIR, mesmo padrao do <runId>.cancel).
 import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
 export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
-// Registros dos planejadores: orchestra-go.ps1 grava um JSON por worktree com o chat do planejador.
+// Registros dos planejadores: um JSON por worktree com o chat do planejador.
 export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
 // Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
 export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(os.tmpdir(), "hermes", "canvas");
-// Pasta onde os anexos de POST /nova-feature sao gravados (uma subpasta por pedido). Injetavel por env.
-export const ANEXOS_DIR = process.env.HERMES_ANEXOS_DIR || path.join(os.tmpdir(), "hermes", "anexos");
 // Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
 export const AGENTES_DIR = process.env.HERMES_AGENTES_DIR || path.join(os.tmpdir(), "hermes", "agentes");
-// POST /nova-feature carrega anexos em base64 (inflam ~33%): teto proprio bem maior que o padrao de 64KB.
-// Injetavel em iniciarUI (opcao limiteBodyNovaFeature) pra testar sem trafegar centenas de MB.
-export const LIMITE_BODY_NOVA_FEATURE = 350 * 1024 * 1024; // 350MB
 const SWARM_ID = randomUUID().slice(0, 8); // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000; // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
@@ -41,6 +36,16 @@ try {
     fs.mkdirSync(RUNS_DIR, { recursive: true });
 }
 catch { }
+// S3: como abrir o dashboard — o app Hermes instalado vence; senao o navegador do sistema. Pura.
+export function comoAbrirDashboard(exe, url, plataforma) {
+    if (exe)
+        return { comando: exe, args: [] };
+    if (plataforma === "win32")
+        return { comando: "cmd", args: ["/c", "start", "", url] };
+    if (plataforma === "darwin")
+        return { comando: "open", args: [url] };
+    return { comando: "xdg-open", args: [url] };
+}
 // Run corrente deste processo: cada evento "run" abre um arquivo NOVO (nunca trunca o anterior).
 // O sufixo sequencial garante ids distintos mesmo se duas runs abrirem no MESMO milissegundo.
 let runId = "";
@@ -91,7 +96,7 @@ export function lerRuns(dir) {
     }
     return m;
 }
-// ---- registros de planejadores (orchestra-go.ps1) ----
+// ---- registros de planejadores ----
 // Valida/estrutura um registro cru; null se faltar campo obrigatorio (JSON incompleto e' descartado).
 function planejadorDe(j) {
     if (!j || typeof j !== "object")
@@ -129,7 +134,7 @@ export function lerPlanejadores(dir) {
     }
     return out;
 }
-// Worktree que o registro descreve (mesma regra do orchestra-go.ps1: <raiz>/.claude/worktrees/<slug>).
+// Worktree que o registro descreve (<raiz>/.claude/worktrees/<slug>).
 function worktreeDe(p) {
     return path.join(p.raiz, ".claude", "worktrees", p.slug);
 }
@@ -254,9 +259,6 @@ let planejadores = []; // ultima lista empurrada via SSE
 let planejadoresAssinatura = ""; // muda -> avisa os clientes
 let onCeder = null; // chamado no fim do ceder() (modo --ui encerra o processo)
 let sempreAssumir = false; // modo --ui: assume a porta de QUALQUER hub Hermes (sem comparar versao)
-let executarNovaFeature = executarNovaFeatureReal;
-let novaFeatureEmAndamento = false; // 409 em concorrencia: uma criacao de cada vez
-let limiteBodyNovaFeature = LIMITE_BODY_NOVA_FEATURE; // teto proprio da rota (injetavel em iniciarUI)
 function sse(c, dado) {
     try {
         c.res.write(`data: ${JSON.stringify(dado)}\n\n`);
@@ -323,93 +325,12 @@ function rescan() {
             estado.delete(run);
             vistos.delete(run + ".jsonl");
         }
-    avisarFimDeRuns(); // G2/S2: runs que terminaram avisam o agente que pediu (uma vez)
     for (const c of clientes) {
         for (const run of drops) {
             sse(c, { swarm: run, drop: true });
             c.offsets.delete(run);
         }
         enviar(c);
-    }
-}
-// Caminho normalizado para comparar o cwd de uma run com o cwd de um agente: absoluto, barras '/',
-// sem barra final e caixa baixa (no Windows '/' e '\\' apontam pro mesmo lugar).
-function cwdNormalizado(p) {
-    return path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-function arquivoPedidos() { return path.join(AGENTES_DIR, "pedidos.json"); }
-// Le pedidos.json (array); inexistente/corrompido -> []. Cada entrada e' saneada para o formato Pedido.
-function lerPedidos() {
-    try {
-        const j = JSON.parse(fs.readFileSync(arquivoPedidos(), "utf8"));
-        if (!Array.isArray(j))
-            return [];
-        return j
-            .filter((p) => p && typeof p.cwd === "string" && typeof p.pedidoPor === "string")
-            .map((p) => ({ cwd: p.cwd, pedidoPor: p.pedidoPor, avisados: Array.isArray(p.avisados) ? p.avisados.filter((x) => typeof x === "string") : [] }));
-    }
-    catch {
-        return [];
-    }
-}
-function gravarPedidos(pedidos) {
-    try {
-        fs.mkdirSync(AGENTES_DIR, { recursive: true });
-        fs.writeFileSync(arquivoPedidos(), JSON.stringify(pedidos));
-    }
-    catch { }
-}
-// G2/S2: quando a run de um planejador termina (evento 'painel'), avisa o agente que PEDIU aquela
-// feature. O agente que pediu e' o registro com `pedidoPor` e cwd igual ao da run (o planejador Claude
-// roda no worktree) ou, no planejador OpenCode, uma entrada de pedidos.json com o mesmo cwd (o OpenCode
-// nao tem registro de agente no hub). `avisados` (registro ou entrada) guarda os runIds ja' avisados.
-function avisarFimDeRuns() {
-    const pedidos = lerPedidos();
-    let pedidosMudou = false;
-    for (const [id, evs] of estado) {
-        const runEv = evs.find((e) => e.t === "run");
-        if (!runEv || runEv.t !== "run" || !runEv.cwd)
-            continue;
-        const painel = [...evs].reverse().find((e) => e.t === "painel");
-        if (!painel || painel.t !== "painel")
-            continue;
-        const cwdRun = cwdNormalizado(runEv.cwd);
-        // Ultimo status por slice (eventos fora de ordem/reexecucoes ficam com o status final) + custo total.
-        const statusPorIdx = new Map();
-        let custo = 0;
-        for (const ev of evs) {
-            if (ev.t === "slice")
-                statusPorIdx.set(ev.idx, ev.status);
-            else if (ev.t === "metrica")
-                custo += ev.custoUSD;
-        }
-        const k = [...statusPorIdx.values()].filter((s) => s.startsWith("ok")).length;
-        const mensagem = `[run ${id}] ${painel.status} — ${k}/${runEv.total} slices · $${custo.toFixed(3).replace(".", ",")} · ${painel.branch}`;
-        const entregas = [];
-        for (const reg of agentes.values()) {
-            if (!reg.pedidoPor || cwdNormalizado(reg.cwd) !== cwdRun)
-                continue;
-            const avisados = reg.avisados ?? [];
-            if (avisados.includes(id))
-                continue;
-            reg.avisados = [...avisados, id];
-            gravarAgente(reg); // grava ANTES de entregar: um rescan seguinte nao reenvia o mesmo aviso
-            entregas.push({ para: reg.pedidoPor, texto: mensagem });
-        }
-        // Planejador OpenCode: o pedido mora em pedidos.json, ligado pelo cwd normalizado do worktree.
-        for (const p of pedidos) {
-            if (cwdNormalizado(p.cwd) !== cwdRun || p.avisados.includes(id))
-                continue;
-            p.avisados = [...p.avisados, id];
-            pedidosMudou = true;
-            entregas.push({ para: p.pedidoPor, texto: mensagem });
-        }
-        if (pedidosMudou) {
-            gravarPedidos(pedidos);
-            pedidosMudou = false;
-        } // grava ANTES de entregar
-        for (const e of entregas)
-            void entregarColab(e.para, e.texto);
     }
 }
 // Remove logs (e pedidos de cancelamento) mais velhos que PODA_MS.
@@ -460,7 +381,7 @@ function servirEstatico(url, res) {
     fs.readFile(alvo, (err, buf) => {
         if (err) {
             res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
-            res.end("UI nao compilada: rode npm run build no hermes-bridge");
+            res.end("UI nao compilada: rode npm run build no dev-orchestra");
             return;
         }
         res.writeHead(200, { "Content-Type": TIPOS[path.extname(alvo)] || "application/octet-stream" });
@@ -471,108 +392,6 @@ function servirEstatico(url, res) {
 // responde -> site externo aberto no browser nao consegue cancelar run nem derrubar o hub.
 function acaoValida(req) {
     return req.method === "POST" && req.headers["x-hermes"] === "1";
-}
-// Extensoes aceitas em anexos: apenas IMAGEM e DOCUMENTO (video/audio/executavel ficam de fora).
-const EXTENSOES_PERMITIDAS = new Set([
-    // imagens
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tif", "tiff", "avif", "heic", "heif",
-    // documentos
-    "pdf", "txt", "md", "markdown", "csv", "tsv", "json", "xml", "yaml", "yml", "log",
-    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "epub",
-]);
-export const MAX_ANEXOS = 10;
-export const MAX_ANEXO_BYTES = 25 * 1024 * 1024; // 25MB DECODIFICADOS por anexo
-// Sanitiza o nome do anexo pelo basename (Windows e POSIX): traversal "..\\..\\x.png" vira "x.png".
-// Nome que some na sanacao (vazio, "." ou "..") -> null (pedido inteiro rejeitado).
-function sanearNomeAnexo(nome) {
-    const base = nome.replace(/\\/g, "/").split("/").pop() ?? "";
-    const limpo = base.trim();
-    if (!limpo || limpo === "." || limpo === "..")
-        return null;
-    return limpo;
-}
-// Base64 estrito: alfabeto valido, comprimento multiplo de 4 e padding correto (Buffer.from e' permissivo).
-function b64Valido(s) {
-    if (!s || s.length % 4 !== 0)
-        return false;
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s))
-        return false;
-    return true;
-}
-// Valida um anexo cru -> { nome saneado, tipo, dadosB64 } ou null (extensao proibida/ b64 ruim / grande / tipo errado).
-function validarAnexo(a) {
-    if (!a || typeof a !== "object")
-        return null;
-    const o = a;
-    if (typeof o.nome !== "string" || typeof o.dadosB64 !== "string")
-        return null;
-    const nome = sanearNomeAnexo(o.nome);
-    if (!nome)
-        return null;
-    const ext = path.extname(nome).slice(1).toLowerCase();
-    if (!ext || !EXTENSOES_PERMITIDAS.has(ext))
-        return null;
-    if (!b64Valido(o.dadosB64))
-        return null;
-    if (Buffer.byteLength(o.dadosB64, "base64") > MAX_ANEXO_BYTES)
-        return null;
-    return { nome, tipo: typeof o.tipo === "string" ? o.tipo : "", dadosB64: o.dadosB64 };
-}
-// Valida o corpo de um pedido de criacao de feature. COMPAT EXATA: sem os campos novos devolve
-// EXATAMENTE { projeto, feature } (deepEqual estrito). descricao opcional (nao-string -> null; em
-// branco some); anexos opcional (ate 10, cada um <=25MB decodificado, b64 valido, imagem/documento).
-// G2: planejador escolhido no pedido de feature (claude|opencode + modelo). O modelo e' OBRIGATORIO
-// como string: claude aceita '' (padrao da conta) + opus/sonnet/haiku; opencode exige provider/modelo.
-export function validarPlanejador(j) {
-    if (!j || typeof j !== "object")
-        return null;
-    const o = j;
-    if (typeof o.modelo !== "string")
-        return null; // ausente -> null ('' so' vale vindo explicito)
-    if (o.planejador === "claude") {
-        if (MODELOS_CLAUDE.includes(o.modelo))
-            return { planejador: "claude", modelo: o.modelo };
-        return null;
-    }
-    if (o.planejador === "opencode") {
-        if (/^[a-z0-9-]+\/[a-z0-9._-]+$/.test(o.modelo))
-            return { planejador: "opencode", modelo: o.modelo };
-        return null;
-    }
-    return null;
-}
-export function validarNovaFeature(body) {
-    if (!body || typeof body !== "object")
-        return null;
-    const j = body;
-    const projeto = typeof j.projeto === "string" ? j.projeto.trim() : "";
-    const feature = typeof j.feature === "string" ? j.feature.trim() : "";
-    if (!projeto || !feature)
-        return null;
-    const out = { projeto, feature };
-    if (j.descricao !== undefined) {
-        if (typeof j.descricao !== "string")
-            return null; // tipo errado -> null
-        const d = j.descricao.trim();
-        if (d)
-            out.descricao = d; // em branco some do resultado
-    }
-    if (j.anexos !== undefined) {
-        if (!Array.isArray(j.anexos))
-            return null; // nao-array -> null
-        if (j.anexos.length > MAX_ANEXOS)
-            return null;
-        const anexos = [];
-        for (const a of j.anexos) {
-            const v = validarAnexo(a);
-            if (!v)
-                return null; // qualquer anexo invalido derruba o pedido
-            anexos.push(v);
-        }
-        if (anexos.length)
-            out.anexos = anexos; // lista vazia some
-    }
-    return out;
 }
 function broadcast(dado) { for (const c of clientes)
     sse(c, dado); }
@@ -773,7 +592,7 @@ const filaEntregas = new FilaEntregas();
 const tokensPlanejadores = new Map(); // "plan-<slug>" -> token
 let expiracao = null; // varre as conversas pendentes a cada 60s
 function novoToken() { return randomBytes(24).toString("hex"); } // 48 chars (>=16)
-// Porta livre escolhida pelo SO (mesma ideia do TcpListener do orchestra-go.ps1).
+// Porta livre escolhida pelo SO (mesma ideia de um TcpListener na porta 0).
 function portaLivre() {
     return new Promise((ok, falha) => {
         const s = net.createServer();
@@ -781,7 +600,7 @@ function portaLivre() {
         s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => ok(p)); });
     });
 }
-// Caminho do exe do OpenCode (mesmo esquema do orchestra-go.ps1: exe direto, nao o shim .cmd/.ps1).
+// Caminho do exe do OpenCode (exe direto, nao o shim .cmd/.ps1).
 function caminhoOpencode() {
     try {
         const cmd = process.platform === "win32" ? "where opencode" : "which opencode";
@@ -799,7 +618,7 @@ function caminhoOpencode() {
     catch { }
     return "opencode";
 }
-// PATH do processo do serve com a pasta bin/ do hermes-bridge na frente (o CLI `canvas` fica la).
+// PATH do processo do serve com a pasta bin/ do dev-orchestra na frente (o CLI `canvas` fica la).
 // No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave no env do filho).
 function envServe() {
     const bin = path.join(RAIZ_BRIDGE, "bin");
@@ -821,11 +640,11 @@ export function envClaude(base = envServe()) {
     }
     return env;
 }
-// Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder (mesmo modo do orchestra-go.ps1).
+// Sobe `opencode serve --port <livre>` na cwd e espera o /doc responder.
 async function subirServeReal(cwd, env) {
     const porta = await portaLivre();
     // detached + unref: o serve vira processo independente (novo grupo no Windows) e SOBREVIVE ao hub
-    // (mesmo efeito do Start-Process do orchestra-go.ps1). Sem isso ele e' filho do processo do hub e
+    // de um Start-Process). Sem isso ele e' filho do processo do hub e
     // morre junto quando o hub reinicia ou cede a porta, deixando o agente 'encerrado' para sempre.
     const p = spawn(caminhoOpencode(), ["serve", "--port", String(porta)], { cwd, windowsHide: true, stdio: "ignore", env: env ?? process.env, detached: true });
     p.unref();
@@ -1259,16 +1078,13 @@ function subirPtyClaude(a, continuar, inicial) {
     });
 }
 // Cria um agente Claude: registro em disco, PTY e broadcast. Falha vira status 'falhou' (com a mensagem).
-// `origem`/`inicial`/`pedidoPor` (G2): o planejador Claude nasce com origem 'planejador', prompt inicial
-// (/orchestra ...) e o id de quem pediu gravado no registro.
-function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao, origem = "canvas", inicial, pedidoPor) {
+// `origem`/`inicial`: um agente pode nascer com origem propria e um prompt inicial (ex.: auto-contido).
+function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao, origem = "canvas", inicial) {
     const id = "ag-" + randomUUID().slice(0, 8);
     const reg = {
         id, projeto, cwd, base: "", sessao: "", nome, papel, modelo, instrucao,
         tipo: "claude", origem, token: novoToken(),
     };
-    if (pedidoPor)
-        reg.pedidoPor = pedidoPor;
     let erro = "";
     try {
         subirPtyClaude(reg, false, inicial);
@@ -1280,25 +1096,6 @@ function criarAgenteClaude(projeto, cwd, papel, nome, modelo, instrucao, origem 
     gravarAgente(reg);
     broadcast({ agentes: listarAgentes(projeto) });
     return { id, ok: !erro, erro };
-}
-// G2: dispara o pedido de feature e, quando o planejador e' Claude, cria o agente planejador no worktree
-// devolvido pelo executor, com prompt inicial /orchestra "<feature>" (descricao/anexos anexados ao texto).
-async function dispararFeature(projeto, feature, extras, pedidoPor) {
-    const r = await executarNovaFeature(projeto, feature, extras);
-    let agenteId;
-    if (extras.planejador === "claude" && r.cwd) {
-        let texto = feature;
-        if (extras.descricao)
-            texto += "\n\n" + extras.descricao;
-        if (extras.anexosDir)
-            texto += "\n\nAnexos em: " + extras.anexosDir;
-        texto = texto.replace(/"/g, "'"); // aspas duplas dentro do texto fechariam o argumento do /orchestra
-        const inicial = `/orchestra "${texto}"`;
-        const c = criarAgenteClaude(projeto, r.cwd, "livre", feature, extras.modelo, PAPEIS.livre.instrucao, "planejador", inicial, pedidoPor);
-        if (c.ok)
-            agenteId = c.id;
-    }
-    return { url: r.url, agenteId, slug: r.slug, cwd: r.cwd };
 }
 // Colaboracao entre agentes (F3/S2): identidade, conversas, fila de entregas
 // Contexto de colaboracao de um id: agente do canvas (registro em disco) ou planejador derivado.
@@ -1698,72 +1495,9 @@ function sincronizarContexto(projeto, snap) {
         }
     }
 }
-// Raiz do hermes-bridge (um nivel acima de dist/web ou de web no dev): onde vive orchestra-go.ps1.
+// Raiz do dev-orchestra (um nivel acima de dist/web ou de web no dev): onde vive a pasta bin/.
 const RAIZ_BRIDGE = path.resolve(WEB_DIR, "..", "..");
 const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
-// Executor real: roda orchestra-go.ps1 via pwsh e interpreta a ULTIMA linha do stdout como o JSON do
-// registro (que carrega a url do chat). pwsh ausente (ENOENT) ou exit != 0 -> rejeita com o stderr.
-// Descricao/anexos do pedido viram -Descricao/-AnexosDir (so' quando existem). G2: o planejador
-// escolhido vai SEMPRE (-Planejador <claude|opencode>) e o modelo quando informado (-Modelo <m>).
-// Modo claude: o worktree nao sobe servidor, entao a url vem vazia e o cwd passa a ser obrigatorio;
-// modo opencode: a url do chat continua obrigatoria (compat com o registro de sempre).
-function executarNovaFeatureReal(projeto, feature, extras) {
-    return new Promise((ok, falha) => {
-        const script = path.join(RAIZ_BRIDGE, "orchestra-go.ps1");
-        // Args base de sempre; -Descricao/-AnexosDir SO' quando existirem (sem eles a chamada fica como hoje).
-        const args = ["-NoProfile", "-File", script, "-Projeto", projeto, "-Feature", feature];
-        if (extras?.planejador)
-            args.push("-Planejador", extras.planejador);
-        if (extras?.modelo)
-            args.push("-Modelo", extras.modelo);
-        if (extras?.descricao)
-            args.push("-Descricao", extras.descricao);
-        if (extras?.anexosDir)
-            args.push("-AnexosDir", extras.anexosDir);
-        let p;
-        try {
-            p = spawn("pwsh", args, { windowsHide: true, env: process.env });
-        }
-        catch (e) {
-            falha(new Error(String(e?.message ?? e)));
-            return;
-        }
-        let saida = "";
-        let err = "";
-        p.stdout?.on("data", (d) => { saida += d.toString(); });
-        p.stderr?.on("data", (d) => { err += d.toString(); });
-        p.on("error", (e) => falha(new Error(e?.code === "ENOENT" ? "pwsh nao encontrado no PATH" : String(e?.message ?? e))));
-        p.on("close", (code) => {
-            if (code !== 0) {
-                falha(new Error(err.trim() || `orchestra-go.ps1 saiu com codigo ${code}`));
-                return;
-            }
-            const linha = saida.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
-            let j = null;
-            try {
-                j = JSON.parse(linha);
-            }
-            catch {
-                falha(new Error("saida do orchestra-go.ps1 nao e' JSON: " + linha));
-                return;
-            }
-            // Planejador Claude no worktree: nao sobe servidor -> url vazia e o cwd e' o que importa.
-            if (extras?.planejador === "claude") {
-                if (typeof j?.cwd !== "string" || !j.cwd) {
-                    falha(new Error("saida do orchestra-go.ps1 sem cwd (planejador claude)"));
-                    return;
-                }
-                ok({ url: j.url ?? "", cwd: j.cwd, slug: j.slug });
-                return;
-            }
-            if (typeof j?.url !== "string" || !j.url) {
-                falha(new Error("saida do orchestra-go.ps1 sem url"));
-                return;
-            }
-            ok({ url: j.url, cwd: j.cwd, slug: j.slug });
-        });
-    });
-}
 // Libera a porta (pedido de um processo com UI mais nova). No modo --ui, onCeder encerra o processo.
 function ceder() {
     for (const c of clientes) {
@@ -2020,75 +1754,6 @@ function criarServidor() {
             }
             res.writeHead(400);
             res.end();
-            return;
-        }
-        if (url === "/nova-feature") {
-            if (!acaoValida(req)) {
-                res.writeHead(400);
-                res.end();
-                return;
-            }
-            let corpo = "";
-            let cortou = false;
-            req.on("data", (d) => {
-                if (cortou)
-                    return;
-                corpo += d.toString();
-                if (Buffer.byteLength(corpo) > limiteBodyNovaFeature) {
-                    cortou = true;
-                    res.writeHead(400);
-                    res.end();
-                }
-            });
-            req.on("end", () => {
-                if (cortou)
-                    return;
-                let j = null;
-                try {
-                    j = JSON.parse(corpo);
-                }
-                catch { }
-                const v = validarNovaFeature(j);
-                if (!v) {
-                    res.writeHead(400);
-                    res.end();
-                    return;
-                }
-                if (novaFeatureEmAndamento) {
-                    res.writeHead(409);
-                    res.end();
-                    return;
-                }
-                const plano = validarPlanejador(j); // G2: o planejador escolhido e' obrigatorio
-                if (!plano) {
-                    res.writeHead(400);
-                    res.end();
-                    return;
-                }
-                novaFeatureEmAndamento = true;
-                const exec = dispararFeature;
-                // Extras SEMPRE com o planejador escolhido; descricao/anexosDir so' quando o pedido os tem.
-                const extras = { planejador: plano.planejador, modelo: plano.modelo };
-                if (v.descricao)
-                    extras.descricao = v.descricao;
-                if (v.anexos?.length) {
-                    const dir = path.join(ANEXOS_DIR, randomUUID()); // pasta UNICA por pedido
-                    try {
-                        fs.mkdirSync(dir, { recursive: true });
-                        for (const a of v.anexos)
-                            fs.writeFileSync(path.join(dir, a.nome), Buffer.from(a.dadosB64, "base64"));
-                        extras.anexosDir = dir;
-                    }
-                    catch { }
-                }
-                res.writeHead(202);
-                res.end(); // dispara em background; o andamento vai por SSE
-                broadcast({ novaFeature: { status: "rodando", projeto: v.projeto, feature: v.feature } });
-                exec(v.projeto, v.feature, extras)
-                    .then(({ url: u }) => broadcast({ novaFeature: { status: "ok", projeto: v.projeto, feature: v.feature, url: u } }))
-                    .catch((e) => broadcast({ novaFeature: { status: "erro", projeto: v.projeto, feature: v.feature, erro: String(e?.message ?? e) } }))
-                    .finally(() => { novaFeatureEmAndamento = false; });
-            });
             return;
         }
         // ---- canvas (S2) ----
@@ -2588,47 +2253,6 @@ function criarServidor() {
                 responderTexto(res, 200, "status atualizado");
                 return;
             }
-            if (cmd === "run") {
-                // G2/S2: um agente pede a criacao de uma feature. Dispara o executor com o planejador
-                // escolhido e liga o pedinte ao planejador por uma aresta no canvas (id 'pedido:<planejadorId>').
-                const feature = typeof j?.feature === "string" ? j.feature.trim() : "";
-                const plano = validarPlanejador(j);
-                if (!feature || !plano) {
-                    responderTexto(res, 400, 'uso: canvas run "<feature>" (--claude <padrao|opus|sonnet|haiku> | --opencode <modelo>)');
-                    return;
-                }
-                if (novaFeatureEmAndamento) {
-                    responderTexto(res, 409, "ja existe uma criacao em andamento");
-                    return;
-                }
-                novaFeatureEmAndamento = true;
-                try {
-                    const r = await dispararFeature(c.projeto, feature, { planejador: plano.planejador, modelo: plano.modelo }, c.id);
-                    // Claude: o agente planejador nasce aqui (agenteId). OpenCode: o no' e' 'plan-<slug>'.
-                    const planejadorId = r.agenteId ?? (r.slug ? "plan-" + r.slug : "");
-                    if (planejadorId) {
-                        const agora = Date.now();
-                        const aresta = { id: `pedido:${planejadorId}`, de: "ag:" + c.id, para: "ag:" + planejadorId, dados: { pedido: true }, rev: agora };
-                        // Mesmo mecanismo do flow link: aplica a op no canvas do projeto e faz o broadcast.
-                        aplicarOpsProjeto(c.projeto, [{ op: "upsert", tipo: "aresta", item: aresta }]);
-                    }
-                    // Planejador OpenCode: nao ha' agente do planejador no hub; o pedido vai pra pedidos.json
-                    // (com o cwd do worktree) pra que o aviso de fim da run chegue ao pedinte em avisarFimDeRuns.
-                    if (!r.agenteId && r.cwd) {
-                        const pedidos = lerPedidos();
-                        pedidos.push({ cwd: r.cwd, pedidoPor: c.id, avisados: [] });
-                        gravarPedidos(pedidos);
-                    }
-                    responderTexto(res, 200, `planejador criado: ${planejadorId} (cwd ${r.cwd ?? ""})`);
-                }
-                catch (e) {
-                    responderTexto(res, 500, String(e?.message ?? e));
-                }
-                finally {
-                    novaFeatureEmAndamento = false;
-                }
-                return;
-            }
             if (cmd === "list") {
                 const lista = refs();
                 responderTexto(res, 200, lista.length ? lista.map((a) => `${slugNome(a.nome)} (${a.id}) — ${a.nome}, ${statusColab(a.id)}`).join("\n") : "nenhum agente conectado a você");
@@ -2985,7 +2609,7 @@ async function escutar() {
         srv.once("error", () => ok(false));
         srv.once("listening", () => {
             servidor = srv;
-            process.stderr.write(`[hermes-bridge] dashboard: http://127.0.0.1:${PORT}\n`);
+            process.stderr.write(`[dev-orchestra] dashboard: http://127.0.0.1:${PORT}\n`);
             podar();
             rescan();
             void limparPlanejadores(PLANEJADORES_DIR); // uma vez no start
@@ -3011,8 +2635,6 @@ export async function iniciarUI(opts = {}) {
         return;
     onCeder = opts.onCeder ?? null;
     sempreAssumir = opts.sempreAssumir ?? false;
-    executarNovaFeature = opts.executarNovaFeature ?? executarNovaFeatureReal;
-    limiteBodyNovaFeature = opts.limiteBodyNovaFeature ?? LIMITE_BODY_NOVA_FEATURE;
     subirServeAtual = opts.subirServe ?? subirServeReal;
     matarProcessoAtual = opts.matarProcesso ?? ((pid) => { try {
         process.kill(pid);

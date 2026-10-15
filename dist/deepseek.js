@@ -157,7 +157,7 @@ async function mensagemOpenAI(system, messages, tools, opts) {
             headers: {
                 "content-type": "application/json",
                 authorization: `Bearer ${GO_KEY}`,
-                "user-agent": "hermes-bridge/3.0",
+                "user-agent": "dev-orchestra/3.0",
                 "x-opencode-session": sessoes.get(messages),
             },
             body: JSON.stringify({

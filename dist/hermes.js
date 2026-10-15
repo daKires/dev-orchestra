@@ -1,6 +1,6 @@
 // O swarm Hermes: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
-import { mensagem as mensagemReal, texto, CanceladoError } from "./deepseek.js";
+import { mensagem as mensagemReal, CanceladoError } from "./deepseek.js";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
@@ -11,10 +11,6 @@ const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
 const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
 // G3/S2: teto de tempo que uma slice pode ficar pausada antes de retomar sozinha.
 export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
-export const REPAIR_TRIES = Number(process.env.HERMES_REPAIR_TRIES ?? "1");
-export function podeReparar(tentativa, tries = REPAIR_TRIES) {
-    return tentativa < tries;
-}
 // Resolve COMANDOS/gate a partir do package.json do alvo (auto-detect), com override do planner e
 // fallback pro env legado (HERMES_CMDS/HERMES_GATE). PURA -> testavel no selftest.
 export function resolverDeScripts(scripts, override, envCmds, envGate) {
@@ -529,7 +525,7 @@ export async function execFerramenta(ctx, nome, input) {
 }
 // UM agente: loop multi-turn tool_use<->tool_result ate end_turn ou o teto de turnos.
 // msgFn injetavel pro selftest (client fake, sem rede). sliceIdx identifica o card/feed no dashboard
-// (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa). cmds e' a allowlist resolvida.
+// (slices do plano usam 1..N). cmds e' a allowlist resolvida.
 // Erro de API/turno vira slice falha COM os tokens ja gastos; cancelamento (CanceladoError) sobe.
 export async function agente(base, feature, t, emit, sliceIdx, cmds, msgFn = mensagemReal, signal, caixa) {
     const sys = "Voce e um agente CODER de um swarm. Implemente a tarefa editando o projeto pelas ferramentas. " +
@@ -690,14 +686,9 @@ export async function construir(cwd, feature, plano, emit, cmds, signal, msgFn =
     }
     return { escritos, rejeitados, resultados, cancelado: false };
 }
-// Diff REAL da run: baseline..indice (inclui arquivos novos e o que ja tiver sido commitado no meio da run).
-// Sem baselineRef (repo sem HEAD), cai pro diff contra HEAD. Erro de git sobe, nao vira diff vazio.
-export async function diffStaged(cwd, baselineRef = "") {
-    await git(cwd, ["add", "-A"]);
-    return await git(cwd, ["diff", "--cached", ...(baselineRef ? [baselineRef] : [])]);
-}
 // Gate deterministico: roda os comandos resolvidos por-projeto em serie contra o cwd; qualquer exit != 0
-// falha e para ali (fail-closed). cmds/tentativa injetaveis pro selftest e pro loop de reparo.
+// falha e para ali (fail-closed). Sem reparo interno: a saida volta pro orquestrador (GATE-FAILED) decidir.
+// cmds/tentativa injetaveis pro selftest.
 export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
     for (const cmd of cmds) {
         emit({ t: "gate", cmd, status: "rodando", tentativa: tentativa || undefined });
@@ -711,24 +702,6 @@ export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
         return { ok: false, cmd, saida: r.saida, rodou: true, ambiente: ehFalhaAmbiente(r.saida) };
     }
     return { ok: true, cmd: "", saida: "", rodou: cmds.length > 0, ambiente: false };
-}
-export async function revisar(cwd, feature, diff, emit) {
-    // diff cortado = veredito sobre o que o modelo nao viu; melhor nao opinar
-    if (diff.length > 12000)
-        return { ok: true, ajustes: `diff grande (${diff.length} chars), revisao fica com o Claude` };
-    emit({ t: "fase", nome: "revisor", info: "conferindo..." });
-    const sys = "Voce e um REVISOR. Recebe a feature e um diff. Responda APENAS JSON " +
-        `{"ok": boolean, "ajustes": "texto curto"}. ok=true se o diff implementa a feature de forma coerente e nao quebra arquivos.`;
-    const user = `Feature: ${feature}\n\nDiff:\n${diff}`;
-    try {
-        const out = await texto(sys, user);
-        const m = out.match(/\{[\s\S]*\}/); // extrai o objeto JSON mesmo que venha cercado de texto
-        const j = JSON.parse(m ? m[0] : out);
-        return { ok: !!j.ok, ajustes: String(j.ajustes || "") };
-    }
-    catch (e) {
-        return { ok: true, ajustes: "revisor indisponivel: " + (e?.message ?? e) };
-    }
 }
 export async function commit(cwd, feature, emit) {
     await ensureIdentity(cwd);

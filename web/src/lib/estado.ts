@@ -1,6 +1,6 @@
 // Estado da UI derivado SO dos eventos do bridge (SSE /events). Reducer puro: toda regra de exibicao
 // (status, progresso, KPIs, alerta de "sem resposta") mora aqui e e' testada em estado.test.ts.
-import type { Evento, NovaFeature, Planejador, SlicePlano } from "../../../ui.ts";
+import type { Evento, Planejador, SlicePlano } from "../../../ui.ts";
 import type { Aresta, No, Op } from "../../../canvas.ts";
 
 export type StatusSlice = "fila" | "rodando" | "ok" | "incompleta" | "pulada";
@@ -26,17 +26,17 @@ export type Run = {
   diffs: Record<string, string>; ordemDiffs: string[];
   metricas: Metrica[]; painel: string[] | null; atividade: Atividade;
 };
-export type Estado = { runs: Record<string, Run>; planejadores: Planejador[]; novaFeature: NovaFeature | null };
+export type Estado = { runs: Record<string, Run>; planejadores: Planejador[] };
 // Lote de operacoes do canvas de um projeto (o hub emite { canvasOp: { projeto, ops } } no SSE).
 export type MsgCanvasOp = { projeto: string; ops: Op[] };
 // Snapshot do canvas de um projeto (o hub emite { canvas: { projeto, nos, arestas } } no SSE).
 export type MsgCanvasSnapshot = { projeto: string; nos: No[]; arestas: Aresta[] };
 // Ate' tres familias de mensagens do hub: eventos de uma run ({swarm, ev}); mensagens globais do hub
-// ({planejadores} substitui a lista de chats; {novaFeature} guarda o andamento do ultimo pedido); e
-// mensagens do canvas ({canvasOp}/{canvas}), que o reducer de runs apenas IGNORA (outro estado as usa).
+// ({planejadores} substitui a lista de chats); e mensagens do canvas ({canvasOp}/{canvas}), que o
+// reducer de runs apenas IGNORA (outro estado as usa).
 export type Msg =
   | { swarm: string; ev?: Evento; drop?: boolean }
-  | { planejadores?: Planejador[]; novaFeature?: NovaFeature }
+  | { planejadores?: Planejador[] }
   | { canvasOp?: MsgCanvasOp; canvas?: MsgCanvasSnapshot };
 
 /** true SO' para um objeto com `canvasOp` ou `canvas` (mensagem do canvas, nao' de run/hub). */
@@ -50,7 +50,7 @@ export const OCIOSO_MS = 60_000;         // alerta "sem resposta" (mesmo teto do
 export const CMD_TIMEOUT_MS = 120_000;   // comando alem disso = travado
 export const INTERROMPIDA_MS = 10 * 60_000; // sem evento nem painel por 10 min = processo morreu
 
-export const vazio: Estado = { runs: {}, planejadores: [], novaFeature: null };
+export const vazio: Estado = { runs: {}, planejadores: [] };
 
 function nova(id: string): Run {
   return {
@@ -169,18 +169,16 @@ export function aplicar(e: Estado, msgs: Msg[]): Estado {
   const runs = { ...e.runs };
   const tocadas = new Set<string>();
   let planejadores = e.planejadores;
-  let novaFeature = e.novaFeature;
   for (const m of msgs) {
     if (ehMsgCanvas(m)) continue; // mensagens do canvas nao mexem em runs/planejadores
     if ("planejadores" in m && m.planejadores) planejadores = m.planejadores; // substitui a lista inteira
-    if ("novaFeature" in m && m.novaFeature) novaFeature = m.novaFeature;     // guarda a ultima
     if (!("swarm" in m)) continue;
     if (m.drop) { delete runs[m.swarm]; tocadas.delete(m.swarm); continue; }
     if (!m.ev) continue;
     if (!tocadas.has(m.swarm)) { runs[m.swarm] = runs[m.swarm] ? copiar(runs[m.swarm]) : nova(m.swarm); tocadas.add(m.swarm); }
     mutar(runs[m.swarm], m.ev);
   }
-  return { runs, planejadores, novaFeature };
+  return { runs, planejadores };
 }
 
 // ---- derivados ----
@@ -253,107 +251,6 @@ function chaveRaiz(p: string): string {
 export function runsDoProjeto(runs: Run[], projeto: string): Run[] {
   const alvo = chaveRaiz(projeto);
   return runs.filter((r) => r.cwd !== "" && chaveRaiz(r.cwd) === alvo);
-}
-
-// Projetos conhecidos (datalist da "Nova feature") = raizes dos registros de planejadores + raizes
-// das runs (mesma regra raiz(): worktree conta como o projeto). O dedupe e' case-insensitive pela
-// chave canonica, mas PRESERVA a primeira forma vista (o caminho aparece legivel no formulario);
-// a ordenacao tambem e' case-insensitive.
-export function projetosConhecidos(e: Estado, planejadores: Planejador[]): string[] {
-  const porChave = new Map<string, string>(); // chave canonica -> primeira forma vista
-  const juntar = (caminho: string) => {
-    const forma = raiz(caminho);
-    if (!forma) return;
-    const k = chaveRaiz(forma);
-    if (!porChave.has(k)) porChave.set(k, forma);
-  };
-  for (const p of planejadores) juntar(p.raiz);
-  for (const r of Object.values(e.runs)) if (r.cwd) juntar(r.cwd);
-  return [...porChave.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, forma]) => forma);
-}
-
-// Formulario da "Nova feature": projeto (da lista ou colado) e feature, sem espacos nas bordas.
-export function podeCriar(projeto: string, feature: string): boolean {
-  return projeto.trim() !== "" && feature.trim() !== "";
-}
-
-// Planejador escolhido no "+ Feature" (G2): o par (planejador, modelo) que vai no corpo do pedido.
-// claude aceita '' (padrao da conta) + opus/sonnet/haiku; opencode exige provider/modelo.
-export type PlanejadorEscolha = { planejador: "claude" | "opencode"; modelo: string };
-const MODELOS_CLAUDE_FRONT = ["", "opus", "sonnet", "haiku"];
-
-// true so' quando o formulario esta' completo E o planejador+modelo escolhidos sao validos (CA-G2a).
-// Sem escolha (p ausente) nao cria; a validacao do modelo segue a mesma regra do hub (validarPlanejador).
-export function podeCriarComPlanejador(projeto: string, feature: string, p?: PlanejadorEscolha): boolean {
-  if (!podeCriar(projeto, feature) || !p) return false;
-  if (p.planejador === "claude") return MODELOS_CLAUDE_FRONT.includes(p.modelo);
-  if (p.planejador === "opencode") return /^[a-z0-9-]+\/[a-z0-9._-]+$/.test(p.modelo);
-  return false;
-}
-
-// ---- anexos da "Nova feature" (CA-5) ----
-// Imagem ou documento, ate' ANEXO_MAX por pedido e ANEXO_MAX_BYTES cada. Audio/video ficam de fora:
-// o planejador nao ouve/assiste. As regras sao puras pra o componente so' refletir o veredito.
-export const ANEXO_MAX = 10;
-export const ANEXO_MAX_BYTES = 25 * 1024 * 1024; // 25MB (exatos passam)
-export const ANEXO_EXTENSOES = ["png", "jpg", "jpeg", "gif", "webp", "pdf", "txt", "md", "docx"] as const;
-export const ANEXO_LIMITES_TEXTO = "10 anexos · 25MB cada · png/jpg/jpeg/gif/webp/pdf/txt/md/docx";
-export const ANEXO_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.docx";
-
-export type Anexo = { nome: string; tamanho: number; tipo: string; dadosB64: string };
-export type AnexoEnviado = { nome: string; tipo: string; dadosB64: string };
-export type CorpoNovaFeature = {
-  projeto: string; feature: string; descricao?: string; anexos?: AnexoEnviado[];
-  planejador?: "claude" | "opencode"; modelo?: string;
-};
-
-// Extensao (minuscula, sem ponto) da ULTIMA parte de um caminho; "" quando nao ha extensao.
-export function extensaoAnexo(nome: string): string {
-  const base = nomeSeguroAnexo(nome).toLowerCase();
-  const i = base.lastIndexOf(".");
-  return i > 0 ? base.slice(i + 1) : "";
-}
-
-// null = pode anexar; string = motivo da recusa em PT-BR (o dialog mostra no lugar da lista).
-// nAnexos = quantos anexos ja' estao na lista (o 10o passa, o 11o nao).
-export function problemaAnexo(arquivo: { nome: string; tamanho: number }, nAnexos: number): string | null {
-  if (nAnexos >= ANEXO_MAX) return `Limite de ${ANEXO_MAX} anexos por pedido — remova algum pra adicionar outro.`;
-  const ext = extensaoAnexo(arquivo.nome);
-  if (!(ANEXO_EXTENSOES as readonly string[]).includes(ext)) {
-    const qual = ext ? `extensão .${ext}` : "sem extensão";
-    return `Tipo de arquivo não aceito (${qual}). Aceitamos imagem ou documento: ${ANEXO_EXTENSOES.join("/")}.`;
-  }
-  if (arquivo.tamanho > ANEXO_MAX_BYTES) {
-    return `Arquivo grande demais: ${tamanhoLegivel(arquivo.tamanho)} (o tamanho máximo é ${tamanhoLegivel(ANEXO_MAX_BYTES)} por arquivo).`;
-  }
-  return null;
-}
-
-// So' o nome do arquivo (basename): descarta diretorios, separadores Windows/Unix, traversal e drives.
-export function nomeSeguroAnexo(caminho: string): string {
-  const partes = caminho.split(/[\\/]+/).filter((p) => p && p !== "." && p !== "..");
-  return partes.length ? partes[partes.length - 1] : "";
-}
-
-// Tamanho legivel pras chips de anexo ("12 KB", "1,5 MB").
-export function tamanhoLegivel(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "?";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`;
-}
-
-// Corpo do POST /nova-feature: descricao e anexos sao OPCIONAIS e somem quando vazios, pra o pedido
-// simples sair EXATAMENTE { projeto, feature } (compatibilidade com o hub antigo). G2: quando o
-// planejador escolhido vem (parametro opcional novo no fim), `planejador` e `modelo` entram no corpo
-// (o modelo vai SEMPRE, mesmo '', porque o hub o exige como string — validarPlanejador).
-export function corpoNovaFeature(projeto: string, feature: string, descricao = "", anexos: Anexo[] = [], plano?: PlanejadorEscolha): CorpoNovaFeature {
-  const corpo: CorpoNovaFeature = { projeto: projeto.trim(), feature: feature.trim() };
-  const d = descricao.trim();
-  if (d) corpo.descricao = d;
-  if (anexos.length) corpo.anexos = anexos.map((a) => ({ nome: a.nome, tipo: a.tipo, dadosB64: a.dadosB64 }));
-  if (plano) { corpo.planejador = plano.planejador; corpo.modelo = plano.modelo; }
-  return corpo;
 }
 
 // Linguagem do Shiki pela extensao do arquivo do diff; null = sem highlight (so cores +/-).

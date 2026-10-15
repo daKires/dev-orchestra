@@ -4,7 +4,7 @@
 import { useRef, type ChangeEvent, type ReactNode } from "react";
 import {
   ArrowUpRight, Bot, ChartColumn, Circle, Diamond, Frame, Globe, Hand, Image as ImageIcon,
-  LayoutGrid, MousePointer2, Plus, Square, StickyNote, Type,
+  LayoutGrid, MousePointer2, Square, StickyNote, Type,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -26,8 +26,6 @@ type Props = {
   onNavegador: () => void;
   /** Abre o painel de runs do projeto (card Runs). */
   onPainel: () => void;
-  /** Abre o dialog "Nova feature" (atalho Shift+N). */
-  onNovaFeature: () => void;
   /** Auto-organiza o canvas em faixas por tipo (atalho Shift+O). */
   onOrganizar: () => void;
 };
@@ -64,7 +62,7 @@ function Botao({ titulo, ativo, disabled, onClick, children }: {
   );
 }
 
-export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador, onPainel, onNovaFeature, onOrganizar }: Props) {
+export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, onAgente, onNavegador, onPainel, onOrganizar }: Props) {
   const arquivo = useRef<HTMLInputElement | null>(null);
 
   const escolherArquivo = (e: ChangeEvent<HTMLInputElement>) => {
@@ -142,9 +140,6 @@ export function Barra({ bloquear, ferramenta, onFerramenta, onForma, onImagem, o
       </Botao>
       <Botao titulo="+ Navegador (B)" disabled={bloquear} onClick={onNavegador}>
         <Globe className="size-4" />
-      </Botao>
-      <Botao titulo="+ Feature (Shift+N)" disabled={bloquear} onClick={onNovaFeature}>
-        <Plus className="size-4" />
       </Botao>
       <Botao titulo="Runs — painel do projeto" disabled={bloquear} onClick={onPainel}>
         <ChartColumn className="size-4" />
