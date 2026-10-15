@@ -30,8 +30,8 @@ rigor: primeiro a spec e o esclarecimento, depois o COMO.
    abstração (é anti-pattern, ver abaixo). **Isto é sobre o TAMANHO da spec, não sobre pular
    perguntas — na dúvida entre perguntar e assumir, SEMPRE pergunte.**
 4. **Simplicidade e anti-abstração.** Reuse código/padrão que já existe, nada especulativo, cada
-   arquivo/dependência nova precisa se justificar. (Casa com o ponytail e com o CLAUDE.md do
-   projeto.)
+   arquivo/dependência nova precisa se justificar. Honre as convenções do projeto
+   (CLAUDE.md/AGENTS.md).
 5. **Rastreabilidade.** Toda tarefa aponta pra um requisito da spec; todo requisito aponta pra uma
    verificação concreta. Sem requisito órfão, sem tarefa que ninguém pediu.
 
@@ -109,7 +109,7 @@ Agora sim o plano técnico, cada escolha rastreada a um requisito:
 
 - **Arquitetura e fronteiras** — que módulos/camadas mudam, como conversam.
 - **Escolhas de tech** com o *porquê* (por que esta lib/este padrão e não outro).
-- **Dados/schema** — precisa de migration? qual? (no monorepo, `packages/prisma`).
+- **Dados/schema** — precisa de migration? qual? onde o projeto guarda o schema.
 - **Interfaces/contratos** — APIs, eventos, tipos/DTOs, formato de payload.
 - **Lista concreta de arquivos a criar/editar**, reusando o que já existe — **cite os caminhos**
   achados na exploração (ex.: "reusar `getAdvboxIds` em `...`"), não reinvente.
@@ -143,8 +143,8 @@ ou ≥8 tarefas → monte a tabela**; abaixo disso, uma frase confirmando que n�
 
 ```
 CA-N          → Tarefa(s)      → Verificação
-CA-1          → T3, T5         → /verify fluxo X
-CA-2          → T1 (migration) → runtime Postgres 5433
+CA-1          → T3, T5         → teste do fluxo X
+CA-2          → T1 (migration) → checagem do comportamento no banco
 CA-4          → ⚠️ ÓRFÃO       → —   (falta tarefa)
 T7 (índice)   → ⚠️ sem CA      → —   (justifique ou corte)
 ```
@@ -152,10 +152,9 @@ T7 (índice)   → ⚠️ sem CA      → —   (justifique ou corte)
 Depois, uma seção **Validação** que mapeia **cada critério de aceite a uma checagem concreta usando
 os meios reais deste projeto**:
 
-- a skill `/verify` pra exercitar o fluxo ponta a ponta;
-- runtime contra o Postgres do `infra:up` (porta 5433) pra services/API;
+- os **testes/build/typecheck do próprio projeto** pra exercitar o fluxo ponta a ponta;
 - checagem pelo **browser** pra frontend (o dono valida pela tela, não por print);
-- `typecheck` / `build` / testes existentes.
+- os comandos de verificação que o projeto já usa no dia a dia.
 
 **Não imponha** Cucumber, Pact ou TDD red-phase obrigatório — este projeto não valida assim, e
 enfiar essa cerimônia é o anti-pattern de "tooling complexity".
@@ -187,15 +186,14 @@ de verificação no fim) — a spec e os portões entram *dentro* dessa mesma es
 
 ## Observações
 
-- **Honre o CLAUDE.md do projeto** ao planejar telas/serviços: `ConfirmDialog` (nunca
-  `window.confirm`), CSS em `.module.css`, **rem nunca px**, `react-hook-form`+`zod` em formulário
-  com validação, componentes do `@/ds`, tudo user-facing em **PT-BR**. O plano já nasce alinhado.
+- **Honre as convenções do projeto** (CLAUDE.md/AGENTS.md) ao planejar telas/serviços: siga os
+  padrões, os componentes e o estilo que o próprio projeto já usa. O plano já nasce alinhado.
 - **Saída sempre em PT-BR** — spec, perguntas de esclarecimento e plano.
 - **Rigor proporcional.** Feature grande → spec + 3 portões completos. Mudança pequena mas ambígua
   → só o passo *Esclarecer* já paga o ingresso. Mudança trivial (rename, typo, 1-3 linhas) → **não
   dispare** SDD, é overkill.
-- **Compõe com outras skills**: depois de planejar, `/visual-explainer:generate-visual-plan`
-  visualiza o plano; no fim do trabalho, `/abrir-pr` abre o PR no padrão do usuário.
+- **Compõe com outras skills**: depois de planejar, uma skill de visualização pode mostrar o plano;
+  no fim do trabalho, uma skill de PR pode abrir o PR no padrão do usuário.
 
 ## Quando o usuário digita /plan-sdd
 

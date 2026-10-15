@@ -1,86 +1,76 @@
 # Dev Orchestra
 
-Plan with a strong model, build with a cheap swarm. You describe a feature; a planner (Claude Code or
-OpenCode) splits it into slices and writes the tests; a swarm of DeepSeek agents implements each slice,
-runs a deterministic gate (typecheck/tests), and makes a **local commit** on an `orchestra/<slug>` branch.
-Nothing is ever pushed.
+Plan with a strong model, build with a cheap swarm. **Your tool plans and reviews; the swarm implements
+and commits locally.** You describe a feature; your assistant splits it into slices and writes the tests;
+a swarm of agents implements each slice, runs a deterministic gate (typecheck/tests) and makes a **local
+commit** on an `orchestra/<slug>` branch. Nothing is ever pushed.
 
 ```
-orchestra "feature"  ->  planner (Claude/OpenCode)  ->  MCP tool executar_orchestra
-                     ->  DeepSeek agents, one per slice  ->  gate  ->  local commit
+you: "use o orchestra"  ->  your tool plans slices and writes the tests
+                        ->  MCP tool executar_orchestra  ->  swarm, one agent per slice
+                        ->  gate  ->  local commit
 ```
 
-Includes a live dashboard (infinite canvas with runs, agents, embedded Claude Code terminal and browser)
-at `http://127.0.0.1:4123`, also packaged as an Electron desktop app.
-
-> **Windows only** (PowerShell, `setx`, `cmd.exe` are part of the core). The UI, logs and commit messages
-> are in **Brazilian Portuguese**.
-
-## Requirements
-
-- Windows 10/11, Git, Node 22+, PowerShell 7 (`pwsh`)
-- [Claude Code](https://claude.com/claude-code) and/or [OpenCode](https://opencode.ai) as planner
-- An API key for the swarm — **one** of:
-  - `OPENCODE_GO_API_KEY` (OpenCode Go)
-  - `DEEPSEEK_API_KEY` (native DeepSeek, Anthropic-compatible endpoint)
-  - `OPENROUTER_API_KEY` (OpenRouter fallback)
+Includes a live dashboard (infinite canvas with runs, agents and a diff growing as they work), also
+packaged as an optional Electron desktop app.
 
 ## Install
 
-```powershell
-git clone https://github.com/daKires/dev-orchestra.git
-cd dev-orchestra
-pwsh -File install.ps1
-setx DEEPSEEK_API_KEY "sk-..."   # or OPENCODE_GO_API_KEY / OPENROUTER_API_KEY
+```bash
+npx dev-orchestra
 ```
 
-Reopen the terminal. `install.ps1` changes files outside the repo:
+This opens a screen where you pick:
 
-- registers the `hermes-bridge` MCP server in `~/.claude.json` (backup at `~/.claude.json.bak-hermes`);
-- copies the `/orchestra` command and the `plan-sdd` skill into `~/.claude` and `~/.config/opencode`;
-- sets the user env var `HERMES_REPO` and adds one line to your PowerShell 5 and 7 `$PROFILE`
-  (old `orchestra`/`orchestra-go`/`hermes` functions there are removed, with a `.bak-hermes` backup).
+- the **provider, model and API key** of the implementers;
+- which tools to connect, among **Claude Code, OpenCode, Codex, Cursor and Antigravity (experimental)**.
+
+The installer registers the `dev-orchestra` MCP server and installs the `orchestra` and `plan-sdd`
+skills into the tools you selected. Reopen the tool afterwards.
 
 ## Usage
 
-Inside any git project:
+In any git project, just say **"use o orchestra"** in the conversation and describe the feature. Your
+tool reads the `orchestra` skill, plans the feature in slices (you approve the plan first), writes the
+tests, and calls the swarm through the `dev-orchestra` MCP server.
 
-| Command | What it does |
-|---|---|
-| `orchestra "feature"` | Claude Code plans, you approve, the swarm builds |
-| `orchestra-go "feature"` | Same, using OpenCode in an isolated worktree |
-| `hermes` | Opens only the dashboard |
+The dashboard opens by itself on the first run, so you can watch every slice, tool call, the gate and
+the diff grow live.
 
-Desktop app: `npm run desktop:dist` builds `release\Hermes Setup *.exe` (unsigned; SmartScreen will warn).
-If it fails with `electron.exe` not found, npm skipped the Electron binary download: run
-`node node_modules/electron/install.js` and try again.
+## Cost and safety
 
-## Configuration
+- **It costs money.** Every run calls a paid API; the dashboard shows the cost per run.
+- **Agents write files and run commands in your project.** Commands are limited to an allowlist, and
+  destructive ones (migrations, `db push/reset/drop`) are refused. A baseline is snapshotted first, so
+  you can revert with `git checkout <baseline> -- .` — still, review the diff.
+- Commits are **local only**. Nothing is pushed or merged without you.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `HERMES_CMDS` | `npm run build,npm test,npx tsc --noEmit` | Allowlist of commands agents may run |
-| `HERMES_GATE` | `npx tsc --noEmit,npm test` | Gate run after the agents; failure blocks the commit |
-| `HERMES_REPAIR_TRIES` | `1` | Repair attempts when the gate fails |
-| `HERMES_MAX_TURNS` | `25` | Turns per agent |
-| `HERMES_MAX_TOKENS` | `32000` | Max output tokens per turn |
-| `HERMES_MODEL` | chosen by key | Override the swarm model |
-| `HERMES_UI_PORT` | `4123` | Dashboard port |
+## Change the configuration
 
-## Before you run it
+Run `npx dev-orchestra` again: change provider, model, key or which tools are connected whenever you
+want.
 
-- **It costs money.** Every run calls a paid API. The dashboard shows the cost per run.
-- **Agents write files and run commands in your project.** Commands are limited to the allowlist, and
-  destructive ones (`exec`, migrations, `db push/reset/drop`) are refused. Writes to `node_modules`,
-  migrations and git-ignored files are blocked, and a baseline is snapshotted first so you can revert
-  (`git checkout <baseline> -- .`). Still: review the diff before merging.
-- Commits are local only. Nothing is pushed or merged without you.
+Some limits can be tuned with environment variables:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `HERMES_GATE_TIMEOUT_MS` | `900000` (15 min) | Timeout of the **gate** commands (typecheck/test). A full test suite can take more than 2 min, so the gate has its own timeout. |
+| `HERMES_CMD_TIMEOUT_MS` | `120000` (120s) | Timeout of the **agents' verification commands** (`rodar_comando`) and of the allowlist commands in the preflight. |
 
 ## Development
 
-```powershell
-npm run build   # bridge + web dashboard
-npm test        # selftest + node:test suites
+```bash
+git clone https://github.com/daKires/dev-orchestra.git
+cd dev-orchestra
+npm install
+npm run build
+node bin/dev-orchestra.mjs   # runs the setup screen pointing at this clone
+```
+
+## Desktop app (optional)
+
+```bash
+npm run desktop:dist
 ```
 
 ## License
