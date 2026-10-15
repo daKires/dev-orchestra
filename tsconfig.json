@@ -26,6 +26,7 @@
     "s3-dashboard.test.ts",
     "setup.ts",
     "s4-setup.test.ts",
+    "s5-cli.test.ts",
     "s6-pacote.test.ts",
     "s7-gate-timeout.test.ts",
     
