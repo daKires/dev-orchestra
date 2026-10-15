@@ -9,6 +9,8 @@ const pexec = promisify(execFile); // git
 const pshell = promisify(exec); // comandos allowlisted / gate (build/teste/typecheck)
 const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
 const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
+// O GATE tem timeout proprio (suite de teste pode passar de 2 min): separado do CMD_TIMEOUT dos agentes.
+export const GATE_TIMEOUT = Number(process.env.HERMES_GATE_TIMEOUT_MS || String(15 * 60 * 1000));
 // G3/S2: teto de tempo que uma slice pode ficar pausada antes de retomar sozinha.
 export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
 // Resolve COMANDOS/gate a partir do package.json do alvo (auto-detect), com override do planner e
@@ -104,10 +106,12 @@ export async function preflight(cwd, cmds, gateCmds, scripts, signal, timeout = 
         return { ok: false, itens }; // recusa nao executa nada (migrate nao pode rodar nem aqui)
     for (const cmd of unicos) {
         const t0 = Date.now();
-        const r = await rodarShell(cmd, cwd, signal, timeout);
+        // comandos do GATE usam o timeout proprio (a suite inteira pode passar de 2 min); os da allowlist, o dos agentes.
+        const to = gateCmds.includes(cmd) ? GATE_TIMEOUT : timeout;
+        const r = await rodarShell(cmd, cwd, signal, to);
         const ms = Date.now() - t0;
         const classe = r.code === 0 ? "ok" : r.timeout || ehFalhaAmbiente(r.saida) ? "ambiente" : "esperada";
-        itens.push({ cmd, classe, motivo: r.timeout ? `timeout (${timeout}ms)` : r.code === 0 ? undefined : "exit " + r.code, saida: r.saida, ms });
+        itens.push({ cmd, classe, motivo: r.timeout ? `timeout (${to}ms)` : r.code === 0 ? undefined : "exit " + r.code, saida: r.saida, ms });
     }
     return { ok: itens.every((i) => i.classe === "ok" || i.classe === "esperada"), itens };
 }
@@ -693,7 +697,7 @@ export async function gate(cwd, emit, cmds = [], tentativa = 0, signal) {
     for (const cmd of cmds) {
         emit({ t: "gate", cmd, status: "rodando", tentativa: tentativa || undefined });
         // ponytail: cancelamento no gate vira falha comum (como antes); o rodar ja checa signal.aborted
-        const r = await rodarShell(cmd, cwd, signal).catch(() => ({ code: "cancelado", saida: "cancelado", timeout: false }));
+        const r = await rodarShell(cmd, cwd, signal, GATE_TIMEOUT).catch(() => ({ code: "cancelado", saida: "cancelado", timeout: false }));
         if (r.code === 0) {
             emit({ t: "gate", cmd, status: "ok", tentativa: tentativa || undefined, saida: r.saida });
             continue;

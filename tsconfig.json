@@ -24,6 +24,9 @@
     "s1-sem-reparo.test.ts",
     "s2-sem-feature.test.ts",
     "s3-dashboard.test.ts",
+    "setup.ts",
+    "s4-setup.test.ts",
+    "s7-gate-timeout.test.ts",
     
     "hub.test.ts",
     
