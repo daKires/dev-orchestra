@@ -1,6 +1,6 @@
 // O swarm Hermes: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
-import { mensagem as mensagemReal, texto, CanceladoError, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
+import { mensagem as mensagemReal, CanceladoError, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
 import { type Evento, type Emitir } from "./ui.js";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
@@ -17,11 +17,6 @@ export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
 
 // Caixa de instrucoes/pausa de UMA slice (implementada sobre os arquivos em RUNS_DIR, ver instrucoes.ts).
 export type CaixaSlice = { tomar(): string[]; pausada(): boolean; esperar(): Promise<"retomada" | "teto"> };
-
-export const REPAIR_TRIES = Number(process.env.HERMES_REPAIR_TRIES ?? "1");
-export function podeReparar(tentativa: number, tries: number = REPAIR_TRIES): boolean {
-  return tentativa < tries;
-}
 
 export type Tarefa = { tarefa: string; arquivos_alvo: string[]; descricao: string };
 
@@ -452,7 +447,7 @@ export async function execFerramenta(ctx: CtxAgente, nome: string, input: any): 
 
 // UM agente: loop multi-turn tool_use<->tool_result ate end_turn ou o teto de turnos.
 // msgFn injetavel pro selftest (client fake, sem rede). sliceIdx identifica o card/feed no dashboard
-// (slices do plano usam 1..N; a tarefa de reparo do gate usa N+tentativa). cmds e' a allowlist resolvida.
+// (slices do plano usam 1..N). cmds e' a allowlist resolvida.
 // Erro de API/turno vira slice falha COM os tokens ja gastos; cancelamento (CanceladoError) sobe.
 export async function agente(
   base: string, feature: string, t: Tarefa, emit: Emitir, sliceIdx: number, cmds: string[], msgFn: MensagemFn = mensagemReal,
@@ -607,15 +602,9 @@ export async function construir(
   return { escritos, rejeitados, resultados, cancelado: false };
 }
 
-// Diff REAL da run: baseline..indice (inclui arquivos novos e o que ja tiver sido commitado no meio da run).
-// Sem baselineRef (repo sem HEAD), cai pro diff contra HEAD. Erro de git sobe, nao vira diff vazio.
-export async function diffStaged(cwd: string, baselineRef = ""): Promise<string> {
-  await git(cwd, ["add", "-A"]);
-  return await git(cwd, ["diff", "--cached", ...(baselineRef ? [baselineRef] : [])]);
-}
-
 // Gate deterministico: roda os comandos resolvidos por-projeto em serie contra o cwd; qualquer exit != 0
-// falha e para ali (fail-closed). cmds/tentativa injetaveis pro selftest e pro loop de reparo.
+// falha e para ali (fail-closed). Sem reparo interno: a saida volta pro orquestrador (GATE-FAILED) decidir.
+// cmds/tentativa injetaveis pro selftest.
 export async function gate(
   cwd: string, emit: Emitir, cmds: string[] = [], tentativa = 0, signal?: AbortSignal,
 ): Promise<{ ok: boolean; cmd: string; saida: string; rodou: boolean; ambiente: boolean }> {
@@ -628,24 +617,6 @@ export async function gate(
     return { ok: false, cmd, saida: r.saida, rodou: true, ambiente: ehFalhaAmbiente(r.saida) };
   }
   return { ok: true, cmd: "", saida: "", rodou: cmds.length > 0, ambiente: false };
-}
-
-export async function revisar(cwd: string, feature: string, diff: string, emit: Emitir): Promise<{ ok: boolean; ajustes: string }> {
-  // diff cortado = veredito sobre o que o modelo nao viu; melhor nao opinar
-  if (diff.length > 12000) return { ok: true, ajustes: `diff grande (${diff.length} chars), revisao fica com o Claude` };
-  emit({ t: "fase", nome: "revisor", info: "conferindo..." });
-  const sys =
-    "Voce e um REVISOR. Recebe a feature e um diff. Responda APENAS JSON " +
-    `{"ok": boolean, "ajustes": "texto curto"}. ok=true se o diff implementa a feature de forma coerente e nao quebra arquivos.`;
-  const user = `Feature: ${feature}\n\nDiff:\n${diff}`;
-  try {
-    const out = await texto(sys, user);
-    const m = out.match(/\{[\s\S]*\}/); // extrai o objeto JSON mesmo que venha cercado de texto
-    const j = JSON.parse(m ? m[0] : out);
-    return { ok: !!j.ok, ajustes: String(j.ajustes || "") };
-  } catch (e: any) {
-    return { ok: true, ajustes: "revisor indisponivel: " + (e?.message ?? e) };
-  }
 }
 
 export async function commit(cwd: string, feature: string, emit: Emitir): Promise<void> {

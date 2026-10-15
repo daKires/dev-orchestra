@@ -236,7 +236,6 @@ function gravarPainel(aberto: boolean) {
 
 export type CanvasProps = {
   projeto: string;
-  onNovaFeature?: () => void;
   onRunSel?: (runId: string | null) => void;
 };
 
@@ -247,7 +246,7 @@ export type CanvasHandle = {
 };
 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
-  { projeto, onNovaFeature, onRunSel }, ref,
+  { projeto, onRunSel }, ref,
 ) {
   const { estado, conectado, enviar, desfazer, refazer } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
@@ -671,8 +670,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     }
     if (!ctrl && e.shiftKey) {
       const k = e.key.toLowerCase();
-      // Shift+N: abre o dialog "Nova feature" (mesmo do botao do topo e do '+ Feature' da barra).
-      if (k === "n") { e.preventDefault(); onNovaFeature?.(); return true; }
       // Shift+O: auto-organiza em faixas por tipo (respeitando os fixados). Shift+F: fixa/desafixa.
       if (k === "o") { e.preventDefault(); organizar(); return true; }
       if (k === "f") {
@@ -1182,7 +1179,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
         onAgente={() => setNovoAgenteAberto(true)}
         onNavegador={() => setNovoNavegadorAberto(true)}
         onPainel={() => void abrirPainel()}
-        onNovaFeature={() => onNovaFeature?.()}
       />
 
       <NovoAgente

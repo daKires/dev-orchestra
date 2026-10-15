@@ -1,5 +1,5 @@
 // Testa a parte git do Hermes: baseline -> coder edita -> commit, e prova que o BASELINE recupera o original.
-import { baseline, diffStaged, commit } from "./dist/hermes.js";
+import { baseline, commit } from "./dist/hermes.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +14,6 @@ const log = (l) => console.log("  " + l);
 
 const { baselineRef, branch } = await baseline(dir, "minha feature", log);
 await fs.writeFile(alvo, "MANGLED PELO CODER\n"); // simula um coder estragando o arquivo
-await diffStaged(dir, log);
 await commit(dir, "minha feature", log);
 
 const br = (await pexec("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir })).stdout.trim();

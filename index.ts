@@ -6,13 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fsp } from "node:fs";
 import { appendFileSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import {
-  baseline, construir, diffStaged, commit, revisar, slug, destrutivo, agente, gate,
-  resolverComandos, REPAIR_TRIES, podeReparar, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
+  baseline, construir, commit, slug, destrutivo, agente, gate,
+  resolverComandos, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
   PAUSA_MAX_MS,
   type Tarefa, type Override, type CaixaSlice,
 } from "./hermes.js";
-import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, type Evento } from "./ui.js";
+import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
 import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
 import { escolherProvedor, comTentativas, CanceladoError, retentavel, erroHttp } from "./deepseek.js";
@@ -24,6 +25,29 @@ const SEP = "+" + "-".repeat(WIDTH - 2) + "+";
 // Arquivo de log ao vivo (retrocompat; o dashboard web e' a UI principal agora). orchestra define HERMES_LOG.
 const LOG_FILE = process.env.HERMES_LOG || path.join(os.tmpdir(), "hermes-run.log");
 function toFile(s: string) { try { appendFileSync(LOG_FILE, s); } catch {} }
+
+// Porta do dashboard (mesma regra do ui.ts): HERMES_UI_PORT ou 4123.
+const PORTA_DASH = Number(process.env.HERMES_UI_PORT || "4123");
+const URL_DASH = `http://127.0.0.1:${PORTA_DASH}`;
+
+// S3: na PRIMEIRA run do processo, abre o dashboard (app Hermes instalado vence; senao o navegador
+// do sistema). HERMES_ABRIR_LOG troca o abrir por um append JSON (hook de teste). Nunca derruba a run.
+let dashboardAberto = false;
+function abrirDashboard(url: string): void {
+  if (dashboardAberto) return;
+  dashboardAberto = true;
+  try {
+    let exe: string | null = null;
+    if (process.platform === "win32") {
+      const p = path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Hermes", "Hermes.exe");
+      if (existsSync(p)) exe = p;
+    }
+    const { comando, args } = comoAbrirDashboard(exe, url, process.platform);
+    const log = process.env.HERMES_ABRIR_LOG;
+    if (log) { appendFileSync(log, JSON.stringify({ comando, args }) + "\n"); return; }
+    spawn(comando, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch {}
+}
 
 // Cor ANSI por tipo de linha (pra quem ainda acompanha via arquivo/stderr). O painel final fica sem cor.
 function pintar(chave: string, texto: string): string {
@@ -51,7 +75,8 @@ function frame(opts: { titulo: string; cwd: string; linhas: string[]; status: st
   return out.join("\n");
 }
 
-// Roda o swarm: baseline -> agentes (serial) -> GATE (+reparo) -> revisor -> commit local.
+// Roda o swarm: baseline -> agentes (serial) -> GATE -> commit local. NAO revisa nem repara sozinho:
+// quem decide (e conserta) e' o orquestrador que chamou o MCP (gate falhou = GATE-FAILED com a saida).
 // Todo evento vai pro dashboard web (SSE) E deriva uma linha pro stderr/arquivo (retrocompat). Nunca lanca.
 // Allowlist/gate vem do package.json do ALVO (override do planner vence; fallback pro env legado).
 async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, onLinha?: (l: string) => void): Promise<string> {
@@ -117,62 +142,26 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
         },
       };
     };
-    const { rejeitados, resultados, escritos, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal, undefined, caixaDe);
+    const { rejeitados, resultados, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal, undefined, caixaDe);
     const parou = cancelado || rejeitados.length > 0; // slice falhou ou cancelou: sem gate, sem commit
 
     // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
+    // Sem reparo interno: gate falhou = GATE-FAILED direto, com a saida na mao do orquestrador.
     let g = { ok: true, cmd: "", saida: "", rodou: false, ambiente: false };
-    if (!parou) {
-      g = await gate(cwd, emit, gateCmds, 0, signal);
-      let tentativa = 0;
-      // falha de ambiente no gate nao tem reparo: agente nao conserta ambiente (no incidente custou $0,66)
-      while (!g.ok && !g.ambiente && !signal.aborted && podeReparar(tentativa)) {
-        tentativa++;
-        const sliceIdx = plano.length + tentativa;
-        const inicioReparo = Date.now();
-        let r;
-        try {
-          r = await agente(
-            base, feature,
-            {
-              tarefa: "reparo: " + g.cmd,
-              arquivos_alvo: escritos,
-              descricao: `O comando "${g.cmd}" falhou apos as edicoes. Saida:\n${g.saida}\n\nConserte os arquivos ate o comando passar.`,
-            },
-            emit, sliceIdx, cmds, undefined, signal,
-          );
-        } catch (e) { // cancelado ou ambiente durante o reparo
-          if (e instanceof AmbienteError) g = { ...g, ok: false, ambiente: true, cmd: e.cmd, saida: e.saida };
-          break;
-        }
-        // metrica do slice de reparo (analogo ao emitMetrica de construir), pro dashboard agregar a run
-        emit({
-          t: "metrica", slice: sliceIdx, iteracoes: r.iteracoes, passouDePrimeira: r.passouDePrimeira,
-          tocouNoTeste: r.tocouNoTeste, falhasAmbiente: r.falhasAmbiente, tokensIn: r.tokensIn, tokensOut: r.tokensOut,
-          custoUSD: custoUSD(r.tokensIn, r.tokensOut), ms: Date.now() - inicioReparo,
-        });
-        g = await gate(cwd, emit, gateCmds, tentativa, signal);
-      }
-    }
+    if (!parou) g = await gate(cwd, emit, gateCmds, 0, signal);
 
     let status: string;
-    let rev: { ok: boolean; ajustes: string } | null = null;
     const amb = ambiente ? { cmd: ambiente.cmd, saida: ambiente.saida } : g.ambiente ? { cmd: g.cmd, saida: g.saida } : null;
     if (cancelado || signal.aborted) {
       status = "CANCELED"; // para e mantem os arquivos no working tree; nada commitado
     } else if (amb) {
-      status = "ENV-FAILED"; // ambiente quebrou no meio: para tudo, sem reparo/commit
+      status = "ENV-FAILED"; // ambiente quebrou no meio: para tudo, sem commit
     } else if (parou) {
       status = "NEEDS-REVIEW"; // slice falhou: resto pulado, sem gate/commit
     } else if (g.rodou && !g.ok) {
       status = "GATE-FAILED"; // fail-closed: nao revisa nem commita codigo que nao passou no gate
     } else {
-      const diff = await diffStaged(cwd, baselineRef).catch((e: any) => e as Error);
-      rev = diff instanceof Error
-        ? { ok: false, ajustes: "falha ao gerar o diff: " + (diff.message ?? diff) }
-        : await revisar(cwd, feature, diff, emit);
-      emit({ t: "fase", nome: "revisor", info: (rev.ok ? "OK" : "ATENCAO") + (rev.ajustes ? " - " + rev.ajustes : "") });
-      status = "COMPLETE";
+      status = "COMPLETE"; // gate passou (ou nao havia gate): commit direto, sem revisor
       if (signal.aborted) status = "CANCELED"; // ultimo ponto de corte: depois do commit o cancel e' ignorado
       else try { await commit(cwd, feature, emit); } catch (e: any) {
         emit({ t: "fase", nome: "commit", info: String(e?.message ?? e) });
@@ -191,12 +180,13 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     if (g.rodou) linhas.push("GATE: " + (g.ok ? "OK" : "FALHOU (" + g.cmd + ")"));
     if (amb) linhas.push("AMBIENTE: " + amb.cmd, ...amb.saida.trim().split("\n").slice(-6).map((s) => "  | " + s.trim()));
     linhas.push("branch " + branch);
-    if (rev) linhas.push("REVISOR: " + (rev.ok ? "OK" : "ATENCAO"));
     if (baselineRef) linhas.push("REVERTER: git checkout " + baselineRef.slice(0, 8) + " -- .");
     const painel = frame({ titulo: "HERMES // " + branch, cwd, linhas, status });
     emit({ t: "painel", status, branch, baseline: baselineRef, linhas });
     toFile(painel + "\n");
-    return amb ? painel + "\nSAIDA (" + amb.cmd + "):\n" + amb.saida.trim().slice(-1500) : painel; // o frame corta linha longa
+    // o frame corta linha longa: a saida completa do que falhou vai DEPOIS do painel (orquestrador decide)
+    const falha = amb ?? (g.rodou && !g.ok && !parou && !cancelado ? { cmd: g.cmd, saida: g.saida } : null);
+    return falha ? painel + "\nSAIDA (" + falha.cmd + "):\n" + falha.saida.trim().slice(-1500) : painel;
   } catch (e: any) {
     emit({ t: "log", texto: "ERRO: " + (e?.message ?? e) });
     emit({ t: "painel", status: "FAILED", branch: "", linhas: vivo });
@@ -209,7 +199,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   }
 }
 
-// Self-check offline (sem API): painel, slug, parse do plano, guardas, gate, reparo, eventos, e o loop do agente com client fake.
+// Self-check offline (sem API): painel, slug, parse do plano, guardas, gate, eventos, e o loop do agente com client fake.
 if (process.argv.includes("--selftest")) {
   assert.strictEqual(row("x").length, WIDTH);
   assert.strictEqual(row("y".repeat(300)).length, WIDTH);
@@ -225,10 +215,7 @@ if (process.argv.includes("--selftest")) {
   const p = JSON.parse('[{"tarefa":"t","arquivos_alvo":["a.js"],"descricao":"x"}]') as Tarefa[];
   assert.strictEqual(p[0].tarefa, "t");
   assert.strictEqual(p[0].arquivos_alvo[0], "a.js");
-  // podeReparar: teto de tentativas (CA-G6, sem precisar mexer em env em runtime)
-  assert.strictEqual(podeReparar(0, 0), false);
-  assert.strictEqual(podeReparar(0, 1), true);
-  assert.strictEqual(podeReparar(1, 1), false);
+  // Sem teto de tentativas internas: quem repara o gate e' o orquestrador, nao o swarm (S1)
   // ehTeste: reconhece os padroes comuns de arquivo de teste (pura, offline)
   assert.strictEqual(ehTeste("src/foo.test.ts"), true);
   assert.strictEqual(ehTeste("a/__tests__/x.ts"), true);
@@ -472,29 +459,6 @@ if (process.argv.includes("--selftest")) {
     assert.ok(eventos.some((ev) => ev.t === "gate" && ev.status === "falha"));
   })();
 
-  // Reparo: gate falha -> agente (fake) "conserta" -> gate re-roda com tentativa e passa
-  await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-repair-"));
-    const eventos: Evento[] = [];
-    const e = (ev: Evento) => eventos.push(ev);
-    const cmd = `"${process.execPath}" -e "process.exit(require('fs').existsSync('ok.flag')?0:1)"`;
-    let g = await gate(base, e, [cmd]);
-    assert.strictEqual(g.ok, false, "gate deveria falhar sem o flag");
-    let vez = 0;
-    const msgFn = async () => {
-      vez++;
-      if (vez === 1) {
-        await fsp.writeFile(path.join(base, "ok.flag"), "ok");
-        return { blocos: [{ type: "tool_use", id: "r", name: "escrever_arquivo", input: { caminho: "reparado.txt", conteudo: "ok\n" } }], stop: "tool_use" };
-      }
-      return fim;
-    };
-    await agente(base, "f", { tarefa: "reparo", arquivos_alvo: [], descricao: "conserta" }, e, 99, [], msgFn as any);
-    g = await gate(base, e, [cmd], 1);
-    assert.strictEqual(g.ok, true, "gate deveria passar apos o reparo");
-    assert.ok(eventos.some((ev) => ev.t === "gate" && ev.tentativa === 1 && ev.status === "ok"));
-  })();
-
   // comTentativas: ocioso re-tenta o MESMO turno e desiste na 3a; erro transitorio + sucesso volta; cancelado nao re-tenta (CA-2/3)
   await (async () => {
     const tentativas: number[] = [];
@@ -577,7 +541,7 @@ if (process.argv.includes("--selftest")) {
 // stdio e o processo fica BLOCKADO no stdin pra sempre, travando a suite inteira (dist/web, o bundle do
 // dashboard, tem o mesmo risco). Por isso o `npm test` lista os arquivos de teste EXPLICITAMENTE
 // (ver package.json); arquivos passados a mao sao sempre executados, mesmo fora dos padroes *.test.js.
-const server = new McpServer({ name: "hermes-bridge", version: "3.0.0" });
+const server = new McpServer({ name: "dev-orchestra", version: "3.0.0" });
 server.registerTool(
   "executar_orchestra",
   {
@@ -585,7 +549,8 @@ server.registerTool(
     description:
       "Implementa uma feature num diretorio via swarm DeepSeek (ASSINCRONA). O planejador monta SLICES e passa o plano; " +
       "cada slice roda em serie como um agente DeepSeek (le/edita arquivos e roda comandos de verificacao " +
-      "permitidos), depois um GATE deterministico (typecheck/testes) e so entao revisor + commit local. " +
+      "permitidos), depois um GATE deterministico (typecheck/testes) e so entao commit local. Se o gate falhar a run " +
+      "volta GATE-FAILED com a saida pro planejador decidir. " +
       "A allowlist e o gate sao resolvidos do package.json do alvo (override opcional em cada um). " +
       "Esta tool dispara a run em background e volta NA HORA com o runId; acompanhe com status_orchestra. " +
       "Progresso ao vivo no dashboard web (ver stderr pra URL).",
@@ -613,11 +578,13 @@ server.registerTool(
   async ({ cwd, feature, plano, override }) => {
     try {
       const runId = iniciar((progresso) => rodar(cwd, feature, plano as Tarefa[], override as Override | undefined, progresso));
+      abrirDashboard(URL_DASH);
       return {
         content: [{
           type: "text",
           text:
             `RUN INICIADA: ${runId}\n` +
+            `dashboard: ${URL_DASH}\n` +
             `chame status_orchestra com runId=${runId} ate vir o painel final (cancelar: botao do dashboard)`,
         }],
       };
@@ -701,5 +668,5 @@ if (process.argv.includes("--ui")) {
 } else {
   await server.connect(new StdioServerTransport());
   void iniciarUI();
-  process.stderr.write("[hermes-bridge] listening (stdio)\n");
+  process.stderr.write("[dev-orchestra] listening (stdio)\n");
 }

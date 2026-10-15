@@ -1,15 +1,12 @@
 // Casca da tela unica: topbar, sidebar, canvas (com o painel direito) e status bar.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
-import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/Sidebar";
 import { StatusBar } from "@/components/StatusBar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CancelDialog } from "@/components/CancelDialog";
-import { NovaFeatureDialog } from "@/components/NovaFeatureDialog";
 import { ProjetoSeletor } from "@/components/ProjetoSeletor";
 import { Canvas, type CanvasHandle } from "@/components/Canvas";
 import { ModalArquivo } from "@/components/canvas/Explorador";
@@ -27,7 +24,6 @@ export default function App() {
   const [runSelId, setRunSelId] = useState<string | null>(null);
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
-  const [nova, setNova] = useState(false);
   const [arquivo, setArquivo] = useState<string | null>(null); // previa (ModalArquivo) de um arquivo sem diff
   const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
@@ -77,7 +73,7 @@ export default function App() {
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col">
-        {/* topbar da tela unida: projeto, branch da run mostrada, estado do hub e "+ Feature" */}
+        {/* topbar da tela unida: projeto, branch da run mostrada e estado do hub */}
         <header className="flex h-10 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
           <span className="flex shrink-0 items-center gap-2 text-[13px] font-semibold tracking-tight">
             <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">H</span>
@@ -101,13 +97,6 @@ export default function App() {
               <span className={cn("size-1.5 rounded-full", conectado ? "bg-ok" : "bg-warn")} />
               {conectado ? "hub conectado" : "reconectando…"}
             </span>
-            {/* cria worktree + planejador pelo hub (POST /nova-feature) com o projeto atual */}
-            <Button
-              size="sm" variant="outline" className="h-6.5 gap-1.5 px-2.5 text-xs"
-              title="Criar uma feature nova (worktree + planejador)" onClick={() => setNova(true)}
-            >
-              <Plus className="size-3.5" />Feature
-            </Button>
           </div>
         </header>
 
@@ -127,7 +116,7 @@ export default function App() {
               {projeto ? (
                 <Canvas
                   ref={canvasRef} projeto={projeto}
-                  onRunSel={setRunSelId} onNovaFeature={() => setNova(true)}
+                  onRunSel={setRunSelId}
                 />
               ) : (
                 <div className="grid h-full place-items-center">
@@ -146,7 +135,6 @@ export default function App() {
         onRun={abrirRun} onSlice={() => { if (runSel) abrirRun(runSel.id); }} onArquivo={abrirDiff}
       />
       <CancelDialog r={runSel} aberto={cancelar} onAberto={setCancelar} />
-      <NovaFeatureDialog estado={estado} aberto={nova} onAberto={setNova} projetoInicial={projeto ?? ""} />
       <ModalArquivo aberto={arquivo !== null} projeto={projeto ?? ""} caminho={arquivo ?? ""} onFechar={() => setArquivo(null)} />
     </TooltipProvider>
   );
