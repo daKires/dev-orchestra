@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dev Orchestra</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --fundo: #0e1116;
+    --painel: #161b22;
+    --borda: #2a3140;
+    --texto: #e6edf3;
+    --fraco: #9aa7b4;
+    --acento: #4ea1ff;
+    --ok: #3fb950;
+    --erro: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 20px 72px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .2px; }
+  h1 span { color: var(--acento); }
+  .sub { color: var(--fraco); margin: 0 0 24px; font-size: 14px; }
+  section {
+    background: var(--painel);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 18px 18px 16px;
+    margin-bottom: 18px;
+  }
+  h2 { font-size: 16px; margin: 0 0 14px; }
+  label.campo { display: block; margin-bottom: 14px; color: var(--fraco); font-size: 13px; }
+  select, input[type="password"] {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    padding: 9px 10px;
+    background: #0b0f14;
+    color: var(--texto);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    font: inherit;
+  }
+  select:disabled, input:disabled { opacity: .55; }
+  select:focus, input:focus { outline: none; border-color: var(--acento); }
+  button {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--borda);
+    background: #1f2733;
+    color: var(--texto);
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--acento); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #salvar { background: var(--acento); border-color: var(--acento); color: #06121f; font-weight: 600; }
+  #salvar:hover:not(:disabled) { filter: brightness(1.08); }
+  .res { min-height: 20px; margin: 10px 0 0; font-size: 13px; white-space: pre-wrap; }
+  .ok { color: var(--ok); }
+  .erro { color: var(--erro); }
+  .fraco { color: var(--fraco); }
+  .ferramenta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px dashed var(--borda);
+  }
+  .ferramenta:last-child { border-bottom: 0; }
+  .ferramenta input { width: 16px; height: 16px; accent-color: var(--acento); }
+  .ferramenta .nome { flex: 0 1 auto; }
+  .ferramenta .obs { margin-left: auto; font-size: 12px; color: var(--fraco); }
+  .tag {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--fraco);
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    padding: 1px 8px;
+  }
+  .rodape { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .falta { margin: 0; font-size: 13px; color: var(--fraco); }
+  ul { margin: 10px 0 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  code { background: #0b0f14; border: 1px solid var(--borda); border-radius: 5px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dev <span>Orchestra</span></h1>
+  <p class="sub">Escolha os implementadores e em quais ferramentas conectar. A chave fica so na sua maquina.</p>
+
+  <section>
+    <h2>Implementadores</h2>
+    <label class="campo">Provedor
+      <select id="provedor"><option value="">carregando…</option></select>
+    </label>
+    <label class="campo">Modelo
+      <select id="modelo" disabled><option value="">escolha o provedor antes</option></select>
+    </label>
+    <label class="campo">Chave de API
+      <input id="chave" type="password" autocomplete="off" spellcheck="false" placeholder="cole aqui a chave do provedor" />
+    </label>
+    <button id="testar" type="button">Testar</button>
+    <p id="teste" class="res fraco"></p>
+  </section>
+
+  <section>
+    <h2>Conectar em</h2>
+    <div id="ferramentas"></div>
+  </section>
+
+  <section class="rodape">
+    <p id="falta" class="falta">carregando…</p>
+    <button id="salvar" type="button" disabled>Salvar</button>
+  </section>
+
+  <section id="resultado" hidden></section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const FERRAMENTAS = [
+    { id: "claude", nome: "Claude Code" },
+    { id: "opencode", nome: "OpenCode" },
+    { id: "codex", nome: "Codex" },
+    { id: "cursor", nome: "Cursor" },
+    { id: "antigravity", nome: "Antigravity", experimental: true },
+  ];
+
+  const el = (id) => document.getElementById(id);
+  const provedorEl = el("provedor");
+  const modeloEl = el("modelo");
+  const chaveEl = el("chave");
+  const testeEl = el("teste");
+  const faltaEl = el("falta");
+  const salvarEl = el("salvar");
+  const resultadoEl = el("resultado");
+  const ferramentasEl = el("ferramentas");
+
+  let provedores = {};
+  let deteccao = {};
+  let atual = { provedor: null, modelo: null, chaveMascarada: null };
+
+  // Todo POST manda o cabecalho que o servidor local exige.
+  async function post(rota, corpo) {
+    try {
+      const r = await fetch(rota, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
+        body: JSON.stringify(corpo),
+      });
+      let j = {};
+      try { j = await r.json(); } catch { j = {}; }
+      return { status: r.status, json: j || {} };
+    } catch (e) {
+      return { status: 0, json: { erro: "Nao consegui falar com a tela local: " + e.message } };
+    }
+  }
+
+  const nomeFerramenta = (id) => (FERRAMENTAS.find((f) => f.id === id) || { nome: id }).nome;
+
+  function marcadas() {
+    return Array.from(ferramentasEl.querySelectorAll("input[type=checkbox]"))
+      .filter((c) => c.checked && !c.disabled)
+      .map((c) => c.value);
+  }
+
+  function chaveMascaradaAtual() {
+    // Só a chave atual do mesmo provedor serve pra deixar o campo em branco.
+    if (atual && atual.chaveMascarada && atual.provedor === provedorEl.value) return atual.chaveMascarada;
+    return null;
+  }
+
+  function pendencias() {
+    const falta = [];
+    if (!provedorEl.value) falta.push("provedor");
+    if (!modeloEl.value) falta.push("modelo");
+    if (!chaveEl.value.trim() && !chaveMascaradaAtual()) falta.push("chave");
+    if (marcadas().length === 0) falta.push("ao menos uma ferramenta");
+    return falta;
+  }
+
+  function atualizarSalvar() {
+    const falta = pendencias();
+    salvarEl.disabled = falta.length > 0;
+    faltaEl.textContent = falta.length ? "Falta: " + falta.join(", ") + "." : "Tudo pronto pra salvar.";
+  }
+
+  function desenharProvedores() {
+    provedorEl.innerHTML = "";
+    const vazio = document.createElement("option");
+    vazio.value = "";
+    vazio.textContent = "escolha…";
+    provedorEl.append(vazio);
+    for (const id of Object.keys(provedores)) {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = provedores[id].nome;
+      provedorEl.append(o);
+    }
+  }
+
+  function desenharModelos(preservar) {
+    const p = provedores[provedorEl.value];
+    modeloEl.innerHTML = "";
+    if (!p) {
+      modeloEl.disabled = true;
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "escolha o provedor antes";
+      modeloEl.append(o);
+    } else {
+      modeloEl.disabled = false;
+      const vazio = document.createElement("option");
+      vazio.value = "";
+      vazio.textContent = "escolha…";
+      modeloEl.append(vazio);
+      for (const m of p.modelos || []) {
+        const o = document.createElement("option");
+        o.value = m;
+        o.textContent = m;
+        modeloEl.append(o);
+      }
+      if (preservar && (p.modelos || []).includes(preservar)) modeloEl.value = preservar;
+    }
+    chaveEl.placeholder = atual.chaveMascarada
+      ? "atual: " + atual.chaveMascarada + " — deixe em branco pra manter"
+      : "cole aqui a chave do provedor";
+    atualizarSalvar();
+  }
+
+  function desenharFerramentas() {
+    ferramentasEl.innerHTML = "";
+    for (const f of FERRAMENTAS) {
+      const detectada = deteccao[f.id] === true;
+      const linha = document.createElement("label");
+      linha.className = "ferramenta";
+
+      const cx = document.createElement("input");
+      cx.type = "checkbox";
+      cx.value = f.id;
+      cx.disabled = !detectada;
+      cx.checked = detectada;
+      cx.addEventListener("change", atualizarSalvar);
+
+      const nome = document.createElement("span");
+      nome.className = "nome";
+      nome.textContent = f.nome;
+
+      linha.append(cx, nome);
+      if (f.experimental) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = "experimental";
+        linha.append(tag);
+      }
+      if (!detectada) {
+        const obs = document.createElement("span");
+        obs.className = "obs";
+        obs.textContent = "não encontrado";
+        linha.append(obs);
+      }
+      ferramentasEl.append(linha);
+    }
+  }
+
+  function mostrar(resultados, erros) {
+    resultadoEl.hidden = false;
+    resultadoEl.innerHTML = "";
+    const h = document.createElement("h2");
+    h.textContent = "Pronto";
+    const p = document.createElement("p");
+    p.className = "fraco";
+    p.textContent = 'Diga "use o orchestra" na sua ferramenta (reinicie ela antes).';
+    const lista = document.createElement("ul");
+    for (const f of resultados) {
+      const li = document.createElement("li");
+      li.className = "ok";
+      li.textContent = nomeFerramenta(f) + ": MCP + skill gravados (reinicie a ferramenta).";
+      lista.append(li);
+    }
+    for (const [f, erro] of Object.entries(erros || {})) {
+      const li = document.createElement("li");
+      li.className = "erro";
+      li.textContent = nomeFerramenta(f) + ": " + erro;
+      lista.append(li);
+    }
+    resultadoEl.append(h, p, lista);
+    resultadoEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function mostrarErroSalvar(texto) {
+    resultadoEl.hidden = false;
+    resultadoEl.innerHTML = "";
+    const h = document.createElement("h2");
+    h.textContent = "Não deu pra salvar";
+    const p = document.createElement("p");
+    p.className = "erro";
+    p.textContent = texto || "erro desconhecido.";
+    resultadoEl.append(h, p);
+  }
+
+  provedorEl.addEventListener("change", () => {
+    desenharModelos(atual.provedor === provedorEl.value ? atual.modelo : null);
+    testeEl.textContent = "";
+    testeEl.className = "res fraco";
+  });
+  modeloEl.addEventListener("change", atualizarSalvar);
+  chaveEl.addEventListener("input", atualizarSalvar);
+
+  el("testar").addEventListener("click", async () => {
+    testeEl.className = "res fraco";
+    testeEl.textContent = "Testando…";
+    const { status, json } = await post("/testar", {
+      provedor: provedorEl.value,
+      modelo: modeloEl.value,
+      chave: chaveEl.value.trim(),
+    });
+    if (status === 200 && json.ok) {
+      testeEl.className = "res ok";
+      testeEl.textContent = "✓ a chave e o modelo responderam.";
+    } else {
+      testeEl.className = "res erro";
+      testeEl.textContent = json.erro || "a chave foi recusada.";
+    }
+    atualizarSalvar();
+  });
+
+  salvarEl.addEventListener("click", async () => {
+    salvarEl.disabled = true;
+    const { status, json } = await post("/salvar", {
+      provedor: provedorEl.value,
+      modelo: modeloEl.value,
+      chave: chaveEl.value.trim(),
+      ferramentas: marcadas(),
+    });
+    if (status === 200) {
+      mostrar(json.ok || [], json.erros || {});
+      if (Object.keys(json.erros || {}).length === 0) {
+        salvarEl.disabled = true;
+        salvarEl.textContent = "Salvo";
+        faltaEl.textContent = "Configuracao gravada.";
+      } else {
+        atualizarSalvar();
+      }
+    } else {
+      mostrarErroSalvar(json.erro);
+      atualizarSalvar();
+    }
+  });
+
+  async function iniciar() {
+    try {
+      const r = await fetch("/estado");
+      const e = await r.json();
+      provedores = e.provedores || {};
+      deteccao = e.ferramentas || {};
+      atual = e.atual || {};
+    } catch {
+      faltaEl.textContent = "Nao consegui ler o estado inicial.";
+      faltaEl.style.color = "var(--erro)";
+    }
+    desenharProvedores();
+    desenharFerramentas();
+    if (atual.provedor && provedores[atual.provedor]) {
+      provedorEl.value = atual.provedor;
+      desenharModelos(atual.modelo);
+    } else {
+      desenharModelos(null);
+    }
+    atualizarSalvar();
+  }
+
+  iniciar();
+})();
+</script>
+</body>
+</html>
