@@ -11,6 +11,8 @@ import {
   type Edge, type Node, type NodeChange, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ChevronLeft, ChevronRight, WifiOff } from "lucide-react";
 import { alternarFixado, limitarZoom, mesclarNosRf, pontaDaAresta } from "@/lib/canvas";
 import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo } from "@/lib/layout";
@@ -166,21 +168,6 @@ function ControleZoom({ temNos, onAjustar }: { temNos: boolean; onAjustar: () =>
 }
 
 
-const CHAVE_PAINEL = "hermes.painel";
-
-function lerPainel(): boolean {
-  try {
-    const s = localStorage.getItem(CHAVE_PAINEL);
-    return s == null ? true : JSON.parse(s) !== false;
-  } catch {
-    return true;
-  }
-}
-
-function gravarPainel(aberto: boolean) {
-  try { localStorage.setItem(CHAVE_PAINEL, JSON.stringify(aberto)); } catch {}
-}
-
 // Canvas
 
 export type CanvasProps = {
@@ -210,7 +197,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
-  const [painel, setPainel] = useState<boolean>(lerPainel);
+  // Painel direito: largura/recolhido vivem no layout persistido (hermes.layout.canvas); `painel` espelha.
+  const painelRef = usePanelRef();
+  const layout = useDefaultLayout({ id: "hermes.layout.canvas", storage: localStorage });
+  const [painel, setPainel] = useState(true);
   const [runSelId, setRunSelId] = useState<string | null>(null);
   const [abaPedida, setAbaPedida] = useState<{ runId: string; aba: string } | null>(null);
   const [arquivoPedido, setArquivoPedido] = useState<{ runId: string; arquivo: string } | null>(null);
@@ -380,9 +370,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   useEffect(() => { onRunSelRef.current?.(runMostrada?.id ?? null); }, [runMostrada?.id]);
 
   const alternarPainel = () => {
-    const aberto = !painel;
-    setPainel(aberto);
-    gravarPainel(aberto);
+    const h = painelRef.current;
+    if (h) (h.isCollapsed() ? h.expand() : h.collapse());
   };
 
   const ajustarVista = () => {
@@ -429,7 +418,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     setAbaPedida({ runId, aba: "diff" });
     setArquivoPedido({ runId, arquivo });
     // Painel recolhido: abre pra que a aba Diff fique visivel.
-    if (!painel) { setPainel(true); gravarPainel(true); }
+    painelRef.current?.expand();
   };
 
   /**
@@ -439,7 +428,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const abrirDetalhes = (runId: string) => {
     setRunSelId(runId);
     setAbaPedida({ runId, aba: "detalhes" });
-    if (!painel) { setPainel(true); gravarPainel(true); }
+    painelRef.current?.expand();
   };
 
   const focar = (noId: string) => {
@@ -516,8 +505,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   };
 
   return (
-    <div className="cv flex h-full w-full">
-    <div ref={container} className="relative min-w-0 flex-1 overflow-hidden">
+    <>
+    <ResizablePanelGroup
+      orientation="horizontal" className="cv"
+      defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}
+    >
+    <ResizablePanel id="grafo" minSize={300}>
+    <div ref={container} className="relative h-full w-full overflow-hidden">
       <CanvasCtx.Provider value={ctx}>
       <ProjetoCtx.Provider value={projeto}>
       <AgentesCtx.Provider value={agentesValor}>
@@ -588,12 +582,19 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
         </div>
       )}
     </div>
+    </ResizablePanel>
+    <ResizableHandle />
 
-    {/* Painel direito (tela unida): o PainelRun da run mostrada. Recolhivel. */}
+    {/* Painel direito (tela unida): o PainelRun da run mostrada. Redimensionavel e recolhivel (faixa de 34px). */}
+    <ResizablePanel
+      id="painel" panelRef={painelRef}
+      defaultSize={380} minSize={280} maxSize="60" collapsible collapsedSize={34}
+      onResize={() => setPainel(!painelRef.current?.isCollapsed())}
+    >
     <aside
-      className="flex shrink-0 flex-col overflow-hidden"
+      className="flex h-full w-full flex-col overflow-hidden"
       aria-label="Painel"
-      style={{ width: painel ? 380 : 34, background: "#1c1c1c", borderLeft: "1px solid #2c2c2c" }}
+      style={{ background: "#1c1c1c" }}
     >
       <header
         className="flex h-9 shrink-0 items-center gap-2 px-2"
@@ -640,6 +641,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
         </div>
       )}
     </aside>
+    </ResizablePanel>
+    </ResizablePanelGroup>
 
       {/* ✕ do agente: ocultar (some do canvas) ou encerrar (fala com o hub e remove o no'). */}
       <AlertDialog open={!!fecharAgente} onOpenChange={(o) => { if (!o) setFecharAgente(null); }}>
@@ -657,7 +660,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 });
 

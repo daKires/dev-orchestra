@@ -20,3 +20,18 @@ test("Canvas e' so' leitura: pan e zoom, sem selecao/arrasto/conexao", () => {
     assert.ok(!src.includes(fora), fora);
   }
 });
+
+test("layout redimensionavel e persistido (CA-7..CA-10)", () => {
+  const ids: Record<string, string> = {
+    "../App.tsx": "hermes.layout.app",
+    "Canvas.tsx": "hermes.layout.canvas",
+    "Sidebar.tsx": "hermes.layout.sidebar",
+    "canvas/PainelRun.tsx": "hermes.layout.diff",
+  };
+  for (const [arq, id] of Object.entries(ids)) {
+    const src = readFileSync(comp(arq), "utf8");
+    assert.ok(src.includes(`useDefaultLayout({ id: "${id}"`), `${arq}: ${id}`);
+    assert.ok(src.includes("<ResizableHandle"), `${arq}: divisoria`);
+  }
+  assert.ok(!readFileSync(comp("Canvas.tsx"), "utf8").includes("CHAVE_PAINEL"), "painel fixo antigo");
+});
