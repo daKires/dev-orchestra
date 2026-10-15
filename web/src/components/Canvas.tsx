@@ -19,10 +19,10 @@ import {
   TAMANHO_PADRAO,
   type Ferramenta, type NomeForma,
 } from "@/lib/canvas";
-import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo } from "@/lib/layout";
+import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo, semOutrasRuns } from "@/lib/layout";
 import { runsDoProjeto } from "@/lib/estado";
 import { arestasEmConversa, type EmConversa } from "@/lib/colab";
-import { runAtiva, runDaSelecao } from "@/lib/unido";
+import { runAtiva, runDaSelecao, runEmFoco } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 import { useAgentes } from "@/hooks/useAgentes";
 import { useAgora, useRuns } from "@/hooks/useRuns";
@@ -293,20 +293,29 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
 
   const runAtivaProjeto = useMemo(() => runAtiva(runsProjeto, agora), [runsProjeto, agora]);
 
+  // Uma run por vez no canvas: a escolhida, senao a ativa. O 1o foco fica fixo, entao run nova nao rouba a vista.
+  const foco = useMemo(() => runEmFoco(runsProjeto, runSelId, agora), [runsProjeto, runSelId, agora]);
+  useEffect(() => { if (foco && foco.id !== runSelId) setRunSelId(foco.id); }, [foco?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Modelo exibido = snapshot mesclado com o layout das runs + o layout dos agentes (mesclarComLayout):
   // os nos ocultos ficam de fora, o automatico salvo usa a versao do layout e o conteudo do usuario
   // segue o salvo (nada de duplicar). As arestas do layout entram so' se forem novas (as do snapshot ganham).
   const modelo = useMemo<Snapshot>(() => {
     // Arestas planejador -> run (G2/S4b): o planejador roda no worktree e dispara a run naquele cwd.
     const plans = agentes.filter((a) => a.origem === "planejador").map((a) => ({ agId: `ag:${a.id}`, cwd: a.cwd }));
-    const lr = layoutRuns(runsProjeto, estado, Date.now(), plans);
+    const daVez = foco ? [foco] : [];
+    const lr = layoutRuns(daVez, estado, Date.now(), plans);
     const la = layoutAgentes(agentes, estado);
-    const ap = arestasPlanejadorRun(plans, runsProjeto);
+    const ap = arestasPlanejadorRun(plans, daVez);
     const posAgentes = new Map(lr.agentes.map((a) => [a.id, a]));
-    const nos = mesclarComLayout(estado.nos, [...lr.nos, ...la]).map((n) => {
-      const a = posAgentes.get(n.id);
-      return a ? { ...n, x: a.x, y: a.y, pai: a.pai } : n;
-    });
+    // Planejador ligado a uma run fora do foco some; o que ainda nao disparou run continua solto.
+    const comRun = new Set(arestasPlanejadorRun(plans, runsProjeto).map((a) => a.de));
+    const nos = mesclarComLayout(semOutrasRuns(estado.nos, foco?.id ?? null), [...lr.nos, ...la])
+      .filter((n) => !comRun.has(n.id) || posAgentes.has(n.id))
+      .map((n) => {
+        const a = posAgentes.get(n.id);
+        return a ? { ...n, x: a.x, y: a.y, pai: a.pai } : n;
+      });
     const idsNos = new Set(nos.map((n) => n.id));
     const idsArestas = new Set(estado.arestas.map((a) => a.id));
     const arestasExtras: Aresta[] = [...lr.arestas, ...ap]
@@ -315,7 +324,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     // Arestas do snapshot + as do layout, descartando as que ficaram orfas (ponta oculta/inexistente).
     const arestas = [...estado.arestas, ...arestasExtras].filter((a) => idsNos.has(a.de) && idsNos.has(a.para));
     return { nos, arestas };
-  }, [estado, agentes, runsProjeto]);
+  }, [estado, agentes, runsProjeto, foco]);
 
   // cwd por agente (G2/S4b): e' o worktree do planejador, usado pra decidir se um pedido ainda esta' ativo.
   const cwdDeAgente = useMemo(() => {
@@ -918,6 +927,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     if (no && no.dados.expandida !== true) upsertNo(no, { expandida: true });
     setTimeout(() => void instancia.current?.fitView({ nodes: [{ id: `run:${runId}` }], maxZoom: 1, padding: 0.4 }), 60);
   };
+
+  // Run que entra em foco abre inteira; recolher vale so' ate' trocar de run.
+  useEffect(() => {
+    const no = foco ? buscarNo(`run:${foco.id}`) : undefined;
+    if (no && no.dados.expandida !== true) upsertNo(no, { expandida: true });
+  }, [foco?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * abrirDiff do card de arquivo (RunsCtx): o painel direito passa a mostrar a run daquele arquivo com

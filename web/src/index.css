@@ -448,6 +448,11 @@
   border: 1px solid rgba(88, 166, 255, 0.85);
   animation: cv-rodando 2s ease-in-out infinite;
 }
+/* Run nova na sidebar (nunca aberta): mesmo brilho azul, ate' o clique. */
+.sb-nova {
+  border: 1px solid rgba(88, 166, 255, 0.85);
+  animation: cv-rodando 2s ease-in-out infinite;
+}
 /* Slice pausada (G3 - S4b): sem brilho enquanto a slice esta' parada esperando instrucao/retomada. */
 .cv .cv-rodando.cv-pausada {
   animation: none;
@@ -468,6 +473,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .cv .cv-rodando,
+  .sb-nova,
   .cv .cv-gate-ok,
   .cv .cv-entra {
     animation: none;

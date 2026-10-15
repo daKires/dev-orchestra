@@ -16,6 +16,7 @@ type Props = {
   agora: number;
   agentes: AgenteSidebar[];
   runSel: Run | null;
+  novas: Set<string>;
   onRun: (runId: string) => void;
   onFocar: (noId: string) => void;
   onArquivo: (caminho: string) => void;
@@ -116,6 +117,7 @@ export function Sidebar(p: Props) {
                 className={cn(
                   "relative flex w-full flex-col gap-0.5 py-1.5 pr-2 pl-3 text-left transition-colors hover:bg-sidebar-accent/60",
                   sel && "bg-sidebar-accent text-sidebar-accent-foreground",
+                  p.novas.has(r.id) && "sb-nova",
                 )}
               >
                 {sel && <span className="absolute inset-y-0 left-0 w-0.5 bg-primary" />}

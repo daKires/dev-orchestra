@@ -12,7 +12,7 @@ import { Canvas, type CanvasHandle } from "@/components/Canvas";
 import { ModalArquivo } from "@/components/canvas/Explorador";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
 import { useAgentes } from "@/hooks/useAgentes";
-import { badgesArquivos, projetoInicial } from "@/lib/unido";
+import { badgesArquivos, projetoInicial, runsNovas } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 
 const caminhoChave = (arquivo: string): string => arquivo.replace(/\\/g, "/");
@@ -37,6 +37,16 @@ export default function App() {
   }, [projeto, projetoPadrao]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { agentes } = useAgentes(projeto ?? "");
+
+  // Runs ja' abertas: o resto brilha na sidebar como "nova". A 1a carga conta tudo como visto.
+  // ponytail: lista cresce sem poda; podar pras runs existentes se pesar no localStorage.
+  const [vistas, setVistas] = useLocal<string[] | null>("runsVistas", null);
+  useEffect(() => {
+    if (!runs.length) return;
+    if (!vistas) setVistas(runs.map((r) => r.id));
+    else if (runSelId && !vistas.includes(runSelId)) setVistas([...vistas, runSelId]);
+  }, [runs, runSelId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const novas = useMemo(() => runsNovas(runs, vistas, runSelId), [runs, vistas, runSelId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -107,7 +117,7 @@ export default function App() {
               defaultSize={280} minSize={200} maxSize="45" collapsible collapsedSize={0}
             >
               <Sidebar
-                projeto={projeto ?? ""} estado={estado} agora={agora} agentes={agentes} runSel={runSel}
+                projeto={projeto ?? ""} estado={estado} agora={agora} agentes={agentes} runSel={runSel} novas={novas}
                 onRun={abrirRun} onFocar={focar} onArquivo={abrirArquivo}
               />
             </ResizablePanel>
