@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { inspecionavel } from "./canvas.ts";
 import { layoutRuns } from "./layout.ts";
 import { aplicar, vazio, type Msg } from "./estado.ts";
-import type { No } from "../../../canvas.ts";
+import type { No } from "../../../src/canvas.ts";
 
 const no = (tipo: No["tipo"], dados: Record<string, unknown> = {}) => ({ tipo, dados });
 

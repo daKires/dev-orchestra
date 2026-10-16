@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aplicarOpsLocal, Historico, inversoDe } from "@/lib/canvas";
 import type { MsgCanvasOp } from "@/lib/estado";
-import type { Op, Snapshot } from "../../../canvas.ts";
+import type { Op, Snapshot } from "../../../src/canvas.ts";
 
 /**
  * Chave canonica do projeto: separadores uniformes ('/'), sem barra final e minusculo. Mesma pasta

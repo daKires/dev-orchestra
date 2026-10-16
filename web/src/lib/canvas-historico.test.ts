@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inversoDe, Historico, aplicarOpsLocal } from "./canvas.ts";
-import type { No, Op, Snapshot } from "../../../canvas.ts";
+import type { No, Op, Snapshot } from "../../../src/canvas.ts";
 
 const no = (id: string, x = 0, rev = 1): No => ({ id, tipo: "nota", x, y: 0, w: 10, h: 10, dados: {}, rev });
 

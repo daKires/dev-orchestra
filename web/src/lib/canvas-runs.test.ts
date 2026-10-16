@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { aplicar, vazio, type Msg, type Run } from "./estado.ts";
 import { layoutRuns, layoutAgentes } from "./layout.ts";
-import type { No, Snapshot } from "../../../canvas.ts";
+import type { No, Snapshot } from "../../../src/canvas.ts";
 
 const T = 1_000_000;
 function runDe(id: string, extra: Msg[] = [], ts = T): Run {

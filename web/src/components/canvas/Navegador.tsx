@@ -10,7 +10,7 @@ import { emDesktop, idProjetoFront, particaoDoProjeto, type ElementoWebview } fr
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 /** Raiz do projeto do canvas (o card calcula o idProjeto sha1 e a particao da webview a partir dela). */
 export const ProjetoCtx = createContext("");

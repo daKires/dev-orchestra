@@ -1,7 +1,7 @@
 // Estado da UI derivado SO dos eventos do bridge (SSE /events). Reducer puro: toda regra de exibicao
 // (status, progresso, KPIs, alerta de "sem resposta") mora aqui e e' testada em estado.test.ts.
-import type { Evento, Planejador, SlicePlano } from "../../../ui.ts";
-import type { Aresta, No, Op } from "../../../canvas.ts";
+import type { Evento, Planejador, SlicePlano } from "../../../src/ui.ts";
+import type { Aresta, No, Op } from "../../../src/canvas.ts";
 
 export type StatusSlice = "fila" | "rodando" | "ok" | "incompleta" | "pulada";
 export type Metrica = Extract<Evento, { t: "metrica" }>;

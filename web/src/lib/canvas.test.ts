@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { aplicarOpsLocal, paiDoNo, mdBlocos, limitarZoom, checarImagem, CORES_NOTA, CORES_FORMA } from "./canvas.ts";
-import type { No } from "../../../canvas.ts";
+import type { No } from "../../../src/canvas.ts";
 
 const no = (id: string, x: number, y: number, w: number, h: number, over: Partial<No> = {}): No =>
   ({ id, tipo: "nota", x, y, w, h, dados: {}, rev: 1, ...over });

@@ -14,7 +14,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { AgenteVisivel, Linha } from "@/hooks/useAgentes";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 // Contexto (S5b): agentes do projeto + transcricoes + acoes + fechar o no'
 
