@@ -233,6 +233,9 @@ if (process.argv.includes("--selftest")) {
   assert.strictEqual(ehFalhaAmbiente('ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command "vitest" not found'), true);
   assert.strictEqual(ehFalhaAmbiente("Error: Cannot find module '@rolldown/binding-win32-x64-msvc'"), true);
   assert.strictEqual(ehFalhaAmbiente("Error: Cannot find module './profile.service'"), false, "import relativo = spec sem implementacao");
+  assert.strictEqual(ehFalhaAmbiente("Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\x\\subtrai.js' imported from C:\\Users\\x\\subtrai.test.js"), false, "caminho absoluto Windows = import local");
+  assert.strictEqual(ehFalhaAmbiente("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/x/subtrai.js' imported from /tmp/x/subtrai.test.js"), false);
+  assert.strictEqual(ehFalhaAmbiente("Cannot find module 'file:///C:/x/subtrai.js'"), false);
   assert.strictEqual(ehFalhaAmbiente("connect ECONNREFUSED 127.0.0.1:5432"), true);
   assert.strictEqual(ehFalhaAmbiente("tests/run.luau:12: assertion failed"), false);
   assert.strictEqual(ehFalhaAmbiente("TypeError: Cannot read properties of undefined (reading 'parse')"), false);
@@ -530,6 +533,18 @@ if (process.argv.includes("--selftest")) {
     assert.strictEqual(m.get(a)!.length, 2, "run 1 intacta");
     assert.strictEqual(m.get(b)!.length, 1);
     for (const id of [a, b]) { try { unlinkSync(path.join(path.dirname(arquivoCancel(id)), id + ".jsonl")); } catch {} }
+  })();
+
+  // commit() faz stage: arquivo novo/editado pelo swarm entra no commit (antes dava "Command failed: git commit")
+  await (async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-cm-"));
+    await fsp.writeFile(path.join(base, "a.txt"), "a\n");
+    await baseline(base, "cm", nada);
+    await fsp.writeFile(path.join(base, "novo.js"), "x\n");
+    await commit(base, "cm", nada);
+    const { execFileSync } = await import("node:child_process");
+    assert.strictEqual(execFileSync("git", ["status", "--porcelain"], { cwd: base }).toString(), "", "tudo commitado");
+    assert.ok(execFileSync("git", ["show", "--name-only", "HEAD"], { cwd: base }).toString().includes("novo.js"));
   })();
 
   console.log("selftest ok");

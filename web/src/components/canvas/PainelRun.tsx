@@ -8,6 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DiffView } from "@/components/DiffView";
 import { StatusIcon } from "@/components/StatusIcon";
+import { useDefaultLayout } from "react-resizable-panels";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 
 const FUNDO = "#1c1c1c";
@@ -224,6 +226,8 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
   const [confirmar, setConfirmar] = useState<TipoAcao | null>(null);
   const [sliceSel, setSliceSel] = useState<number | null>(null);
   const [abaInterna, setAbaInterna] = useState("feed");
+  // Largura da lista de arquivos da aba Diff (persistida).
+  const layoutDiff = useDefaultLayout({ id: "hermes.layout.diff", storage: localStorage });
   const abaAtual = aba ?? abaInterna;
   const trocarAba = (v: string) => {
     if (aba === undefined) setAbaInterna(v);
@@ -310,8 +314,8 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
         </TabsContent>
 
         <TabsContent value="diff" className="min-h-0 flex-1">
-          <div className="flex h-full min-h-0">
-            <div className="min-h-0 w-48 shrink-0 overflow-auto" style={{ borderRight: `1px solid ${BORDA}` }}>
+          <ResizablePanelGroup orientation="horizontal" defaultLayout={layoutDiff.defaultLayout} onLayoutChanged={layoutDiff.onLayoutChanged}>
+            <ResizablePanel id="arquivos" defaultSize={192} minSize={120} maxSize="60" className="min-h-0 overflow-auto">
               {run.ordemDiffs.length === 0 && (
                 <p className="px-3 py-2" style={{ color: CINZA }}>Sem arquivos alterados.</p>
               )}
@@ -323,13 +327,14 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
                   {nomeDoArquivo(a)}
                 </button>
               ))}
-            </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
+            </ResizablePanel>
+            <ResizableHandle />
+            <ResizablePanel id="patch" className="min-h-0 overflow-hidden">
               {escolhido
                 ? <DiffView arquivo={escolhido} patch={patchEscolhido} />
                 : <p className="p-4" style={{ color: CINZA }}>Selecione um arquivo no diff.</p>}
-            </div>
-          </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </TabsContent>
 
         <TabsContent value="gate" className="min-h-0 flex-1 overflow-auto">

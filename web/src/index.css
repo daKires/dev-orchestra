@@ -480,18 +480,6 @@
   }
 }
 
-/* Ferramentas (S2 - F1.5): cursor por ferramenta. Criacao = crosshair; mao = grab/grabbing. */
-.cv.cv-pane-criacao .react-flow__pane {
-  cursor: crosshair;
-}
-.cv.cv-pane-mao .react-flow__pane,
-.cv.cv-pane-mao .react-flow__pane.draggable {
-  cursor: grab;
-}
-.cv.cv-pane-mao .react-flow__pane.dragging {
-  cursor: grabbing;
-}
-
 /* Rodape de instrucao da slice viva (G3 - S4b): campo de texto com placeholder apagado e anel azul no
    foco (mesmo padrao dos campos do Inspetor; borda/fonte vem inline, com os tokens do card). */
 .cv .cv-campo::placeholder {

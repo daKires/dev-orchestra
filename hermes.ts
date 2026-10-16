@@ -71,9 +71,9 @@ export async function resolverComandos(
 }
 
 // Saida de comando que falhou por AMBIENTE (executavel, node/binding, pacote, servico), nao por codigo. Pura.
-// Import relativo ausente ('./x') NAO e' ambiente: e' o esperado de um teste da spec antes da implementacao.
+// Import local ausente ('./x' ou caminho absoluto, que o ESM do Node imprime no Windows) NAO e' ambiente: e' o esperado de um teste da spec antes da implementacao.
 export function ehFalhaAmbiente(saida: string): boolean {
-  return /reconhecido|not recognized|command not found|ENOENT|Cannot find native binding|Unsupported engine|requires Node|Command "[^"]+" not found|Cannot find (module|package) ['"][^.'"]|ECONNREFUSED|Can't reach database server/i.test(saida);
+  return /reconhecido|not recognized|command not found|ENOENT|Cannot find native binding|Unsupported engine|requires Node|Command "[^"]+" not found|Cannot find (module|package) ['"](?![.'"\/\\]|[a-z]:[\\/]|file:)|ECONNREFUSED|Can't reach database server/i.test(saida);
 }
 
 // Comando que a allowlist/gate NAO aceita (motivo) ou null. `exec` do pnpm/npm imprime 'Command "x" not
@@ -625,6 +625,7 @@ export async function gate(
 
 export async function commit(cwd: string, feature: string, emit: Emitir): Promise<void> {
   await ensureIdentity(cwd);
+  await git(cwd, ["add", "-A"]);
   await git(cwd, ["commit", "-m", "feat: " + feature]);
   emit({ t: "fase", nome: "commit", info: "commit local feito" });
 }

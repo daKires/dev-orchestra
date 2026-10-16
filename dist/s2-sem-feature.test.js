@@ -43,8 +43,7 @@ test("CLI canvas nao tem mais o subcomando run", () => {
 test("dashboard nao tem mais botao + Feature, atalho Shift+N nem o dialog", () => {
     const app = ler("web/src/App.tsx");
     const canvas = ler("web/src/components/Canvas.tsx");
-    const barra = ler("web/src/components/canvas/Barra.tsx");
-    for (const [arq, src] of [["App.tsx", app], ["Canvas.tsx", canvas], ["Barra.tsx", barra]]) {
+    for (const [arq, src] of [["App.tsx", app], ["Canvas.tsx", canvas]]) {
         assert.doesNotMatch(src, /NovaFeature|onNovaFeature/, arq);
         assert.doesNotMatch(src, /\+ Feature|>Feature</, arq);
     }
