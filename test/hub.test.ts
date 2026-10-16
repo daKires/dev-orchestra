@@ -1,5 +1,5 @@
 // Spec da S1: flag --ui (CA-1/CA-2) + leitura/limpeza dos registros de planejadores (CA-3, CA-9..12).
-// SEM import estatico de ui.js: ui.ts le HERMES_UI_PORT/HERMES_PLANEJADORES_DIR no carregamento do
+// SEM import estatico de ui.js: ui.ts le DEV_ORCHESTRA_UI_PORT/DEV_ORCHESTRA_PLANEJADORES_DIR no carregamento do
 // modulo — a env e' ajustada ANTES do import dinamico pra nunca tocar na porta 4123 real nem nos
 // registros reais de %TEMP%\hermes\planejadores.
 import { test } from "node:test";
@@ -26,9 +26,9 @@ function portaLivre(): Promise<number> {
 }
 
 const PORTA = await portaLivre();
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan-"));
-process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan-"));
+process.env.DEV_ORCHESTRA_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("../dist/ui.js");
 
 const REG = (over: Partial<Planejador> = {}): Planejador => ({
@@ -81,7 +81,7 @@ test("ceder a porta chama onCeder (modo --ui) e fecha o servidor (CA-2)", async 
   await ui.iniciarUI({ onCeder: () => { cedeu++; } });
   const v: any = await fetch(`http://127.0.0.1:${PORTA}/versao`).then((r) => r.json());
   assert.equal(typeof v.versao, "number");
-  const resp = await fetch(`http://127.0.0.1:${PORTA}/ceder`, { method: "POST", headers: { "X-Hermes": "1" } });
+  const resp = await fetch(`http://127.0.0.1:${PORTA}/ceder`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
   assert.equal(resp.status, 204);
   await new Promise((r) => setTimeout(r, 400)); // ceder() e' agendado ~50ms depois do 204
   assert.equal(cedeu, 1, "onCeder chamado uma vez");
@@ -92,7 +92,7 @@ test("--ui: sobe so' o dashboard (sem MCP stdio) e o processo MORRE ao ceder a p
   const porta2 = await portaLivre();
   const plan2 = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan2-"));
   const filho = spawn(process.execPath, [path.join(AQUI, "index.js"), "--ui"], {
-    env: { ...process.env, HERMES_UI_PORT: String(porta2), HERMES_PLANEJADORES_DIR: plan2 },
+    env: { ...process.env, DEV_ORCHESTRA_UI_PORT: String(porta2), DEV_ORCHESTRA_PLANEJADORES_DIR: plan2 },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => { try { filho.kill(); } catch {} });
@@ -106,7 +106,7 @@ test("--ui: sobe so' o dashboard (sem MCP stdio) e o processo MORRE ao ceder a p
   assert.equal(ok, true, "dashboard --ui respondeu /versao");
   assert.equal(filho.exitCode, null, "processo --ui continua vivo servindo a UI");
   assert.ok(!err.includes("listening (stdio)"), "sem MCP stdio no modo --ui");
-  const resp = await fetch(`http://127.0.0.1:${porta2}/ceder`, { method: "POST", headers: { "X-Hermes": "1" } });
+  const resp = await fetch(`http://127.0.0.1:${porta2}/ceder`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
   assert.equal(resp.status, 204);
   const codigo = await new Promise((ok2) => {
     filho.once("exit", (c) => ok2(c));

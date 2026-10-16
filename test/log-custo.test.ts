@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const H: any = await import("../dist/hermes.js");
+const H: any = await import("../dist/swarm.js");
 const D: any = await import("../dist/deepseek.js");
 const C: any = await import("../dist/claude-pty.js");
 const pico = new Date(Date.UTC(2024, 0, 3, 2, 0, 0));   // quarta 02:00 UTC

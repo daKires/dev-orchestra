@@ -17,12 +17,12 @@ function portaLivre(): Promise<number> {
 }
 const PORTA = await portaLivre();
 const TMP = mkdtempSync(path.join(os.tmpdir(), "log-base-ui-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = path.join(TMP, "runs");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-const H: any = await import("../dist/hermes.js");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = path.join(TMP, "runs");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+const H: any = await import("../dist/swarm.js");
 const A: any = await import("../dist/acoes-run.js");
 const ui: any = await import("../dist/ui.js");
 
@@ -62,15 +62,15 @@ test("POST /runs/acao usa o painel.base da run (CA-15)", async (t) => {
   await H.baseline(cwd, "g", () => {});
   writeFileSync(path.join(cwd, "g.txt"), "g\n"); git(cwd, "add", "."); git(cwd, "commit", "-qm", "feat");
   git(cwd, "checkout", "-q", "main"); // o usuario saiu da branch: a base tem que vir do painel, nao do HEAD
-  mkdirSync(process.env.HERMES_RUNS_DIR!, { recursive: true });
+  mkdirSync(process.env.DEV_ORCHESTRA_RUNS_DIR!, { recursive: true });
   const evs = [
     { t: "run", feature: "g", cwd, total: 1, ts: 1 },
     { t: "painel", status: "COMPLETE", branch: "orchestra/g", base: "develop", linhas: [], ts: 2 },
   ];
-  writeFileSync(path.join(process.env.HERMES_RUNS_DIR!, "run-base-1.jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  writeFileSync(path.join(process.env.DEV_ORCHESTRA_RUNS_DIR!, "run-base-1.jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n");
   await new Promise((ok) => setTimeout(ok, 1200));
   const res = await fetch(`http://127.0.0.1:${PORTA}/runs/acao?run=run-base-1`, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify({ acao: "merge" }),
+    method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify({ acao: "merge" }),
   });
   assert.equal(res.status, 200, await res.clone().text());
   assert.equal(((await res.json()) as any).base, "develop");

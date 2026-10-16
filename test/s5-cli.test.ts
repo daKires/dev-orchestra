@@ -87,7 +87,7 @@ test("--instalar atualiza a copia e reaponta as ferramentas ja' configuradas sem
   assert.equal(r.status, 0, saida);
   const mcp = JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8")).mcpServers["dev-orchestra"];
   assert.deepEqual(mcp.args, [path.join(home, ".dev-orchestra", "app", "dist", "index.js")]);
-  assert.deepEqual(mcp.env, { HERMES_MAX_TURNS: "9", OPENCODE_GO_API_KEY: chave, HERMES_MODEL: "glm-5.2" }, "chave, modelo e env extra mantidos");
+  assert.deepEqual(mcp.env, { DEV_ORCHESTRA_MAX_TURNS: "9", OPENCODE_GO_API_KEY: chave, DEV_ORCHESTRA_MODEL: "glm-5.2" }, "chave, modelo e env extra mantidos (HERMES_* migrado)");
   assert.ok(existsSync(path.join(home, ".claude", "skills", "orchestra", "SKILL.md")), "skill reinstalada");
   assert.equal(saida.includes(chave), false, "a chave nunca vai pro stdout/stderr");
 });

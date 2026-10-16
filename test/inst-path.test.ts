@@ -10,11 +10,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-process.env.HERMES_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-runs-"));
-process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-plan-"));
-process.env.HERMES_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-canvas-"));
-process.env.HERMES_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-ag-"));
-const H: any = await import("../dist/hermes.js");
+process.env.DEV_ORCHESTRA_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-runs-"));
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-plan-"));
+process.env.DEV_ORCHESTRA_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-canvas-"));
+process.env.DEV_ORCHESTRA_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "inst-path-ag-"));
+const H: any = await import("../dist/swarm.js");
 const ui: any = await import("../dist/ui.js");
 
 test("rodarShell resolve `npm --version` com o PATH sem node/npm (CA-8)", { timeout: 60000 }, async () => {

@@ -5,7 +5,7 @@ import { promises as fs, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { escritaProibida, execFerramenta, type CtxAgente } from "../dist/hermes.js";
+import { escritaProibida, execFerramenta, type CtxAgente } from "../dist/swarm.js";
 
 const ex = new Set<string>();
 const pkg = (o: object) => JSON.stringify(o, null, 2);

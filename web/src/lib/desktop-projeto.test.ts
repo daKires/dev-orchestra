@@ -20,7 +20,7 @@ test("idProjetoFront: grafias diferentes da mesma pasta dao o mesmo id", async (
   assert.equal(await idProjetoFront("D:\\Proj\\Roblox"), await idProjetoFront("d:/proj/roblox/"));
 });
 
-test("particaoDoProjeto: persist:hermes-<idProjeto>", async () => {
+test("particaoDoProjeto: persist:dev-orchestra-<idProjeto>", async () => {
   const id = await idProjetoFront("D:\\Proj\\Roblox");
-  assert.equal(particaoDoProjeto(id), "persist:hermes-" + idProjetoHub("D:\\Proj\\Roblox"));
+  assert.equal(particaoDoProjeto(id), "persist:dev-orchestra-" + idProjetoHub("D:\\Proj\\Roblox"));
 });

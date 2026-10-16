@@ -19,7 +19,7 @@ function hubFalso(resposta: (r: Req) => { status: number; texto: string }) {
     req.on("data", (d) => { c += d; });
     req.on("end", () => {
       let j: any = null; try { j = c ? JSON.parse(c) : null; } catch {}
-      const r: Req = { metodo: req.method || "", url: req.url || "", eu: String(req.headers["x-eu"] ?? ""), hermes: String(req.headers["x-hermes"] ?? ""), corpo: j };
+      const r: Req = { metodo: req.method || "", url: req.url || "", eu: String(req.headers["x-eu"] ?? ""), hermes: String(req.headers["x-dev-orchestra"] ?? ""), corpo: j };
       reqs.push(r);
       const out = resposta(r);
       res.writeHead(out.status, { "Content-Type": "text/plain; charset=utf-8" });
@@ -31,7 +31,7 @@ function hubFalso(resposta: (r: Req) => { status: number; texto: string }) {
 
 function rodar(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
   return new Promise((ok) => {
-    const p = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, HERMES_EU: "", ...env } });
+    const p = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, DEV_ORCHESTRA_EU: "", ...env } });
     let out = ""; let err = "";
     p.stdout.on("data", (d) => { out += d; });
     p.stderr.on("data", (d) => { err += d; });
@@ -48,7 +48,7 @@ test("cada comando vira o POST certo, com X-Eu e X-Hermes, e imprime a resposta 
   const h = hubFalso((r) => ({ status: 200, texto: "ok " + r.url }));
   const porta = await subir(h);
   t.after(() => h.srv.close());
-  const env = { HERMES_UI_PORT: String(porta) };
+  const env = { DEV_ORCHESTRA_UI_PORT: String(porta) };
   const eu = ["--eu", "ag-1:tok123"];
   const casos: Array<[string[], string, unknown]> = [
     [["list"], "/cli/list", {}],
@@ -73,8 +73,8 @@ test("cada comando vira o POST certo, com X-Eu e X-Hermes, e imprime a resposta 
     assert.deepEqual(req.corpo, corpo, args.join(" "));
     assert.equal(r.out.trim(), "ok " + url);
   }
-  // identidade tambem pela env HERMES_EU (e --eu depois do comando)
-  const r2 = await rodar(["list"], { ...env, HERMES_EU: "ag-9:zzz" });
+  // identidade tambem pela env DEV_ORCHESTRA_EU (e --eu depois do comando)
+  const r2 = await rodar(["list"], { ...env, DEV_ORCHESTRA_EU: "ag-9:zzz" });
   assert.equal(r2.code, 0);
   assert.equal(h.reqs.at(-1)!.eu, "ag-9:zzz");
   const r3 = await rodar(["ask", "x", "y", "--eu", "ag-7:k"], env);
@@ -87,13 +87,13 @@ test("erro do hub: exit 1 e mensagem no stderr (CA-6c)", async (t) => {
   const h = hubFalso(() => ({ status: 400, texto: "agente revisor não está conectado a você" }));
   const porta = await subir(h);
   t.after(() => h.srv.close());
-  const r = await rodar(["--eu", "ag-1:t", "ask", "revisor", "oi"], { HERMES_UI_PORT: String(porta) });
+  const r = await rodar(["--eu", "ag-1:t", "ask", "revisor", "oi"], { DEV_ORCHESTRA_UI_PORT: String(porta) });
   assert.equal(r.code, 1);
   assert.match(r.err, /não está conectado a você/);
   const h2 = hubFalso(() => ({ status: 403, texto: "identidade inválida" }));
   const p2 = await subir(h2);
   t.after(() => h2.srv.close());
-  const r2 = await rodar(["--eu", "ag-1:t", "list"], { HERMES_UI_PORT: String(p2) });
+  const r2 = await rodar(["--eu", "ag-1:t", "list"], { DEV_ORCHESTRA_UI_PORT: String(p2) });
   assert.equal(r2.code, 1);
   assert.match(r2.err, /identidade inválida/);
 });
@@ -102,7 +102,7 @@ test("uso errado e sem identidade: exit 1 com uso em PT-BR, sem chamar o hub", a
   const h = hubFalso(() => ({ status: 200, texto: "x" }));
   const porta = await subir(h);
   t.after(() => h.srv.close());
-  const env = { HERMES_UI_PORT: String(porta) };
+  const env = { DEV_ORCHESTRA_UI_PORT: String(porta) };
   for (const args of [[], ["--eu", "a:b"], ["--eu", "a:b", "voar"], ["--eu", "a:b", "ask", "so-alvo"], ["--eu", "a:b", "flow", "pular"], ["--eu", "a:b", "reply"]]) {
     const r = await rodar(args, env);
     assert.equal(r.code, 1, JSON.stringify(args));
@@ -119,7 +119,7 @@ test("hub fora do ar: exit 2 com mensagem PT-BR", async () => {
   await new Promise<void>((ok) => s.listen(0, "127.0.0.1", () => ok()));
   const porta = (s.address() as net.AddressInfo).port;
   await new Promise((ok) => s.close(ok));
-  const r = await rodar(["--eu", "a:b", "list"], { HERMES_UI_PORT: String(porta) });
+  const r = await rodar(["--eu", "a:b", "list"], { DEV_ORCHESTRA_UI_PORT: String(porta) });
   assert.equal(r.code, 2);
-  assert.match(r.err, new RegExp(`hub Hermes inacessível em 127\\.0\\.0\\.1:${porta}`));
+  assert.match(r.err, new RegExp(`hub Dev Orchestra inacessível em 127\\.0\\.0\\.1:${porta}`));
 });

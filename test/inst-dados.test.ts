@@ -17,7 +17,7 @@ process.env.HOME = home;
 process.env.TEMP = temp;
 process.env.TMP = temp;
 process.env.TMPDIR = temp;
-for (const k of ["HERMES_RUNS_DIR", "HERMES_PLANEJADORES_DIR", "HERMES_CANVAS_DIR", "HERMES_AGENTES_DIR"]) delete process.env[k];
+for (const k of ["DEV_ORCHESTRA_RUNS_DIR", "DEV_ORCHESTRA_PLANEJADORES_DIR", "DEV_ORCHESTRA_CANVAS_DIR", "DEV_ORCHESTRA_AGENTES_DIR"]) delete process.env[k];
 const ui: any = await import("../dist/ui.js");
 const DADOS = path.join(home, ".dev-orchestra", "dados");
 

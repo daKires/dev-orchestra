@@ -1,6 +1,6 @@
 // Spec da S3 (CA-5/CA-6): o MCP se chama dev-orchestra e, na 1a run do processo, abre o app Hermes (se
 // instalado) ou o navegador no dashboard. So' uma vez por processo; a URL vem sempre na resposta da tool.
-// HERMES_ABRIR_LOG: em vez de abrir, grava o comando (uma linha JSON) nesse arquivo — usado pelos testes.
+// DEV_ORCHESTRA_ABRIR_LOG: em vez de abrir, grava o comando (uma linha JSON) nesse arquivo — usado pelos testes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -52,12 +52,12 @@ test("MCP dev-orchestra abre o dashboard uma vez e sempre devolve a URL (CA-5/CA
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   Object.assign(env, {
-    HERMES_UI_PORT: String(porta),
-    HERMES_RUNS_DIR: path.join(tmp, "runs"),
-    HERMES_AGENTES_DIR: path.join(tmp, "agentes"),
-    HERMES_CANVAS_DIR: path.join(tmp, "canvas"),
-    HERMES_PLANEJADORES_DIR: path.join(tmp, "plan"),
-    HERMES_ABRIR_LOG: abrirLog,
+    DEV_ORCHESTRA_UI_PORT: String(porta),
+    DEV_ORCHESTRA_RUNS_DIR: path.join(tmp, "runs"),
+    DEV_ORCHESTRA_AGENTES_DIR: path.join(tmp, "agentes"),
+    DEV_ORCHESTRA_CANVAS_DIR: path.join(tmp, "canvas"),
+    DEV_ORCHESTRA_PLANEJADORES_DIR: path.join(tmp, "plan"),
+    DEV_ORCHESTRA_ABRIR_LOG: abrirLog,
     LOCALAPPDATA: path.join(tmp, "sem-app"), // sem Hermes.exe -> navegador
     OPENCODE_GO_API_KEY: "", DEEPSEEK_API_KEY: "", OPENROUTER_API_KEY: "",
   });

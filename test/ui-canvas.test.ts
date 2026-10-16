@@ -20,10 +20,10 @@ function portaLivre(): Promise<number> {
 
 const PORTA = await portaLivre();
 const DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-canvas-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-planc-"));
-process.env.HERMES_CANVAS_DIR = DIR;
-process.env.HERMES_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-planc-"));
+process.env.DEV_ORCHESTRA_CANVAS_DIR = DIR;
+process.env.DEV_ORCHESTRA_AGENTES_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-iso-")); // nunca os agentes reais da maquina
 const ui = await import("../dist/ui.js");
 const canvas = await import("../dist/canvas.js");
 
@@ -32,7 +32,7 @@ const RAIZ = "D:\\proj\\Site";
 const post = (rota: string, body: unknown, hermes = true) =>
   fetch(BASE + rota, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) },
+    headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 const snapshot = async (raiz: string) => {

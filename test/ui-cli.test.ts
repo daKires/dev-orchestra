@@ -62,15 +62,15 @@ function openCodeFalso() {
 
 const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
 const ui = await import("../dist/ui.js");
 
 const BASE = `http://127.0.0.1:${PORTA}`;
 const post = (rota: string, body: unknown, hermes = true) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(body),
 });
 const ate = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   for (let i = 0; i < ms / 50; i++) { if (await cond()) return true; await new Promise((r) => setTimeout(r, 50)); }
@@ -113,7 +113,7 @@ test("F3: identidade, list/ask/reply/tell, fila, limites, conversas, flow/file/n
   assert.match(pathVar.split(path.delimiter)[0], /[\\/]bin$/, "bin/ do hermes-bridge no inicio do PATH");
 
   // identidade: token no registro, fora do GET /agentes, dentro do system
-  const tokenDe = async (id: string) => JSON.parse(await fs.readFile(path.join(process.env.HERMES_AGENTES_DIR!, id + ".json"), "utf8")).token as string;
+  const tokenDe = async (id: string) => JSON.parse(await fs.readFile(path.join(process.env.DEV_ORCHESTRA_AGENTES_DIR!, id + ".json"), "utf8")).token as string;
   const tLid = await tokenDe(lid);
   const tDes = await tokenDe(des);
   assert.ok(tLid && tLid.length >= 16);
@@ -124,7 +124,7 @@ test("F3: identidade, list/ask/reply/tell, fila, limites, conversas, flow/file/n
   assert.ok(sys.includes(`canvas --eu ${lid}:${tLid}`), "instrucao traz a identidade");
 
   const cli = (cmd: string, corpo: unknown, eu: string) => fetch(`${BASE}/cli/${cmd}`, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1", "X-Eu": eu }, body: JSON.stringify(corpo),
+    method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1", "X-Eu": eu }, body: JSON.stringify(corpo),
   });
   const r403 = await cli("list", {}, `${lid}:errado`);
   assert.equal(r403.status, 403);

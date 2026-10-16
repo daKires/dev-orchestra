@@ -45,8 +45,8 @@ test("nomeShot: slug do nome + data/hora local (CA-7b)", () => {
   assert.equal(nomeShot("Pesquisa Ótima", new Date(2026, 9, 6, 14, 5, 9)), "pesquisa-otima-20261006-140509.png");
 });
 
-test("SCRIPT_LEITURA: script de pagina que marca os interativos com data-hermes-n (CA-7b)", () => {
+test("SCRIPT_LEITURA: script de pagina que marca os interativos com data-orchestra-n (CA-7b)", () => {
   assert.equal(typeof SCRIPT_LEITURA, "string");
-  assert.ok(SCRIPT_LEITURA.includes("data-hermes-n"));
+  assert.ok(SCRIPT_LEITURA.includes("data-orchestra-n"));
   assert.ok(SCRIPT_LEITURA.length > 100);
 });

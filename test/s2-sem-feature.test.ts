@@ -33,7 +33,7 @@ test("CLI canvas nao tem mais o subcomando run", () => {
   let saida = "", codigo = 0;
   try {
     execFileSync(process.execPath, [path.join(RAIZ, "bin/canvas.mjs"), "run", "x", "--claude", "opus", "--eu", "a:b"], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HERMES_UI_PORT: "1" },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DEV_ORCHESTRA_UI_PORT: "1" },
     });
   } catch (e: any) { saida = String(e.stdout ?? "") + String(e.stderr ?? ""); codigo = e.status; }
   assert.equal(codigo, 1, "run desconhecido cai no uso (exit 1), nao tenta falar com o hub");
