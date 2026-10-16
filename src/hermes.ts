@@ -93,8 +93,7 @@ export function recusaComando(cmd: string, scripts: Record<string, string> = {})
 
 // Roda um comando no shell do bridge (o mesmo dos agentes e do gate). Nunca lanca, exceto cancelamento.
 export async function rodarShell(cmd: string, cwd: string, signal?: AbortSignal, timeout = CMD_TIMEOUT): Promise<{ code: number | string; saida: string; timeout: boolean }> {
-  // PATH com a pasta do node na frente: a ferramenta que abriu o hub pode ter um PATH velho, sem o
-  // node/npm certos (CA-8). No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave).
+  // Pasta do node na frente do PATH: a ferramenta que abriu o MCP pode ter um PATH velho sem node/npm.
   const env: NodeJS.ProcessEnv = { ...process.env };
   const atual = env.PATH ?? env.Path ?? "";
   delete env.Path;

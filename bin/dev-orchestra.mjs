@@ -109,7 +109,6 @@ function instalarApp() {
   } catch (e) {
     throw new Error(`Falha ao copiar o app pra ${pastaApp}: ${msgErro(e)}`);
   }
-  // Usa o npm-cli.js ao lado do node em execucao (nao depende do `npm` no PATH); sem ele, cai no PATH.
   const args = ["install", "--omit=dev", "--prefer-offline", "--no-audit", "--no-fund"];
   const n = comandoNpm(process.execPath, existsSync);
   const cmdFallback = "npm " + args.join(" ");

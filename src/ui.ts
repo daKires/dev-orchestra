@@ -46,8 +46,7 @@ const SWARM_ID = randomUUID().slice(0, 8);                        // um id por p
 const PODA_MS = 7 * 24 * 3600 * 1000;                             // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
 
-// Migra (UMA vez) os dados da pasta padrao antiga pra nova: copia recursiva so' se o antigo existe e o
-// novo ainda nao; nunca toca no destino existente. Qualquer erro devolve false (best-effort).
+// Copia o antigo pro novo uma vez so': nunca toca num destino que ja existe.
 export function migrarDadosAntigos(antigo: string, novo: string): boolean {
   try {
     if (!fs.existsSync(antigo) || fs.existsSync(novo)) return false;
@@ -56,8 +55,7 @@ export function migrarDadosAntigos(antigo: string, novo: string): boolean {
   } catch { return false; }
 }
 
-// Antes do primeiro mkdirSync: sem nenhuma env de pasta, puxa <tmp>/hermes (local antigo) pra
-// ~/.dev-orchestra/dados. Com env definida o usuario escolheu o caminho: nao migra nada.
+// Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (<tmp>/hermes).
 const PASTAS_PADRAO = !process.env.HERMES_RUNS_DIR && !process.env.HERMES_PLANEJADORES_DIR
   && !process.env.HERMES_CANVAS_DIR && !process.env.HERMES_AGENTES_DIR;
 if (PASTAS_PADRAO) {
@@ -589,9 +587,7 @@ function caminhoOpencode(): string {
   return "opencode";
 }
 
-// PATH do processo do serve com a pasta bin/ do dev-orchestra na frente (o CLI `canvas` fica la) e, logo
-// depois, a pasta do node que roda este hub: a ferramenta que abriu o hub pode ter um PATH velho, sem o
-// node/npm certos (CA-7/CA-8). No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave).
+// PATH do serve: bin/ (CLI `canvas`) e a pasta do node na frente. No Windows a chave pode vir como 'Path'.
 function envServe(): NodeJS.ProcessEnv {
   const bin = path.join(RAIZ_BRIDGE, "bin");
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -925,9 +921,6 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string)
   const settingsPath = path.join(AGENTES_DIR, a.id + ".settings.json");
   try {
     fs.mkdirSync(AGENTES_DIR, { recursive: true });
-    // Hooks com `node` (o MESMO que roda o hub) + canvas.mjs ABSOLUTOS: o hook nao herda cwd/PATH de quem
-    // abriu (CA-4e, CA-7). Dentro do Electron, process.execPath e' o exe do app: ELECTRON_RUN_AS_NODE faz
-    // ele rodar como node puro (senao o hook abriria outra janela do Hermes).
     fs.writeFileSync(settingsPath, JSON.stringify(settingsHooks(a.id, a.token ?? "", process.execPath, path.join(RAIZ_BRIDGE, "bin", "canvas.mjs"))));
   } catch {}
   if (!ptyAtual) throw new Error("abra o app Hermes para usar agentes Claude");

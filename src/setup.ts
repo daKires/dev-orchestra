@@ -56,8 +56,7 @@ function garantirPasta(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
-// Acha o npm-cli.js ao lado do node em execucao, pra nao depender do `npm` no PATH.
-// Sem o cli ao lado do node -> null (o chamador cai no `npm` do PATH).
+// npm-cli.js ao lado do node em execucao (nao depende do `npm` no PATH); null -> o chamador usa o PATH.
 export function comandoNpm(execPath: string, existe: (p: string) => boolean): { comando: string; args: string[] } | null {
   const cli = path.join(path.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js");
   return existe(cli) ? { comando: execPath, args: [cli] } : null;
