@@ -30,6 +30,18 @@ export function runAtiva(runs: Run[], agora: number): Run | null {
   return maisNova(runs.filter((r) => rodando(r, agora))) ?? maisNova(runs);
 }
 
+/** Run em foco no canvas: a escolhida (se ainda existe), senao a ativa (runAtiva). */
+export function runEmFoco(runs: Run[], selId: string | null, agora: number): Run | null {
+  return runs.find((r) => r.id === selId) ?? runAtiva(runs, agora);
+}
+
+/** Runs que brilham na sidebar: nunca vistas e fora do foco. `vistas` null = ainda sem base (nenhuma). */
+export function runsNovas(runs: Run[], vistas: string[] | null, focoId: string | null): Set<string> {
+  if (!vistas) return new Set();
+  const v = new Set(vistas);
+  return new Set(runs.filter((r) => !v.has(r.id) && r.id !== focoId).map((r) => r.id));
+}
+
 /** Projeto da 1a abertura: o salvo (se nao vazio) ou a raiz do cwd da run ativa; sem run = null. */
 export function projetoInicial(salvo: string | null, runs: Run[], agora: number): string | null {
   if (typeof salvo === "string" && salvo !== "") return salvo;

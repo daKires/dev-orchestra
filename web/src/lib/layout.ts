@@ -82,6 +82,11 @@ export function mesclarComLayout(salvos: No[], gerados: No[]): No[] {
   return out;
 }
 
+/** Canvas com uma run por vez: tira os nos automaticos (dados.auto) de outras runs; o resto fica. */
+export function semOutrasRuns(nos: No[], runId: string | null): No[] {
+  return nos.filter((n) => !(n.dados?.auto === true && typeof n.dados.runId === "string" && n.dados.runId !== runId));
+}
+
 /**
  * Largura/altura de uma fase (grupo): a maior entre o minimo e o bounding box dos filhos + margem.
  * As posicoes salvas dos filhos vencem, entao a fase cresce pra conter o filho onde ele estiver.
