@@ -21,7 +21,7 @@ test("Merge (--no-ff) da run B leva o branch pra master e apaga o branch (CA-9)"
   await abrirRun(page, "feature b");
   await confirmarAcao(page, "Merge (--no-ff)");
   await expect.poll(() => git("log", "--oneline", "master")).toContain("Merge orchestra/b");
-  expect(git("branch", "--list", "orchestra/b").trim()).toBe("");
+  await expect.poll(() => git("branch", "--list", "orchestra/b").trim()).toBe("");
   expect(fs.existsSync(path.join(REPO, "b.txt"))).toBe(true);
   expect(erros).toEqual([]);
 });

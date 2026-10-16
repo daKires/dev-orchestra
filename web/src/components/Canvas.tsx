@@ -401,11 +401,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     if (no) upsertNo(no, { expandida: no.dados.expandida !== true });
   };
 
-  /**
-   * Clique na slice (G1/S3, canvas-fase2): alterna `dados.aberta` do no' worker:<id>:<idx> (card ao vivo
-   * x compacto) e grava `vivaNoClique` com o idx da slice VIVA da run agora (a 'rodando'; 0 se nenhuma).
-   * O layout so' respeita esse `aberta` enquanto a viva continuar a mesma — trocou, volta a regra da viva.
-   */
+  /** Clique na slice: alterna `dados.aberta` e grava a slice viva do momento (`vivaNoClique`). */
   const alternarSlice = (runId: string, idx: number) => {
     const no = buscarNo(`worker:${runId}:${idx}`);
     if (!no) return;

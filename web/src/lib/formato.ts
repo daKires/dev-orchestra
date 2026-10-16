@@ -20,12 +20,7 @@ export function fmtHora(ts: number): string {
   return new Date(ts).toLocaleTimeString("pt-BR", { hour12: false });
 }
 
-/**
- * Titulo da slice sem o prefixo `S<idx>` duplicado: o planejador as vezes escreve o proprio numero
- * da slice no comeco da tarefa ('S1 npm...') e o card ja' mostra 'S<idx> · '. Remove so' o prefixo
- * da PROPRIA slice (case-insensitive) seguido de espaco e/ou ·, : ou -; `S<outro numero>` e palavras
- * que apenas comecam com S (ex.: 'Setup') ficam intactos. Se sobrar vazio, devolve a tarefa original.
- */
+// Tarefa sem o prefixo S<idx> da propria slice (o card ja' mostra 'S<idx> · ').
 export function tituloDaSlice(idx: number, tarefa: string): string {
   const m = tarefa.match(new RegExp(`^s${idx}(?:\\s*[·:-]\\s*|\\s+)`, "i"));
   if (!m) return tarefa;

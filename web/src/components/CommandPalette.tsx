@@ -3,7 +3,7 @@ import {
   Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
 import { porProjeto, statusVisivel, type Estado, type Run } from "@/lib/estado";
-import { fmtIdade, tomStatus } from "@/lib/formato";
+import { fmtIdade, tituloDaSlice, tomStatus } from "@/lib/formato";
 import { StatusIcon } from "./StatusIcon";
 
 type Props = {
@@ -33,7 +33,7 @@ export function CommandPalette({ aberto, onAberto, estado, r, agora, onRun, onSl
           <CommandGroup heading="Slices da run aberta">
             {r.slices.map((s) => (
               <CommandItem key={s.idx} value={`slice ${s.idx} ${s.tarefa}`} onSelect={() => ir(() => onSlice(s.idx))}>
-                <StatusIcon status={s.status} /><span>S{s.idx} · {s.tarefa}</span>
+                <StatusIcon status={s.status} /><span>S{s.idx} · {tituloDaSlice(s.idx, s.tarefa)}</span>
               </CommandItem>
             ))}
           </CommandGroup>

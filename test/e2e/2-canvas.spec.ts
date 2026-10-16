@@ -17,6 +17,11 @@ async function alternar(page: Page, k: number): Promise<void> {
 
 /** Todos os nos das 3 fases sem sobrepor; slices na mesma coluna, em ordem, com o mesmo espaco entre elas. */
 async function conferirFases(page: Page, rotulo: string): Promise<void> {
+  // Re-tenta ate' o render assentar (o React Flow mede grupo e filhos em quadros diferentes).
+  await expect(async () => conferirFasesAgora(page, rotulo)).toPass({ timeout: 5000 });
+}
+
+async function conferirFasesAgora(page: Page, rotulo: string): Promise<void> {
   const ws = (await caixas(page, `worker:${RUN_A}:`)).sort((a, b) => a.id.localeCompare(b.id));
   expect(ws, rotulo).toHaveLength(4);
   const filhos = [...ws, ...(await caixas(page, `pedido:${RUN_A}`)), ...(await caixas(page, `gate:${RUN_A}`)), ...(await caixas(page, `diff:${RUN_A}`))];
@@ -44,6 +49,8 @@ test("titulo da slice nao repete o prefixo S<n> (CA-4)", async ({ page }) => {
   await expect(worker(page, 1).locator("header").first()).toContainText("S1 · npm e node absolutos no setup");
   await expect(worker(page, 1).locator("header").first()).not.toContainText("S1 · S1");
   await expect(worker(page, 3).locator("header").first()).not.toContainText("S3 · S3");
+  await expect(page.locator("footer").last()).toContainText("S3 Codex e Antigravity");
+  await expect(page.locator("footer").last()).not.toContainText("S3 S3");
 });
 
 test("abrir/fechar cada slice em sequencia nunca sobrepoe nem deixa buraco (CA-1, CA-2, CA-6)", async ({ page }) => {

@@ -1,6 +1,6 @@
 import { CircleStop, Command, GitBranch, TriangleAlert } from "lucide-react";
 import { alerta, kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
-import { fmtDur, fmtTok, fmtUSD, tomStatus } from "@/lib/formato";
+import { fmtDur, fmtTok, fmtUSD, tituloDaSlice, tomStatus } from "@/lib/formato";
 import { cn } from "@/lib/utils";
 import { textoAtividade } from "./Atividade";
 
@@ -27,7 +27,7 @@ export function StatusBar({ r, agora, onCancelar, onPaleta }: Props) {
           {total > 0 && <span className="font-mono opacity-85">{feitas}/{total} slices</span>}
           {st === "rodando" && ativa && (
             <span className="max-w-[28rem] truncate opacity-90">
-              S{ativa.idx} {ativa.tarefa}{ativa.inicioTs ? " · " + fmtDur(agora - ativa.inicioTs) : ""}
+              S{ativa.idx} {tituloDaSlice(ativa.idx, ativa.tarefa)}{ativa.inicioTs ? " · " + fmtDur(agora - ativa.inicioTs) : ""}
               {textoAtividade(r, agora) ? " · " + textoAtividade(r, agora) : ""}
             </span>
           )}
