@@ -7,3 +7,5 @@ release/
 .teste/
 dist/
 web/tsconfig.tsbuildinfo
+test-results/
+playwright-report/

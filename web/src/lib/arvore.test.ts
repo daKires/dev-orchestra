@@ -53,10 +53,10 @@ test("slice viva: a rodando abre larga; clique abre/fecha (dados.aberta salvo); 
   const fechada = no(l, "worker:rv:1"), viva = no(l, "worker:rv:2");
   assert.ok(viva.w > fechada.w * 1.8 && viva.h > fechada.h * 2, "a rodando abre larga e alta (card ao vivo)");
   assert.equal(viva.dados.aberta, true);
-  const s1Aberta = layoutRuns([r], { nos: [{ ...fechada, dados: { ...fechada.dados, aberta: true }, rev: 2 }], arestas: [] });
+  const s1Aberta = layoutRuns([r], { nos: [{ ...fechada, dados: { ...fechada.dados, aberta: true, vivaNoClique: 2 }, rev: 2 }], arestas: [] });
   const w1 = no(s1Aberta, "worker:rv:1");
   assert.ok(w1.w > fechada.w * 1.8, "clique abre a slice terminada");
-  const fechouViva = layoutRuns([r], { nos: [{ ...viva, dados: { ...viva.dados, aberta: false }, rev: 2 }], arestas: [] });
+  const fechouViva = layoutRuns([r], { nos: [{ ...viva, dados: { ...viva.dados, aberta: false, vivaNoClique: 2 }, rev: 2 }], arestas: [] });
   assert.ok(no(fechouViva, "worker:rv:2").w <= fechada.w, "voce fechou a viva: fica compacta");
 });
 

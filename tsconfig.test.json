@@ -5,5 +5,10 @@
     "outDir": ".teste",
     "declaration": false
   },
-  "include": ["test"]
+  "include": [
+    "test"
+  ],
+  "exclude": [
+    "test/e2e"
+  ]
 }
