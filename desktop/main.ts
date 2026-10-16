@@ -11,8 +11,8 @@ import { criarDriverPty } from "./pty.js";
 
 // dist-desktop/ (onde este arquivo compila) e o repo (pai de dist-desktop, ou HERMES_REPO).
 const DIR_DESKTOP = path.dirname(fileURLToPath(import.meta.url));
-// Empacotado, o pai de dist-desktop e' o app.asar: o repo vem do HERMES_REPO ou do dialogo (resolverRepo).
-let REPO = process.env.HERMES_REPO || (app.isPackaged ? "" : path.resolve(DIR_DESKTOP, ".."));
+// Empacotado, o pai de dist-desktop e' o app.asar: roda do app instalado (~/.dev-orchestra/app), igual ao MCP.
+let REPO = process.env.HERMES_REPO || (app.isPackaged ? path.join(os.homedir(), ".dev-orchestra", "app") : path.resolve(DIR_DESKTOP, ".."));
 const PORTA = process.env.HERMES_UI_PORT || "4123";
 
 // Drives injetados no hub (dist/ui.js -> iniciarUI): navegador por CDP e PTY dos agentes Claude.
@@ -44,7 +44,7 @@ async function resolverRepo(): Promise<boolean> {
   const r = await dialog.showOpenDialog({ title: "Onde está a pasta do repositório Dev Orchestra?", properties: ["openDirectory"] });
   const p = r.filePaths[0] ?? "";
   if (r.canceled || !valido(p)) {
-    dialog.showErrorBox("Hermes", "Pasta do repositório Dev Orchestra não encontrada (precisa ter dist/ui.js). Rode o install.ps1 do repositório.");
+    dialog.showErrorBox("Hermes", "App do Dev Orchestra não encontrado (precisa ter dist/ui.js). Rode `npx dev-orchestra` para instalar.");
     return false;
   }
   REPO = p;

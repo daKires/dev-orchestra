@@ -445,28 +445,50 @@ export function salvar(home: string, cfg: ConfigSalvar): ResultadoSalvar {
 }
 
 // ---------------------------------------------------------------------------
-// Local do app (clone git vs pacote do npx)
+// App instalado (sempre uma copia separada do clone/pacote)
 // ---------------------------------------------------------------------------
 
-export interface LocalApp {
-  app: string;
-  copiar: boolean;
+// O MCP e o app desktop rodam dessa copia, nunca da pasta de desenvolvimento: git e build no
+// clone nao derrubam o que esta' rodando. Atualiza com `npm run instalar` (ou a tela).
+export function localDoApp(home: string): string {
+  return path.join(home, ".dev-orchestra", "app", "dist", "index.js");
 }
 
-export function localDoApp(pacote: string, home: string): LocalApp {
-  if (existsSync(path.join(pacote, ".git"))) {
-    return { app: path.join(pacote, "dist", "index.js"), copiar: false };
-  }
-  return { app: path.join(home, ".dev-orchestra", "app", "dist", "index.js"), copiar: true };
-}
+// O que o app precisa pra rodar (o mesmo do `files` do pacote, sem testes compilados).
+const ITENS_APP = ["bin", "dist", "setup", "package.json", "package-lock.json"];
 
+// Troca os arquivos do app e mantem o node_modules do destino: no Windows o modulo nativo
+// fica travado enquanto alguma ferramenta esta' com o MCP aberto.
 export function copiarApp(pacote: string, destino: string): void {
-  if (existsSync(destino)) rmSync(destino, { recursive: true, force: true });
   garantirPasta(destino);
-  for (const item of readdirSync(pacote)) {
-    if (item === "node_modules" || item === ".git") continue;
-    cpSync(path.join(pacote, item), path.join(destino, item), { recursive: true });
+  for (const item of readdirSync(destino)) {
+    if (item !== "node_modules") rmSync(path.join(destino, item), { recursive: true, force: true });
   }
+  for (const item of ITENS_APP) {
+    const origem = path.join(pacote, item);
+    if (!existsSync(origem)) continue;
+    cpSync(origem, path.join(destino, item), { recursive: true, filter: (f) => !f.endsWith(".test.js") });
+  }
+}
+
+// Ferramentas que ja' tem a entrada do dev-orchestra (o `--instalar` reaponta so' essas).
+export function ferramentasConfiguradas(home: string): Ferramenta[] {
+  const temJson = (arquivo: string, pega: (j: any) => any): boolean => {
+    try {
+      return existsSync(arquivo) && !!pega(JSON.parse(readFileSync(arquivo, "utf8")));
+    } catch {
+      return false;
+    }
+  };
+  const toml = path.join(home, ".codex", "config.toml");
+  const tem: Record<Ferramenta, boolean> = {
+    claude: temJson(path.join(home, ".claude.json"), mcpServersEntrada),
+    opencode: temJson(path.join(home, ".config", "opencode", "opencode.json"), (j) => objetoOuVazio(j?.mcp)["dev-orchestra"]),
+    codex: existsSync(toml) && readFileSync(toml, "utf8").includes("[mcp_servers.dev-orchestra]"),
+    cursor: temJson(path.join(home, ".cursor", "mcp.json"), mcpServersEntrada),
+    antigravity: ["config", "antigravity"].some((d) => temJson(path.join(home, ".gemini", d, "mcp_config.json"), mcpServersEntrada)),
+  };
+  return FERRAMENTAS.filter((f) => tem[f]);
 }
 
 // ---------------------------------------------------------------------------

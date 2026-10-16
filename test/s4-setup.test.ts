@@ -181,29 +181,44 @@ test("chave em branco sem chave atual e' erro (CA-12)", async () => {
   assert.throws(() => S.salvar(home, base(home, "", { ferramentas: ["claude"], chave: "" })), /chave/i);
 });
 
-test("localDoApp: clone git aponta pro clone; pacote do npx vai pra ~/.dev-orchestra/app (CA-11)", async () => {
+test("localDoApp: o MCP sempre roda da copia em ~/.dev-orchestra/app, nunca do clone", async () => {
   temSetup();
   const home = await homeTmp();
-  const clone = await fs.mkdtemp(path.join(os.tmpdir(), "s4-clone-"));
-  mkdirSync(path.join(clone, ".git"));
-  assert.deepEqual(S.localDoApp(clone, home), { app: path.join(clone, "dist", "index.js"), copiar: false });
-  const pacote = await fs.mkdtemp(path.join(os.tmpdir(), "s4-npx-"));
-  assert.deepEqual(S.localDoApp(pacote, home), { app: path.join(home, ".dev-orchestra", "app", "dist", "index.js"), copiar: true });
+  assert.equal(S.localDoApp(home), path.join(home, ".dev-orchestra", "app", "dist", "index.js"));
 });
 
-test("copiarApp: copia o pacote sem node_modules nem .git (CA-11)", async () => {
+test("copiarApp: so' os arquivos do pacote e preserva o node_modules do destino", async () => {
   temSetup();
   const pacote = await fs.mkdtemp(path.join(os.tmpdir(), "s4-pkg-"));
-  for (const f of ["package.json", path.join("dist", "index.js"), path.join("node_modules", "x", "i.js"), path.join(".git", "HEAD")]) {
+  const arquivos = ["package.json", path.join("dist", "index.js"), path.join("dist", "x.test.js"), path.join("bin", "b.mjs"),
+    path.join("setup", "s.html"), path.join("src", "a.ts"), path.join("web", "node_modules", "y.js"), path.join("node_modules", "x", "i.js"), path.join(".git", "HEAD")];
+  for (const f of arquivos) {
     mkdirSync(path.dirname(path.join(pacote, f)), { recursive: true });
     writeFileSync(path.join(pacote, f), "x");
   }
   const destino = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "s4-dest-")), "app");
+  mkdirSync(path.join(destino, "node_modules", "dep"), { recursive: true });
+  writeFileSync(path.join(destino, "node_modules", "dep", "i.js"), "instalado");
+  mkdirSync(path.join(destino, "dist"), { recursive: true });
+  writeFileSync(path.join(destino, "dist", "velho.js"), "x");
   S.copiarApp(pacote, destino);
-  assert.ok(existsSync(path.join(destino, "dist", "index.js")));
-  assert.ok(existsSync(path.join(destino, "package.json")));
-  assert.equal(existsSync(path.join(destino, "node_modules")), false);
-  assert.equal(existsSync(path.join(destino, ".git")), false);
+  for (const f of ["package.json", path.join("dist", "index.js"), path.join("bin", "b.mjs"), path.join("setup", "s.html")])
+    assert.ok(existsSync(path.join(destino, f)), f);
+  for (const f of [path.join("dist", "x.test.js"), path.join("dist", "velho.js"), "src", "web", ".git"])
+    assert.equal(existsSync(path.join(destino, f)), false, f);
+  assert.equal(readFileSync(path.join(destino, "node_modules", "dep", "i.js"), "utf8"), "instalado", "node_modules do destino fica");
+});
+
+test("ferramentasConfiguradas: lista so' as ferramentas que ja' tem o dev-orchestra", async () => {
+  temSetup();
+  const home = await homeTmp();
+  assert.deepEqual(S.ferramentasConfiguradas(home), []);
+  writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { "dev-orchestra": { command: "node", args: ["x"] } } }));
+  mkdirSync(path.join(home, ".cursor"), { recursive: true });
+  writeFileSync(path.join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { outro: {} } }));
+  mkdirSync(path.join(home, ".codex"), { recursive: true });
+  writeFileSync(path.join(home, ".codex", "config.toml"), '[mcp_servers.dev-orchestra]\ncommand = "node"\n');
+  assert.deepEqual(S.ferramentasConfiguradas(home), ["claude", "codex"]);
 });
 
 test("testarChave: chamada minima ao provedor certo; erro vira mensagem em PT-BR (CA-8)", async () => {
