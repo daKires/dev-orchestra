@@ -211,9 +211,7 @@ async function tratarSalvar(corpo, res) {
   }
 }
 
-// S1 (CA-2): barra DNS rebinding na tela de setup. Um dominio alheio que resolve pra 127.0.0.1 chega
-// aqui com o Host dele (e o X-Dev-Orchestra). So' aceita EXATAMENTE 127.0.0.1:<porta> ou
-// localhost:<porta> (case-insensitive), com a porta em que ESTE servidor escutou.
+// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele.
 function hostLocal(cabecalho, porta) {
   const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
   if (typeof h !== "string") return false;
@@ -224,7 +222,6 @@ function hostLocal(cabecalho, porta) {
 const servidor = http.createServer((req, res) => {
   Promise.resolve()
     .then(async () => {
-      // ANTES de qualquer rota (tela, /estado, /testar, /salvar): Host alheio -> 403.
       const endereco = servidor.address();
       const porta = typeof endereco === "object" && endereco ? endereco.port : 0;
       if (!hostLocal(req.headers.host, porta)) {

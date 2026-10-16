@@ -2,13 +2,9 @@
 // Roda com `node --experimental-strip-types`: apenas imports de `node:`; sem enum/namespace.
 import path from "node:path";
 
-// Localizacao do `claude` no Windows (CA-4, S3)
-
 /**
- * Resolve o executavel do `claude` a partir da saida de `where claude` (linhas CRLF), sem nunca
- * passar por um shell que reinterprete `& | > ^ % "`. Regras: um `.exe` nativo vence (mesmo listado
- * depois dos shims); sem `.exe`, o shim `.cmd` do npm aponta pro cli.js do pacote, que so' roda se
- * existir -> `{ comando: execPath (node atual), args: [cli.js] }`. Sem isso, `null`.
+ * `claude` a partir da saida do `where`, sem shell que reinterprete `& | > ^ % "`: o .exe nativo vence;
+ * senao o shim .cmd do npm vira node + cli.js do pacote; nada -> null.
  */
 export function resolverClaude(
   saidaWhere: string,
