@@ -205,7 +205,7 @@ export function alerta(r: Run, agora: number): string | null {
 }
 
 export function progresso(r: Run): { feitas: number; total: number } {
-  const total = r.slices.length || r.plano.length;
+  const total = Math.max(r.slices.length, r.plano.length);
   const feitas = r.slices.filter((s) => s.status === "ok" || s.status === "incompleta" || s.status === "pulada").length;
   return { feitas, total };
 }

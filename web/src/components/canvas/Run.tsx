@@ -8,7 +8,7 @@ import { createContext, Fragment, useContext, useEffect, useRef, useState } from
 import { type NodeProps } from "@xyflow/react";
 import { FileCode } from "lucide-react";
 import { kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
-import { fmtDur, fmtHora, fmtUSD, tomStatus } from "@/lib/formato";
+import { fmtDur, fmtHora, fmtUSD, tituloDaSlice, tomStatus } from "@/lib/formato";
 import { feedDaSlice, pipelineDaRun, type LinhaFeed, type StatusPipeline } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -270,7 +270,8 @@ function NoWorker({ data, selected }: NodeProps) {
   };
 
   if (!aberta) {
-    // Compacto: 'S<idx> · <tarefa>' + status colorido + ultima linha do feed. Clique alterna aberta.
+    // Compacto: 'S<idx> · <tituloDaSlice>' (sem repetir o prefixo da propria slice) + status colorido
+    // + ultima linha do feed. Clique alterna aberta.
     const ultima = linhas.length ? linhas[linhas.length - 1] : undefined;
     return (
       <div
@@ -281,7 +282,7 @@ function NoWorker({ data, selected }: NodeProps) {
           style={{ background: CABECALHO, color: "#eee", font: TITULO }}
           onClick={() => alternarSlice(runId, idx)}>
           <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
-          <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+          <span className="min-w-0 flex-1 truncate">S{idx} · {tituloDaSlice(idx, tarefa)}</span>
           <span className="shrink-0" style={{ color: slice?.pausada ? AMARELO : cor }}>{slice?.pausada ? "pausada" : tomStatus(status).rotulo}</span>
         </header>
         <div className="min-h-0 flex-1 truncate px-2 py-1" style={{ font: MONO, color: ultima?.erro ? VERMELHO : CINZA }}>
@@ -302,7 +303,7 @@ function NoWorker({ data, selected }: NodeProps) {
       <header className="flex shrink-0 items-center gap-1.5 px-2 py-1.5"
         style={{ background: CABECALHO, borderBottom: `1px solid ${BORDA}`, color: "#eee", font: TITULO }}>
         <span className="size-2 shrink-0 rounded-full" style={{ background: cor }} />
-        <span className="min-w-0 flex-1 truncate">S{idx}{tarefa ? ` · ${tarefa}` : ""}</span>
+        <span className="min-w-0 flex-1 truncate">S{idx} · {tituloDaSlice(idx, tarefa)}</span>
         {slice?.pausada ? <span className="shrink-0" style={{ color: AMARELO }}>pausada</span> : null}
         {m ? <span className="shrink-0 font-mono tabular-nums" style={{ color: CINZA }}>{fmtUSD(m.custoUSD)} · {m.iteracoes} it.</span> : null}
         <button type="button" className="nodrag shrink-0 rounded px-1.5 py-0.5 hover:bg-white/10"
