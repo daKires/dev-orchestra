@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI `canvas` (F3 S3): ponte de linha de comando para o hub Hermes.
+// CLI `canvas` (F3 S3): ponte de linha de comando para o hub Dev Orchestra.
 // Node puro, sem dependencias. Fala com o hub via POST /cli/<rota>.
 import http from "node:http";
 
@@ -21,7 +21,7 @@ comandos:
   browser shot [nav]
   status <estado>
 
-a identidade também pode vir da variável de ambiente HERMES_EU.`;
+a identidade também pode vir da variável de ambiente DEV_ORCHESTRA_EU.`;
 
 function erroUso() {
   console.error(USO);
@@ -41,14 +41,14 @@ for (let i = 0; i < bruto.length; i++) {
   }
 }
 
-let eu = euArg && euArg.trim() ? euArg.trim() : String(process.env.HERMES_EU ?? "").trim();
+let eu = euArg && euArg.trim() ? euArg.trim() : String(process.env.DEV_ORCHESTRA_EU ?? "").trim();
 
 // Sem comando: uso (mesmo sem identidade).
 if (args.length === 0) erroUso();
 
 // Sem identidade (arg nem env): erro citando "identidade".
 if (!eu) {
-  console.error("uso: identidade ausente — informe --eu <id>:<token> ou defina HERMES_EU.");
+  console.error("uso: identidade ausente — informe --eu <id>:<token> ou defina DEV_ORCHESTRA_EU.");
   process.exit(1);
 }
 
@@ -174,7 +174,7 @@ switch (cmd) {
     erroUso();
 }
 
-const porta = Number(process.env.HERMES_UI_PORT || 4123);
+const porta = Number(process.env.DEV_ORCHESTRA_UI_PORT || 4123);
 const dados = JSON.stringify(corpo);
 
 const req = http.request(
@@ -185,7 +185,7 @@ const req = http.request(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Hermes": "1",
+      "X-Dev-Orchestra": "1",
       "X-Eu": eu,
       "Content-Length": Buffer.byteLength(dados),
     },
@@ -208,7 +208,7 @@ const req = http.request(
 );
 
 req.on("error", () => {
-  console.error(`hub Hermes inacessível em 127.0.0.1:${porta}`);
+  console.error(`hub Dev Orchestra inacessível em 127.0.0.1:${porta}`);
   process.exit(2);
 });
 

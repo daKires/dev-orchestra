@@ -32,16 +32,16 @@ import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-r
 // G3: caixa de instrucoes e pausa por slice (arquivos no RUNS_DIR, mesmo padrao do <runId>.cancel).
 import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 
-const PORT = Number(process.env.HERMES_UI_PORT || "4123");
+const PORT = Number(process.env.DEV_ORCHESTRA_UI_PORT || "4123");
 // Dados do hub fora do TEMP (o Windows limpa %TEMP%): tudo vive em ~/.dev-orchestra/dados.
 const DADOS_DIR = path.join(os.homedir(), ".dev-orchestra", "dados");
-export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(DADOS_DIR, "runs"); // barramento em disco, compartilhado entre processos
+export const RUNS_DIR = process.env.DEV_ORCHESTRA_RUNS_DIR || path.join(DADOS_DIR, "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: um JSON por worktree com o chat do planejador.
-export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(DADOS_DIR, "planejadores");
+export const PLANEJADORES_DIR = process.env.DEV_ORCHESTRA_PLANEJADORES_DIR || path.join(DADOS_DIR, "planejadores");
 // Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
-export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(DADOS_DIR, "canvas");
+export const CANVAS_DIR = process.env.DEV_ORCHESTRA_CANVAS_DIR || path.join(DADOS_DIR, "canvas");
 // Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
-export const AGENTES_DIR = process.env.HERMES_AGENTES_DIR || path.join(DADOS_DIR, "agentes");
+export const AGENTES_DIR = process.env.DEV_ORCHESTRA_AGENTES_DIR || path.join(DADOS_DIR, "agentes");
 const SWARM_ID = randomUUID().slice(0, 8);                        // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000;                             // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
@@ -55,9 +55,9 @@ export function migrarDadosAntigos(antigo: string, novo: string): boolean {
   } catch { return false; }
 }
 
-// Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (<tmp>/hermes).
-const PASTAS_PADRAO = !process.env.HERMES_RUNS_DIR && !process.env.HERMES_PLANEJADORES_DIR
-  && !process.env.HERMES_CANVAS_DIR && !process.env.HERMES_AGENTES_DIR;
+// Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (nome anterior do produto).
+const PASTAS_PADRAO = !process.env.DEV_ORCHESTRA_RUNS_DIR && !process.env.DEV_ORCHESTRA_PLANEJADORES_DIR
+  && !process.env.DEV_ORCHESTRA_CANVAS_DIR && !process.env.DEV_ORCHESTRA_AGENTES_DIR;
 if (PASTAS_PADRAO) {
   try { migrarDadosAntigos(path.join(os.tmpdir(), "hermes"), DADOS_DIR); } catch {}
 }
@@ -91,7 +91,7 @@ export type Evento = { ts?: number } & (
 
 export type Emitir = (ev: Evento) => void;
 
-// S3: como abrir o dashboard — o app Hermes instalado vence; senao o navegador do sistema. Pura.
+// S3: como abrir o dashboard — o app Dev Orchestra instalado vence; senao o navegador do sistema. Pura.
 export function comoAbrirDashboard(exe: string | null, url: string, plataforma: NodeJS.Platform): { comando: string; args: string[] } {
   if (exe) return { comando: exe, args: [] };
   if (plataforma === "win32") return { comando: "cmd", args: ["/c", "start", "", url] };
@@ -227,7 +227,7 @@ export async function limparPlanejadores(dir: string, deps: DepsLimpeza = depsRe
   }
 }
 
-// Deriva a linha de texto crua (stderr + HERMES_LOG) de um evento, preservando o log ao vivo de sempre.
+// Deriva a linha de texto crua (stderr + DEV_ORCHESTRA_LOG) de um evento, preservando o log ao vivo de sempre.
 export function linhaDe(ev: Evento): string {
   switch (ev.t) {
     case "run": return `PLANO recebido: ${ev.total} slice(s)`;
@@ -273,7 +273,7 @@ let reassumir: NodeJS.Timeout | null = null; // quem ficou sem porta tenta de no
 let planejadores: Planejador[] = [];         // ultima lista empurrada via SSE
 let planejadoresAssinatura = "";             // muda -> avisa os clientes
 let onCeder: (() => void) | null = null;     // chamado no fim do ceder() (modo --ui encerra o processo)
-let sempreAssumir = false;                   // modo --ui: assume a porta de QUALQUER hub Hermes (sem comparar versao)
+let sempreAssumir = false;                   // modo --ui: assume a porta de QUALQUER hub Dev Orchestra (sem comparar versao)
 
 function sse(c: Cliente, dado: unknown): void {
   try { c.res.write(`data: ${JSON.stringify(dado)}\n\n`); } catch {}
@@ -365,15 +365,15 @@ function servirEstatico(url: string, res: http.ServerResponse): void {
   });
 }
 
-// Acoes so via POST com header X-Hermes: header custom forca preflight CORS, que este servidor nao
+// Acoes so via POST com header X-Dev-Orchestra: header custom forca preflight CORS, que este servidor nao
 // responde -> site externo aberto no browser nao consegue cancelar run nem derrubar o hub.
 function acaoValida(req: http.IncomingMessage): boolean {
-  return req.method === "POST" && req.headers["x-hermes"] === "1";
+  return req.method === "POST" && req.headers["x-dev-orchestra"] === "1";
 }
 
 function broadcast(dado: unknown): void { for (const c of clientes) sse(c, dado); }
 
-// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele (e o X-Hermes).
+// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele (e o X-Dev-Orchestra).
 export function hostLocal(cabecalho: string | string[] | undefined, porta: number): boolean {
   const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
   if (typeof h !== "string") return false;
@@ -538,7 +538,7 @@ let agentesCarregados = false;
 
 // ---- agentes Claude Code via PTY (F4/S3) ----
 // Driver de PTY injetado pelo app desktop (electron). Sem ele, POST /agentes tipo 'claude' responde
-// 'falhou' com "abra o app Hermes para usar agentes Claude". O hub nunca abre PTY por conta propria.
+// 'falhou' com "abra o app Dev Orchestra para usar agentes Claude". O hub nunca abre PTY por conta propria.
 type PtyProc = {
   pid: number;
   write(d: string): void;
@@ -931,7 +931,7 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string)
     fs.mkdirSync(AGENTES_DIR, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settingsHooks(a.id, a.token ?? "", process.execPath, path.join(RAIZ_BRIDGE, "bin", "canvas.mjs"))));
   } catch {}
-  if (!ptyAtual) throw new Error("abra o app Hermes para usar agentes Claude");
+  if (!ptyAtual) throw new Error("abra o app Dev Orchestra para usar agentes Claude");
   const prompt = promptClaude(a.instrucao ?? "", a.id, a.nome, a.token ?? "");
   const proc = ptyAtual.spawn({
     comando: "claude",
@@ -939,8 +939,8 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string)
     cwd: a.cwd,
     env: {
       ...envClaude(),
-      HERMES_EU: `${a.id}:${a.token}`, // um processo por agente: `canvas` ja' sai identificado
-      // app Electron: o `node` do hook e' o exe do app; sem isso ele abriria uma nova janela do Hermes.
+      DEV_ORCHESTRA_EU: `${a.id}:${a.token}`, // um processo por agente: `canvas` ja' sai identificado
+      // app Electron: o `node` do hook e' o exe do app; sem isso ele abriria uma nova janela do Dev Orchestra.
       ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     },
     cols: tamanhoPty.get(a.id)?.cols ?? 120,
@@ -1113,7 +1113,7 @@ function aplicarOpsProjeto(projeto: string, ops: Op[]): void {
 }
 
 // ---- navegador controlado por agentes (F4/S2): rotas /cli/browser-* ----
-// Driver injetado pelo app desktop. Sem ele, toda rota browser-* responde 400 (abra o app Hermes).
+// Driver injetado pelo app desktop. Sem ele, toda rota browser-* responde 400 (abra o app Dev Orchestra).
 type Navegador = {
   ler(noId: string): Promise<Leitura>;
   clicar(noId: string, n: number): Promise<void>;
@@ -1404,7 +1404,7 @@ function criarServidor(): http.Server {
       setTimeout(ceder, 50);
       return;
     }
-    // Acoes da run no card (G1/S2): merge local, abrir PR e descartar. So' por POST com X-Hermes.
+    // Acoes da run no card (G1/S2): merge local, abrir PR e descartar. So' por POST com X-Dev-Orchestra.
     if (caminho === "/runs/acao") {
       // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
       const corpo = await lerCorpo(req, LIMITE_BODY);
@@ -1431,7 +1431,7 @@ function criarServidor(): http.Server {
       return;
     }
     // G3: instruir e pausar a slice RODANDO pelo card do canvas (POST /runs/instrucao e /runs/pausa).
-    // Ordem: drena o corpo -> X-Hermes -> JSON -> slice inteiro >= 1 -> validarAcaoSlice -> acao/texto.
+    // Ordem: drena o corpo -> X-Dev-Orchestra -> JSON -> slice inteiro >= 1 -> validarAcaoSlice -> acao/texto.
     if (caminho === "/runs/instrucao" || caminho === "/runs/pausa") {
       const corpo = await lerCorpo(req, LIMITE_BODY);
       if (corpo === null) { res.writeHead(400); res.end(); return; }
@@ -1736,7 +1736,7 @@ function criarServidor(): http.Server {
       }
       res.writeHead(404); res.end(); return;
     }
-    // ---- CLI dos agentes (F3/S2): POST /cli/<cmd> com X-Hermes e X-Eu: id:token ----
+    // ---- CLI dos agentes (F3/S2): POST /cli/<cmd> com X-Dev-Orchestra e X-Eu: id:token ----
     if (caminho.startsWith("/cli/")) {
       const corpo = await lerCorpo(req, LIMITE_BODY);
       if (corpo === null) { res.writeHead(400); res.end(); return; }
@@ -1826,7 +1826,7 @@ function criarServidor(): http.Server {
       }
       // ---- navegador (F4/S2): create/read/click/type/nav/shot ----
       if (cmd.startsWith("browser-")) {
-        if (!navegadorAtual) { responderTexto(res, 400, "navegador indisponível: abra o app Hermes"); return; }
+        if (!navegadorAtual) { responderTexto(res, 400, "navegador indisponível: abra o app Dev Orchestra"); return; }
         try { // erro do driver (webview fechada, pagina carregando...) vira 400, nunca request pendurada
         if (cmd === "browser-create") {
           const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
@@ -1959,7 +1959,7 @@ function criarServidor(): http.Server {
   });
 }
 
-// Em EADDRINUSE: se a porta fala /versao (e' um hub Hermes), pede pra ele ceder e assume a porta.
+// Em EADDRINUSE: se a porta fala /versao (e' um hub Dev Orchestra), pede pra ele ceder e assume a porta.
 // Com sempreAssumir (modo --ui, o app de verdade) o pedido e' INCONDICIONAL: abrir o app derruba o node
 // do dashboard anterior e o novo passa a servir o dist mais atualizado, mesmo com versoes empatadas
 // (mesmo dist) ou o hub "mais novo". Sem sempreAssumir (modo stdio) mantem a regra antiga: so' assume se
@@ -1970,9 +1970,9 @@ async function tentarAssumir(): Promise<void> {
     let j: any = null;
     try { j = await r.json(); } catch {} // corpo nao-JSON (processo alheio) -> j fica null
     const ehHub = r.ok && typeof j?.versao === "number";
-    if (!ehHub) return; // nao e' o Hermes: nunca interferir
+    if (!ehHub) return; // nao e' o Dev Orchestra: nunca interferir
     if (!sempreAssumir && !(j.versao < versaoUI())) return; // stdio: so' cede pra uma UI mais nova
-    await fetch(`http://127.0.0.1:${PORT}/ceder`, { method: "POST", headers: { "X-Hermes": "1" }, signal: AbortSignal.timeout(1500) });
+    await fetch(`http://127.0.0.1:${PORT}/ceder`, { method: "POST", headers: { "X-Dev-Orchestra": "1" }, signal: AbortSignal.timeout(1500) });
   } catch { return; }
   for (let i = 0; i < 6; i++) {
     await new Promise((ok) => setTimeout(ok, 500));
@@ -2022,7 +2022,7 @@ async function escutar(): Promise<boolean> {
 // processo SEMPRE passa a banda pro app recem-aberto (garante o dist mais atualizado no ar).
 export type OpcoesUI = {
   onCeder?: () => void;
-  sempreAssumir?: boolean; // modo --ui: assume a porta de qualquer hub Hermes, sem comparar versao
+  sempreAssumir?: boolean; // modo --ui: assume a porta de qualquer hub Dev Orchestra, sem comparar versao
   subirServe?: (cwd: string, env?: Record<string, string | undefined>) => Promise<{ base: string; pid: number }>; // sobe `opencode serve` na cwd (injetavel)
   matarProcesso?: (pid: number) => void; // encerra o serve (injetavel)
   navegador?: Navegador; // driver do navegador embutido (F4/S2): liga as rotas /cli/browser-*
@@ -2047,7 +2047,7 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   reassumir.unref();
 }
 
-// App reaberto (`hermes` com o app ja' aberto): retoma a porta na hora se um hub stdio ficou com ela.
+// App reaberto (`dev-orchestra` com o app ja' aberto): retoma a porta na hora se um hub stdio ficou com ela.
 export async function assumirPorta(): Promise<void> {
   if (servidor) return;
   if (!(await escutar())) await tentarAssumir();

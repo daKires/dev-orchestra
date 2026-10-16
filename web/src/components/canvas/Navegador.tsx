@@ -1,6 +1,6 @@
 // Card Navegador (F4 S6): nodeType 'navegador' — um <webview> do Electron (particao persistente por
 // projeto) com a barra voltar/avancar/recarregar e o campo da url. Fora do app desktop (sem a ponte
-// do preload) o card so' mostra o aviso "Abra no app Hermes para usar este card".
+// do preload) o card so' mostra o aviso "Abra no app Dev Orchestra para usar este card".
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { ArrowLeft, ArrowRight, Ellipsis, Pin, RotateCw, X } from "lucide-react";
@@ -62,7 +62,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
   // causa da navegacao do agente; trocar o atributo src a cada eco recarregaria a pagina sem motivo).
   const srcInicial = useRef(d.url ?? "");
 
-  // idProjeto = sha1 hex da raiz normalizada (mesmo idProjeto do hub): define persist:hermes-<id>.
+  // idProjeto = sha1 hex da raiz normalizada (mesmo idProjeto do hub): define persist:dev-orchestra-<id>.
   useEffect(() => {
     if (!desktop || !projeto) { setIdProjeto(""); return; }
     let vivo = true;
@@ -79,7 +79,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
     const el = wv.current;
     if (!el || !pronto) return;
     const aoPronto = () => {
-      try { window.hermesDesktop?.registrarNavegador(id, el.getWebContentsId()); } catch {}
+      try { window.devOrchestraDesktop?.registrarNavegador(id, el.getWebContentsId()); } catch {}
     };
     const aoNavegar = (e: Event) => {
       const u = (e as unknown as { url?: string }).url;
@@ -101,7 +101,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
       el.removeEventListener("did-navigate", aoNavegar);
       el.removeEventListener("did-navigate-in-page", aoNavegar);
       el.removeEventListener("did-fail-load", aoFalhar);
-      try { window.hermesDesktop?.desregistrarNavegador(id); } catch {}
+      try { window.devOrchestraDesktop?.desregistrarNavegador(id); } catch {}
     };
   }, [id, pronto, particao]);
 
@@ -135,7 +135,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="cv-menu min-w-40">
-            <DropdownMenuItem onSelect={() => { if (particao) window.hermesDesktop?.limparDados(particao); }}>
+            <DropdownMenuItem onSelect={() => { if (particao) window.devOrchestraDesktop?.limparDados(particao); }}>
               Limpar dados
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => acoes.fixar(id)}>
@@ -174,7 +174,7 @@ export function NoNavegador({ id, data, selected }: NodeProps) {
       <div className="nodrag nowheel relative min-h-0 flex-1 overflow-hidden" style={{ background: "#fff" }}>
         {!desktop ? (
           <div className="grid h-full place-items-center px-4 text-center" style={{ background: "#1c1c1c", color: CINZA, font: FONTE_UI }}>
-            Abra no app Hermes para usar este card
+            Abra no app Dev Orchestra para usar este card
           </div>
         ) : !particao ? (
           <div className="grid h-full place-items-center" style={{ background: "#1c1c1c", color: CINZA, font: FONTE_UI }}>

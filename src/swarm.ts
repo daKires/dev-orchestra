@@ -1,4 +1,4 @@
-// O swarm Hermes: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
+// O swarm Dev Orchestra: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
 import { mensagem as mensagemReal, CanceladoError, PROVEDOR_ID, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
 import { type Evento, type Emitir } from "./ui.js";
@@ -9,13 +9,13 @@ import path from "node:path";
 
 const pexec = promisify(execFile); // git
 const pshell = promisify(exec);    // comandos allowlisted / gate (build/teste/typecheck)
-const MAX_TURNS = Number(process.env.HERMES_MAX_TURNS || "25");
-const CMD_TIMEOUT = Number(process.env.HERMES_CMD_TIMEOUT_MS || "120000");
+const MAX_TURNS = Number(process.env.DEV_ORCHESTRA_MAX_TURNS || "25");
+const CMD_TIMEOUT = Number(process.env.DEV_ORCHESTRA_CMD_TIMEOUT_MS || "120000");
 // O GATE tem timeout proprio (suite de teste pode passar de 2 min): separado do CMD_TIMEOUT dos agentes.
-export const GATE_TIMEOUT = Number(process.env.HERMES_GATE_TIMEOUT_MS || String(15 * 60 * 1000));
+export const GATE_TIMEOUT = Number(process.env.DEV_ORCHESTRA_GATE_TIMEOUT_MS || String(15 * 60 * 1000));
 
 // G3/S2: teto de tempo que uma slice pode ficar pausada antes de retomar sozinha.
-export const PAUSA_MAX_MS = Number(process.env.HERMES_PAUSA_MAX_MS || 1800000);
+export const PAUSA_MAX_MS = Number(process.env.DEV_ORCHESTRA_PAUSA_MAX_MS || 1800000);
 
 // Caixa de instrucoes/pausa de UMA slice (implementada sobre os arquivos em RUNS_DIR, ver instrucoes.ts).
 export type CaixaSlice = { tomar(): string[]; pausada(): boolean; esperar(): Promise<"retomada" | "teto"> };
@@ -26,7 +26,7 @@ export type Tarefa = { tarefa: string; arquivos_alvo: string[]; descricao: strin
 export type Override = { cmds?: string[]; gate?: string[] };
 
 // Resolve COMANDOS/gate a partir do package.json do alvo (auto-detect), com override do planner e
-// fallback pro env legado (HERMES_CMDS/HERMES_GATE). PURA -> testavel no selftest.
+// fallback pro env (DEV_ORCHESTRA_CMDS/DEV_ORCHESTRA_GATE). PURA -> testavel no selftest.
 export function resolverDeScripts(
   scripts: Record<string, string> | null,
   override: Override | undefined,
@@ -55,7 +55,7 @@ export function resolverDeScripts(
   return { cmds: cmdsFinal, gate: gateFinal, origem };
 }
 
-// Le <cwd>/package.json e o env legado; delega pra resolverDeScripts. Nunca lanca.
+// Le <cwd>/package.json e o env; delega pra resolverDeScripts. Nunca lanca.
 export async function resolverComandos(
   cwd: string, override?: Override,
 ): Promise<{ cmds: string[]; gate: string[]; origem: string; scripts: Record<string, string> }> {
@@ -65,8 +65,8 @@ export async function resolverComandos(
     const j = JSON.parse(raw);
     if (j && typeof j === "object" && j.scripts && typeof j.scripts === "object") scripts = j.scripts;
   } catch { scripts = null; }
-  const envCmds = (process.env.HERMES_CMDS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const envGate = (process.env.HERMES_GATE || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const envCmds = (process.env.DEV_ORCHESTRA_CMDS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const envGate = (process.env.DEV_ORCHESTRA_GATE || "").split(",").map((s) => s.trim()).filter(Boolean);
   return { ...resolverDeScripts(scripts, override, envCmds, envGate), scripts: scripts ?? {} };
 }
 
@@ -190,8 +190,8 @@ async function gitOk(cwd: string, args: string[]): Promise<boolean> {
   try { await git(cwd, args); return true; } catch { return false; }
 }
 async function ensureIdentity(cwd: string): Promise<void> {
-  if (!(await gitOk(cwd, ["config", "user.email"]))) await git(cwd, ["config", "user.email", "hermes@orchestra.local"]);
-  if (!(await gitOk(cwd, ["config", "user.name"]))) await git(cwd, ["config", "user.name", "Hermes Swarm"]);
+  if (!(await gitOk(cwd, ["config", "user.email"]))) await git(cwd, ["config", "user.email", "swarm@dev-orchestra.local"]);
+  if (!(await gitOk(cwd, ["config", "user.name"]))) await git(cwd, ["config", "user.name", "Dev Orchestra Swarm"]);
 }
 
 export function slug(feature: string): string {
@@ -264,11 +264,11 @@ function globRe(g: string): RegExp {
 }
 
 // Trava anti-alterar-teste: pura, decide se um caminho relativo aponta pra um arquivo de TESTE.
-// Configuravel por HERMES_TEST_GLOB (csv de globs); sem ela, o default cobre os padroes comuns.
+// Configuravel por DEV_ORCHESTRA_TEST_GLOB (csv de globs); sem ela, o default cobre os padroes comuns.
 export function ehTeste(rel: string): boolean {
   const p = rel.replace(/\\/g, "/"); // normaliza separador pro dashboard/FS
   const nome = p.split("/").pop() || p;
-  const globs = (process.env.HERMES_TEST_GLOB || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const globs = (process.env.DEV_ORCHESTRA_TEST_GLOB || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (globs.length) return globs.some((g) => globRe(g).test(p) || globRe(g).test(nome));
   if (/\.(test|spec)\./i.test(nome)) return true;                       // foo.test.*, foo.spec.*
   if (/^test_.*\.py$/i.test(nome)) return true;                         // test_*.py
@@ -286,10 +286,10 @@ export function custoUSD(tin: number, tout: number, when: Date = new Date(), pro
   const dia = when.getUTCDay();   // 0=domingo, 6=sabado
   const hora = when.getUTCHours();
   const peak = dia >= 1 && dia <= 5 && ((hora >= 1 && hora < 4) || (hora >= 6 && hora < 10));
-  const inP = Number(process.env.HERMES_PRICE_IN_PEAK ?? "0.30");
-  const inO = Number(process.env.HERMES_PRICE_IN_OFFPEAK ?? "0.15");
-  const outP = Number(process.env.HERMES_PRICE_OUT_PEAK ?? "1.20");
-  const outO = Number(process.env.HERMES_PRICE_OUT_OFFPEAK ?? "0.60");
+  const inP = Number(process.env.DEV_ORCHESTRA_PRICE_IN_PEAK ?? "0.30");
+  const inO = Number(process.env.DEV_ORCHESTRA_PRICE_IN_OFFPEAK ?? "0.15");
+  const outP = Number(process.env.DEV_ORCHESTRA_PRICE_OUT_PEAK ?? "1.20");
+  const outO = Number(process.env.DEV_ORCHESTRA_PRICE_OUT_OFFPEAK ?? "0.60");
   return (tin / 1e6) * (peak ? inP : inO) + (tout / 1e6) * (peak ? outP : outO);
 }
 

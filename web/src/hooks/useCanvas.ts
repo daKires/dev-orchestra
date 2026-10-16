@@ -20,7 +20,7 @@ export type CanvasRemoto = {
   estado: Snapshot;
   /** SSE vivo? false = a UI mostra "reconectando…" e bloqueia edicao. */
   conectado: boolean;
-  /** Aplica otimista, manda pro hub (POST /canvas/op com X-Hermes: 1) e registra no historico. */
+  /** Aplica otimista, manda pro hub (POST /canvas/op com X-Dev-Orchestra: 1) e registra no historico. */
   enviar: (ops: Op[]) => void;
   /** Desfaz a ultima acao LOCAL (ops inversas com rev novo); nao entra no historico. */
   desfazer: () => void;
@@ -85,7 +85,7 @@ export function useCanvas(projeto: string): CanvasRemoto {
     setEstado((s) => aplicarOpsLocal(s, carimbadas));
     void fetch("/canvas/op", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+      headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
       body: JSON.stringify({ projeto: atual.current, ops: carimbadas }),
     }).catch(() => {});
   }, []);

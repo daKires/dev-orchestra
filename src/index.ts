@@ -12,7 +12,7 @@ import {
   resolverComandos, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
   PAUSA_MAX_MS,
   type Tarefa, type Override, type CaixaSlice,
-} from "./hermes.js";
+} from "./swarm.js";
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
 import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
@@ -22,16 +22,16 @@ import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 const WIDTH = 64;
 const SEP = "+" + "-".repeat(WIDTH - 2) + "+";
 
-// Arquivo de log ao vivo (retrocompat; o dashboard web e' a UI principal agora). orchestra define HERMES_LOG.
-const LOG_FILE = process.env.HERMES_LOG || path.join(os.tmpdir(), "hermes-run.log");
+// Arquivo de log ao vivo (retrocompat; o dashboard web e' a UI principal agora). orchestra define DEV_ORCHESTRA_LOG.
+const LOG_FILE = process.env.DEV_ORCHESTRA_LOG || path.join(os.tmpdir(), "dev-orchestra-run.log");
 function toFile(s: string) { try { appendFileSync(LOG_FILE, s); } catch {} }
 
-// Porta do dashboard (mesma regra do ui.ts): HERMES_UI_PORT ou 4123.
-const PORTA_DASH = Number(process.env.HERMES_UI_PORT || "4123");
+// Porta do dashboard (mesma regra do ui.ts): DEV_ORCHESTRA_UI_PORT ou 4123.
+const PORTA_DASH = Number(process.env.DEV_ORCHESTRA_UI_PORT || "4123");
 const URL_DASH = `http://127.0.0.1:${PORTA_DASH}`;
 
-// S3: na PRIMEIRA run do processo, abre o dashboard (app Hermes instalado vence; senao o navegador
-// do sistema). HERMES_ABRIR_LOG troca o abrir por um append JSON (hook de teste). Nunca derruba a run.
+// S3: na PRIMEIRA run do processo, abre o dashboard (app Dev Orchestra instalado vence; senao o navegador
+// do sistema). DEV_ORCHESTRA_ABRIR_LOG troca o abrir por um append JSON (hook de teste). Nunca derruba a run.
 let dashboardAberto = false;
 function abrirDashboard(url: string): void {
   if (dashboardAberto) return;
@@ -39,11 +39,11 @@ function abrirDashboard(url: string): void {
   try {
     let exe: string | null = null;
     if (process.platform === "win32") {
-      const p = path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Hermes", "Hermes.exe");
+      const p = path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Dev Orchestra", "Dev Orchestra.exe");
       if (existsSync(p)) exe = p;
     }
     const { comando, args } = comoAbrirDashboard(exe, url, process.platform);
-    const log = process.env.HERMES_ABRIR_LOG;
+    const log = process.env.DEV_ORCHESTRA_ABRIR_LOG;
     if (log) { appendFileSync(log, JSON.stringify({ comando, args }) + "\n"); return; }
     spawn(comando, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
   } catch {}
@@ -82,7 +82,7 @@ function frame(opts: { titulo: string; cwd: string; linhas: string[]; status: st
 async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, onLinha?: (l: string) => void): Promise<string> {
   try { writeFileSync(LOG_FILE, ""); } catch {} // trunca: cada run comeca limpa
   const vivo: string[] = [];
-  const header = ["", SEP, row("HERMES SWARM // " + feature), row("CWD: " + cwd), SEP].join("\n") + "\n";
+  const header = ["", SEP, row("DEV ORCHESTRA // " + feature), row("CWD: " + cwd), SEP].join("\n") + "\n";
   process.stderr.write(header);
   toFile(header);
   const emit = (ev: Evento) => {
@@ -116,7 +116,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       const ruins = pf.itens.filter((i) => i.classe === "ambiente" || i.classe === "recusado");
       const linhas = ruins.map((i) => (i.classe === "ambiente" ? "AMBIENTE: " : "RECUSADO: ") + i.cmd);
       emit({ t: "painel", status: "ENV-FAILED", branch: "", linhas: [...linhas, ...pfTexto.split("\n")] });
-      const painel = frame({ titulo: "HERMES // AMBIENTE (custo $0)", cwd, linhas, status: "ENV-FAILED" }) +
+      const painel = frame({ titulo: "DEV ORCHESTRA // AMBIENTE (custo $0)", cwd, linhas, status: "ENV-FAILED" }) +
         "\n" + pfTexto + "\nNenhum agente rodou. Conserte o ambiente/comandos e rode doctor_orchestra de novo.";
       toFile(painel + "\n");
       return painel;
@@ -180,7 +180,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     if (amb) linhas.push("AMBIENTE: " + amb.cmd, ...amb.saida.trim().split("\n").slice(-6).map((s) => "  | " + s.trim()));
     linhas.push("branch " + branch);
     if (baselineRef) linhas.push("REVERTER: git checkout " + baselineRef.slice(0, 8) + " -- .");
-    const painel = frame({ titulo: "HERMES // " + branch, cwd, linhas, status });
+    const painel = frame({ titulo: "DEV ORCHESTRA // " + branch, cwd, linhas, status });
     emit({ t: "painel", status, branch, baseline: baselineRef, ...(baseRun ? { base: baseRun } : {}), linhas });
     toFile(painel + "\n");
     // o frame corta linha longa: a saida completa do que falhou vai DEPOIS do painel (orquestrador decide)
@@ -189,7 +189,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   } catch (e: any) {
     emit({ t: "log", texto: "ERRO: " + (e?.message ?? e) });
     emit({ t: "painel", status: "FAILED", branch: "", linhas: vivo });
-    const painel = frame({ titulo: "HERMES // FALHA", cwd, linhas: vivo, status: "FAILED" });
+    const painel = frame({ titulo: "DEV ORCHESTRA // FALHA", cwd, linhas: vivo, status: "FAILED" });
     toFile(painel + "\n");
     return painel;
   } finally {
@@ -260,7 +260,7 @@ if (process.argv.includes("--selftest")) {
   assert.strictEqual(escritaProibida("Makefile", [], false, ex), null, "sem extensao mas nao e' exe de comando");
   // preflight: ok / esperada / ambiente / timeout / recusado (offline via node -e)
   await (async () => {
-    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-pf-"));
+    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-pf-"));
     const n = `"${process.execPath}" -e`;
     const pf = await preflight(cwd, [`${n} "process.exit(0)"`, `${n} "process.exit(1)"`], [`${n} "process.exit(0)"`, "nao-existe-xyz"], {});
     assert.deepStrictEqual(pf.itens.map((i) => i.classe), ["ok", "esperada", "ambiente"], "dedupe + classes");
@@ -355,7 +355,7 @@ if (process.argv.includes("--selftest")) {
 
   // Barramento em disco: dois arquivos *.jsonl viram dois swarms com seus eventos agrupados (multi-swarm)
   await (async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-runs-"));
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-runs-"));
     await fsp.writeFile(path.join(dir, "aaa11111.jsonl"),
       JSON.stringify({ t: "run", feature: "f1", cwd: "c1", total: 2 }) + "\n" +
       JSON.stringify({ t: "slice", idx: 1, total: 2, tarefa: "t", status: "ok" }) + "\n");
@@ -384,7 +384,7 @@ if (process.argv.includes("--selftest")) {
   }
   const fim = { blocos: [{ type: "text", text: "fim" }], stop: "end_turn" };
   await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-st-"));
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-st-"));
     // CA-5: escrever fora do projeto e' recusado
     const g = fake([{ blocos: [{ type: "tool_use", id: "a", name: "escrever_arquivo", input: { caminho: "../fora.txt", conteudo: "x" } }], stop: "tool_use" }, fim]);
     await agente(base, "f", alvo, nada, 1, [], g.fn as any);
@@ -432,7 +432,7 @@ if (process.argv.includes("--selftest")) {
 
   // Trava anti-alterar-teste: teste que JA existe e' imutavel; criar teste NOVO continua permitido.
   await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-tst-"));
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-tst-"));
     await fsp.writeFile(path.join(base, "foo.test.ts"), "// teste existente\n");
     const t = fake([
       { blocos: [{ type: "tool_use", id: "t1", name: "escrever_arquivo", input: { caminho: "foo.test.ts", conteudo: "// sobrescrito\n" } }], stop: "tool_use" },
@@ -447,7 +447,7 @@ if (process.argv.includes("--selftest")) {
 
   // gate(): skip (sem comandos) / passa / falha (offline, via node -e)
   await (async () => {
-    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-gate-"));
+    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-gate-"));
     const eventos: Evento[] = [];
     const e = (ev: Evento) => eventos.push(ev);
     const skip = await gate(cwd, e, []);
@@ -486,7 +486,7 @@ if (process.argv.includes("--selftest")) {
 
   // agente: erro de API vira slice falha COM tokens; sem escrita + verificacao ok = ok (sem mudancas) (CA-2/4)
   await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-ag-"));
     const t0: Tarefa = { tarefa: "t", arquivos_alvo: [], descricao: "d" };
     let n = 0;
     const cai = async () => {
@@ -508,7 +508,7 @@ if (process.argv.includes("--selftest")) {
 
   // construir: 1a slice falha -> resto "pulada"; signal abortado -> cancelado (CA-3/4)
   await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-cons-"));
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-cons-"));
     const plano2: Tarefa[] = [{ tarefa: "a", arquivos_alvo: [], descricao: "" }, { tarefa: "b", arquivos_alvo: [], descricao: "" }];
     const evs: Evento[] = [];
     const r = await construir(base, "f", plano2, (e) => evs.push(e), [], undefined, fake([fim]).fn as any);
@@ -538,7 +538,7 @@ if (process.argv.includes("--selftest")) {
 
   // commit() faz stage: arquivo novo/editado pelo swarm entra no commit (antes dava "Command failed: git commit")
   await (async () => {
-    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "hermes-cm-"));
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), "dev-orchestra-cm-"));
     await fsp.writeFile(path.join(base, "a.txt"), "a\n");
     await baseline(base, "cm", nada);
     await fsp.writeFile(path.join(base, "novo.js"), "x\n");
@@ -561,7 +561,7 @@ const server = new McpServer({ name: "dev-orchestra", version: "3.0.0" });
 server.registerTool(
   "executar_orchestra",
   {
-    title: "Executar Orchestra (Hermes swarm)",
+    title: "Executar Orchestra (swarm)",
     description:
       "Implementa uma feature num diretorio via swarm DeepSeek (ASSINCRONA). O planejador monta SLICES e passa o plano; " +
       "cada slice roda em serie como um agente DeepSeek (le/edita arquivos e roda comandos de verificacao " +
@@ -643,7 +643,7 @@ server.registerTool(
 server.registerTool(
   "status_orchestra",
   {
-    title: "Status Orchestra (Hermes swarm)",
+    title: "Status Orchestra (swarm)",
     description:
       "Consulta o andamento de uma run assincrona iniciada por executar_orchestra. " +
       "Aguarda ate ~45s: se a run terminar, devolve o painel final; senao devolve as ultimas linhas e " +

@@ -1,7 +1,7 @@
 // Card Claude (F4 S6): o nodeType 'agente' usa ESTE card no lugar do card Agente quando o agente e'
 // tipo 'claude'. Um xterm (@xterm/xterm + fit) ligado ao PTY do hub: ao montar escreve o buffer de
 // GET /agentes/:id/pty (base64) e depois a saida ao vivo ({pty} do SSE); as teclas vao por POST
-// /agentes/:id/teclas (X-Hermes). O cabecalho mostra o ponto de status e o selo 'aguardando você'.
+// /agentes/:id/teclas (X-Dev-Orchestra). O cabecalho mostra o ponto de status e o selo 'aguardando você'.
 import { useContext, useEffect, useRef } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { Terminal } from "@xterm/xterm";
@@ -80,7 +80,7 @@ export function NoClaude({ id, data, selected }: NodeProps) {
       espera = setTimeout(() => {
         void fetch(`/agentes/${encodeURIComponent(agenteId)}/tamanho`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+          headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
           body: JSON.stringify({ cols: term.cols, rows: term.rows }),
         }).catch(() => {});
       }, 150);
@@ -91,7 +91,7 @@ export function NoClaude({ id, data, selected }: NodeProps) {
     const sub = term.onData((dados) => {
       void fetch(`/agentes/${encodeURIComponent(agenteId)}/teclas`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
         body: JSON.stringify({ dados }),
       }).catch(() => {});
     });

@@ -1,7 +1,7 @@
 // Card "Explorador" (F3 S5): um nodeType do xyflow para o no' tipo 'explorador' (dados.agenteId).
 // Mostra a arvore de arquivos do agente (GET /arvore?agente=) com pastas recolhiveis; com busca, uma
 // lista plana filtrada (filtrarArvore). Clicar num arquivo abre a previa (GET /arquivo?agente=&caminho=)
-// num Dialog; arrastar um arquivo (application/x-hermes-arquivo) solta no Canvas vira um card 'arquivo'.
+// num Dialog; arrastar um arquivo (application/x-dev-orchestra-arquivo) solta no Canvas vira um card 'arquivo'.
 import { useCallback, useContext, useEffect, useMemo, useState, type DragEvent } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { ChevronRight, Check, Copy, Ellipsis, FileText, Folder, FolderOpen, Pin, Search, X } from "lucide-react";
@@ -32,7 +32,7 @@ const MONO = "400 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, mono
 const MONO_PRE = "400 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 /** MIME do arrasto de arquivo do explorador para o canvas (lido no onDrop do Canvas). */
-export const MIME_ARQUIVO = "application/x-hermes-arquivo";
+export const MIME_ARQUIVO = "application/x-dev-orchestra-arquivo";
 
 const lerDados = (data: unknown): No => (data as { no: No }).no;
 

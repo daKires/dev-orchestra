@@ -197,9 +197,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
-  // Painel direito: largura/recolhido vivem no layout persistido (hermes.layout.canvas); `painel` espelha.
+  // Painel direito: largura/recolhido vivem no layout persistido (dev-orchestra.layout.canvas); `painel` espelha.
   const painelRef = usePanelRef();
-  const layout = useDefaultLayout({ id: "hermes.layout.canvas", storage: localStorage });
+  const layout = useDefaultLayout({ id: "dev-orchestra.layout.canvas", storage: localStorage });
   const [painel, setPainel] = useState(true);
   const [runSelId, setRunSelId] = useState<string | null>(null);
   const [abaPedida, setAbaPedida] = useState<{ runId: string; aba: string } | null>(null);

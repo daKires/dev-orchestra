@@ -37,8 +37,8 @@ export function useAgora(): number {
 // Estado de UI que sobrevive ao reload (per-viewer). Falha de storage = so nao persiste.
 export function useLocal<T>(chave: string, inicial: T): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {
-    try { const s = localStorage.getItem("hermes:" + chave); return s != null ? JSON.parse(s) : inicial; } catch { return inicial; }
+    try { const s = localStorage.getItem("dev-orchestra:" + chave); return s != null ? JSON.parse(s) : inicial; } catch { return inicial; }
   });
-  const set = (n: T) => { setV(n); try { localStorage.setItem("hermes:" + chave, JSON.stringify(n)); } catch {} };
+  const set = (n: T) => { setV(n); try { localStorage.setItem("dev-orchestra:" + chave, JSON.stringify(n)); } catch {} };
   return [v, set];
 }

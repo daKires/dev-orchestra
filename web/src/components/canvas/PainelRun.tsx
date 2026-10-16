@@ -227,7 +227,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
   const [sliceSel, setSliceSel] = useState<number | null>(null);
   const [abaInterna, setAbaInterna] = useState("feed");
   // Largura da lista de arquivos da aba Diff (persistida).
-  const layoutDiff = useDefaultLayout({ id: "hermes.layout.diff", storage: localStorage });
+  const layoutDiff = useDefaultLayout({ id: "dev-orchestra.layout.diff", storage: localStorage });
   const abaAtual = aba ?? abaInterna;
   const trocarAba = (v: string) => {
     if (aba === undefined) setAbaInterna(v);
@@ -253,7 +253,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
     try {
       const r = await fetch(`/runs/acao?run=${encodeURIComponent(run.id)}`, {
         method: "POST",
-        headers: { "X-Hermes": "1", "Content-Type": "application/json" },
+        headers: { "X-Dev-Orchestra": "1", "Content-Type": "application/json" },
         body: JSON.stringify({ acao: a }),
       });
       const j = (await r.json().catch(() => null)) as { ok?: boolean; base?: string; url?: string; erro?: string; conflitos?: string[] } | null;
@@ -267,7 +267,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
   const cancelar = async () => {
     setResultado(null);
     try {
-      const r = await fetch(`/cancel?run=${encodeURIComponent(run.id)}`, { method: "POST", headers: { "X-Hermes": "1" } });
+      const r = await fetch(`/cancel?run=${encodeURIComponent(run.id)}`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
       if (r.ok || r.status === 204) setResultado({ tipo: "cancelar", ok: true });
       else setResultado({ tipo: "cancelar", ok: false, erro: `O hub recusou o cancelamento (HTTP ${r.status}).` });
     } catch (e) {

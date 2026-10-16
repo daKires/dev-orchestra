@@ -30,7 +30,7 @@ type ResolverClaude = (
 
 /**
  * Cria o driver de PTY (adapta a API do node-pty a' interface esperada pelo hub). `repo` e' a raiz
- * do hermes-bridge, de onde sai o dist/claude-pty.js com o resolverClaude. Como o spawn e' sincrono,
+ * do dev-orchestra, de onde sai o dist/claude-pty.js com o resolverClaude. Como o spawn e' sincrono,
  * o modulo e' carregado uma vez na criacao: aguarde `carregar()` antes de usar o driver.
  */
 export function criarDriverPty(repo: string): PtyDriver {

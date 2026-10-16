@@ -1,4 +1,4 @@
-// Electron main (F4 S5): janela do app Hermes, ponte do preload e protecao das webviews.
+// Electron main (F4 S5): janela do app Dev Orchestra, ponte do preload e protecao das webviews.
 // Compilado pra dist-desktop/ (ESM: o package.json do repo e' "type": "module").
 import { app, BrowserWindow, dialog, type Session, type WebContents } from "electron";
 import fs from "node:fs";
@@ -8,11 +8,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { criarDriverCDP } from "./cdp.js";
 import { criarDriverPty } from "./pty.js";
 
-// dist-desktop/ (onde este arquivo compila) e o repo (pai de dist-desktop, ou HERMES_REPO).
+// dist-desktop/ (onde este arquivo compila) e o repo (pai de dist-desktop, ou DEV_ORCHESTRA_REPO).
 const DIR_DESKTOP = path.dirname(fileURLToPath(import.meta.url));
 // Empacotado, o pai de dist-desktop e' o app.asar: roda do app instalado (~/.dev-orchestra/app), igual ao MCP.
-let REPO = process.env.HERMES_REPO || (app.isPackaged ? path.join(os.homedir(), ".dev-orchestra", "app") : path.resolve(DIR_DESKTOP, ".."));
-const PORTA = process.env.HERMES_UI_PORT || "4123";
+let REPO = process.env.DEV_ORCHESTRA_REPO || (app.isPackaged ? path.join(os.homedir(), ".dev-orchestra", "app") : path.resolve(DIR_DESKTOP, ".."));
+const PORTA = process.env.DEV_ORCHESTRA_UI_PORT || "4123";
 
 // Drives injetados no hub (dist/ui.js -> iniciarUI): navegador por CDP e PTY dos agentes Claude.
 let navegador: ReturnType<typeof criarDriverCDP>; // criado depois do resolverRepo (precisa do repo)
@@ -21,8 +21,8 @@ let pty: ReturnType<typeof criarDriverPty>; // criado depois do resolverRepo (pr
 let janela: BrowserWindow | null = null;
 let focarAoCriar = false; // 2a instancia chegou antes da janela existir
 
-// Log do app instalado (sem console): %TEMP%/hermes-desktop.log, rotaciona em ~1MB.
-const ARQ_LOG = path.join(os.tmpdir(), "hermes-desktop.log");
+// Log do app instalado (sem console): %TEMP%/dev-orchestra-desktop.log, rotaciona em ~1MB.
+const ARQ_LOG = path.join(os.tmpdir(), "dev-orchestra-desktop.log");
 function log(msg: string): void {
   try {
     if (fs.existsSync(ARQ_LOG) && fs.statSync(ARQ_LOG).size > 1024 * 1024) fs.renameSync(ARQ_LOG, ARQ_LOG + ".1");
@@ -35,7 +35,7 @@ let ui: any = null; // modulo dist/ui.js (para chamar pararUI antes de sair)
 // Sessoes ja' observadas (uma unica vez cada) para cancelar downloads das webviews.
 const sessoesComDownload = new WeakSet<Session>();
 
-// Sobe o hub (dist/ui.js) na porta da UI, assumindo a porta de qualquer hub Hermes anterior.
+// Sobe o hub (dist/ui.js) na porta da UI, assumindo a porta de qualquer hub Dev Orchestra anterior.
 // Sem dist/ui.js no repo/local: o app nao tem o que rodar; avisa e sai (o usuario instala pelo npx).
 async function resolverRepo(): Promise<boolean> {
   if (fs.existsSync(path.join(REPO, "dist", "ui.js"))) return true;
@@ -90,12 +90,12 @@ async function criarJanela(): Promise<void> {
       nodeIntegration: false,
     },
   });
-  // 'will-attach-webview': toda webview nasce sem node e sem preload; so' particoes persist:hermes-.
+  // 'will-attach-webview': toda webview nasce sem node e sem preload; so' particoes persist:dev-orchestra-.
   janela.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     webPreferences.nodeIntegration = false;
     delete webPreferences.preload;
     const particao = String((params as Record<string, string>).partition ?? "");
-    if (!particao.startsWith("persist:hermes-")) event.preventDefault();
+    if (!particao.startsWith("persist:dev-orchestra-")) event.preventDefault();
   });
   // Fechar a janela = sair do app.
   janela.on("closed", () => {
@@ -152,7 +152,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch (e) {
       // Hub/janela indisponivel: nao deixa o app pendurado.
       log("falha ao iniciar: " + String((e as Error)?.message ?? e));
-      process.stderr.write("[hermes-desktop] falha ao iniciar: " + String((e as Error)?.message ?? e) + "\n");
+      process.stderr.write("[dev-orchestra-desktop] falha ao iniciar: " + String((e as Error)?.message ?? e) + "\n");
       app.quit();
     }
   });

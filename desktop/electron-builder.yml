@@ -1,5 +1,5 @@
-appId: dev.hermes.orchestra
-productName: Hermes
+appId: dev.orchestra.desktop
+productName: Dev Orchestra
 files:
   - dist-desktop/**
   - node_modules/@lydell/**

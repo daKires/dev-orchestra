@@ -48,10 +48,10 @@ function doProjeto(a: AgenteVisivel, projeto: string): boolean {
   return typeof p !== "string" || !p.trim() || canonico(p) === canonico(projeto);
 }
 
-/** POST de uma acao do agente: header X-Hermes: 1 + corpo JSON; falha de rede nao quebra a UI. */
+/** POST de uma acao do agente: header X-Dev-Orchestra: 1 + corpo JSON; falha de rede nao quebra a UI. */
 function post(id: string, acao: string, corpo: unknown): void {
   void fetch(`/agentes/${encodeURIComponent(id)}/${acao}`, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify(corpo),
+    method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify(corpo),
   }).catch(() => {});
 }
 
@@ -154,7 +154,7 @@ export function useAgentes(projeto: string): Agentes {
   const reiniciar = useCallback((id: string) => {
     if (!id) return;
     void fetch(`/agentes/${encodeURIComponent(id)}/reiniciar`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify({}),
+      method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify({}),
     })
       .then(() => {
         recarregar();

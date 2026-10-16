@@ -234,7 +234,7 @@ function NoWorker({ data, selected }: NodeProps) {
     try {
       const r = await fetch(`/runs/instrucao?run=${encodeURIComponent(runId)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
         body: JSON.stringify({ slice: idx, texto: campo }),
       });
       if (r.ok || r.status === 204) {
@@ -254,7 +254,7 @@ function NoWorker({ data, selected }: NodeProps) {
     try {
       const r = await fetch(`/runs/pausa?run=${encodeURIComponent(runId)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
         body: JSON.stringify(retomar ? { slice: idx, acao: "retomar", texto: campo } : { slice: idx, acao: "pausar" }),
       });
       if (r.ok || r.status === 204) {

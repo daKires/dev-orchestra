@@ -59,8 +59,8 @@ Some limits can be tuned with environment variables:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `HERMES_GATE_TIMEOUT_MS` | `900000` (15 min) | Timeout of the **gate** commands (typecheck/test). A full test suite can take more than 2 min, so the gate has its own timeout. |
-| `HERMES_CMD_TIMEOUT_MS` | `120000` (120s) | Timeout of the **agents' verification commands** (`rodar_comando`) and of the allowlist commands in the preflight. |
+| `DEV_ORCHESTRA_GATE_TIMEOUT_MS` | `900000` (15 min) | Timeout of the **gate** commands (typecheck/test). A full test suite can take more than 2 min, so the gate has its own timeout. |
+| `DEV_ORCHESTRA_CMD_TIMEOUT_MS` | `120000` (120s) | Timeout of the **agents' verification commands** (`rodar_comando`) and of the allowlist commands in the preflight. |
 
 ## Development
 

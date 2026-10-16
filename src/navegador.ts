@@ -87,7 +87,7 @@ export function nomeShot(nome: string, data: Date): string {
 
 /**
  * IIFE avaliada na pagina via `Runtime.evaluate`. Numera a partir de 1 os elementos
- * interativos VISIVEIS, marca cada um com `data-hermes-n` e devolve (JSON) o titulo, a url,
+ * interativos VISIVEIS, marca cada um com `data-orchestra-n` e devolve (JSON) o titulo, a url,
  * o texto da pagina e os elementos `{n, papel, rotulo}` (papel em PT, rotulo cortado em 80).
  */
 export const SCRIPT_LEITURA: string = String.raw`(() => {
@@ -127,7 +127,7 @@ export const SCRIPT_LEITURA: string = String.raw`(() => {
   for (const el of document.querySelectorAll(seletor)) {
     if (!visivel(el)) continue;
     n += 1;
-    el.setAttribute("data-hermes-n", String(n));
+    el.setAttribute("data-orchestra-n", String(n));
     elementos.push({ n, papel: papel(el), rotulo: rotulo(el) });
   }
   return JSON.stringify({

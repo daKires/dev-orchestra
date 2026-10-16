@@ -223,8 +223,9 @@ function lerEnvCombinado(home: string): Env {
 }
 
 // Env "extra" da propria ferramenta: pega o env da entrada antiga dela, tirando as 3 envs de
-// chave e HERMES_MODEL — o que sobra e' configuracao do usuario (ex.: HERMES_MAX_TURNS) e e'
-// preservado. Cada ferramenta usa o seu, nao o das outras.
+// chave e os MODEL — o que sobra e' configuracao do usuario (ex.: DEV_ORCHESTRA_MAX_TURNS) e e'
+// preservado. Cada ferramenta usa o seu, nao o das outras. Chaves legadas HERMES_X sao renomeadas
+// pra DEV_ORCHESTRA_X (sem sobrescrever o nome novo se ele ja' existir).
 function envExtraFerramenta(home: string, ferramenta: string): Env {
   let cru: Env = {};
   if (ferramenta === "claude") cru = lerClaudeEnv(home);
@@ -235,7 +236,13 @@ function envExtraFerramenta(home: string, ferramenta: string): Env {
 
   const extra: Env = {};
   for (const [k, v] of Object.entries(cru)) {
-    if (ENVS_CHAVE.includes(k) || k === "HERMES_MODEL") continue;
+    if (ENVS_CHAVE.includes(k) || k === "HERMES_MODEL" || k === "DEV_ORCHESTRA_MODEL") continue;
+    // Migra o nome legado: HERMES_X -> DEV_ORCHESTRA_X (mesmo sufixo), sem sobrescrever o novo.
+    if (k.startsWith("HERMES_")) {
+      const novo = "DEV_ORCHESTRA_" + k.slice("HERMES_".length);
+      if (!(novo in extra) && !(novo in cru)) extra[novo] = v;
+      continue;
+    }
     extra[k] = v;
   }
   return extra;
@@ -260,7 +267,8 @@ export function lerAtual(home: string): ConfigAtual {
     }
   }
   if (!provedor || !chave) return { provedor: null, modelo: null, chaveMascarada: null };
-  const modelo = typeof env.HERMES_MODEL === "string" && env.HERMES_MODEL ? env.HERMES_MODEL : null;
+  const modelo = typeof env.DEV_ORCHESTRA_MODEL === "string" && env.DEV_ORCHESTRA_MODEL ? env.DEV_ORCHESTRA_MODEL
+    : typeof env.HERMES_MODEL === "string" && env.HERMES_MODEL ? env.HERMES_MODEL : null;
   return { provedor, modelo, chaveMascarada: mascarar(chave) };
 }
 
@@ -483,7 +491,7 @@ export function salvar(home: string, cfg: ConfigSalvar): ResultadoSalvar {
     }
   }
 
-  // Env gravado no MCP: env extra da propria ferramenta + a chave do provedor escolhido + HERMES_MODEL.
+  // Env gravado no MCP: env extra da propria ferramenta + a chave do provedor escolhido + DEV_ORCHESTRA_MODEL.
   const ok: string[] = [];
   const erros: Record<string, string> = {};
 
@@ -493,7 +501,7 @@ export function salvar(home: string, cfg: ConfigSalvar): ResultadoSalvar {
       const env: Env = {
         ...envExtraFerramenta(home, ferramenta),
         [PROVEDORES[provedor].env]: chave,
-        HERMES_MODEL: modelo,
+        DEV_ORCHESTRA_MODEL: modelo,
       };
       gravarMcp(home, ferramenta, app, env, node);
       instalarSkills(home, skillsDir, ferramenta);

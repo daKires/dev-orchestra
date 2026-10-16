@@ -20,7 +20,7 @@ export type DriverCDP = {
 const ESPERA_CARREGAR_MS = 10_000;
 
 /**
- * Cria o driver CDP. `repo` e' a raiz do hermes-bridge (de onde sai o dist/navegador.js com o
+ * Cria o driver CDP. `repo` e' a raiz do dev-orchestra (de onde sai o dist/navegador.js com o
  * SCRIPT_LEITURA). Registra os handlers ipc usados pelo preload.
  */
 export function criarDriverCDP(repo: string): DriverCDP {
@@ -105,7 +105,7 @@ export function criarDriverCDP(repo: string): DriverCDP {
     const wc = wcDe(noId);
     await anexar(wc);
     const expr =
-      `(()=>{const e=document.querySelector('[data-hermes-n="${n}"]');` +
+      `(()=>{const e=document.querySelector('[data-orchestra-n="${n}"]');` +
       ` if(!e) throw new Error('elemento ${n} não encontrado');` +
       ` e.scrollIntoView({block:'center'}); e.click(); return true})()`;
     await avaliar(wc, expr);
@@ -117,7 +117,7 @@ export function criarDriverCDP(repo: string): DriverCDP {
     // Input.* do CDP nao chega numa <webview> dentro do canvas; execCommand('insertText') gera os
     // eventos de input reais (React/contenteditable ok). Enter: eventos de tecla + submit do form.
     const expr =
-      `(()=>{const e=document.querySelector('[data-hermes-n="${n}"]');` +
+      `(()=>{const e=document.querySelector('[data-orchestra-n="${n}"]');` +
       ` if(!e) throw new Error('elemento ${n} não encontrado');` +
       ` e.scrollIntoView({block:'center'}); e.focus();` +
       ` if(typeof e.select==='function') e.select(); else document.execCommand('selectAll');` +

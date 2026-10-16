@@ -27,7 +27,7 @@ export default function App() {
   const [arquivo, setArquivo] = useState<string | null>(null); // previa (ModalArquivo) de um arquivo sem diff
   const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
-  const layout = useDefaultLayout({ id: "hermes.layout.app", storage: localStorage });
+  const layout = useDefaultLayout({ id: "dev-orchestra.layout.app", storage: localStorage });
 
   const runSel = runSelId ? estado.runs[runSelId] ?? null : null;
 
@@ -87,8 +87,8 @@ export default function App() {
         {/* topbar da tela unida: projeto, branch da run mostrada e estado do hub */}
         <header className="flex h-10 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
           <span className="flex shrink-0 items-center gap-2 text-[13px] font-semibold tracking-tight">
-            <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">H</span>
-            Hermes <span className="font-normal text-muted-foreground">Orchestra</span>
+            <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">D</span>
+            Dev <span className="font-normal text-muted-foreground">Orchestra</span>
           </span>
           <ProjetoSeletor projeto={projeto ?? ""} onProjeto={setProjeto} />
           {runSel?.branch && (
