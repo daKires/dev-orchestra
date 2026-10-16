@@ -3,8 +3,8 @@
 // DEV_ORCHESTRA_NAO_ABRIR=1 nao abre o navegador.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { promises as fs, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { promises as fs, mkdirSync, mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,7 +52,7 @@ test("tela local: pagina em PT-BR, /estado e POST protegido (CA-7)", { timeout: 
   } finally { proc.kill(); }
 });
 
-test("salvar grava o MCP apontando pro clone, nao vaza a chave e encerra (CA-9/11)", { timeout: 60000 }, async () => {
+test("salvar instala a copia em ~/.dev-orchestra/app, aponta o MCP pra ela, nao vaza a chave e encerra", { timeout: 180000 }, async () => {
   const { proc, url, home, saida } = await subir();
   const saiu = new Promise<number | null>((ok) => proc.on("exit", ok));
   const chave = "sk-go-123456789abcd";
@@ -63,10 +63,38 @@ test("salvar grava o MCP apontando pro clone, nao vaza a chave e encerra (CA-9/1
   assert.deepEqual(j.erros, {});
   assert.equal(JSON.stringify(j).includes(chave), false, "resposta nao devolve a chave");
   const cfg = JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8"));
-  assert.deepEqual(cfg.mcpServers["dev-orchestra"].args, [path.join(RAIZ, "dist", "index.js")], "rodando do clone aponta pro clone");
+  const app = path.join(home, ".dev-orchestra", "app", "dist", "index.js");
+  assert.deepEqual(cfg.mcpServers["dev-orchestra"].args, [app], "MCP roda da copia, nunca do clone");
+  assert.ok(existsSync(app), "copia instalada");
+  assert.ok(existsSync(path.join(home, ".dev-orchestra", "app", "node_modules", "@modelcontextprotocol", "sdk")), "deps instaladas na copia");
   assert.equal(cfg.mcpServers["dev-orchestra"].env.OPENCODE_GO_API_KEY, chave);
   assert.ok(existsSync(path.join(home, ".claude", "skills", "orchestra", "SKILL.md")));
   const codigo = await Promise.race([saiu, new Promise((ok) => setTimeout(() => ok("timeout"), 5000))]);
   assert.equal(codigo, 0, "encerra depois de salvar");
   assert.equal(saida().includes(chave), false, "a chave nunca vai pro stdout/stderr");
+});
+
+test("--instalar atualiza a copia e reaponta as ferramentas ja' configuradas sem pedir a chave", { timeout: 180000 }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "s5-inst-"));
+  mkdirSync(path.join(home, ".claude"));
+  const chave = "sk-go-123456789abcd";
+  writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { "dev-orchestra": {
+    command: "node", args: [path.join(RAIZ, "dist", "index.js")], env: { OPENCODE_GO_API_KEY: chave, HERMES_MODEL: "glm-5.2", HERMES_MAX_TURNS: "9" } } } }));
+  const r = spawnSync(process.execPath, [BIN, "--instalar"], {
+    env: { ...process.env, USERPROFILE: home, HOME: home, DEV_ORCHESTRA_NAO_ABRIR: "1" }, encoding: "utf8",
+  });
+  const saida = (r.stdout ?? "") + (r.stderr ?? "");
+  assert.equal(r.status, 0, saida);
+  const mcp = JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8")).mcpServers["dev-orchestra"];
+  assert.deepEqual(mcp.args, [path.join(home, ".dev-orchestra", "app", "dist", "index.js")]);
+  assert.deepEqual(mcp.env, { HERMES_MAX_TURNS: "9", OPENCODE_GO_API_KEY: chave, HERMES_MODEL: "glm-5.2" }, "chave, modelo e env extra mantidos");
+  assert.ok(existsSync(path.join(home, ".claude", "skills", "orchestra", "SKILL.md")), "skill reinstalada");
+  assert.equal(saida.includes(chave), false, "a chave nunca vai pro stdout/stderr");
+});
+
+test("--instalar sem nada configurado explica e sai com erro", { timeout: 60000 }, () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "s5-vazio-"));
+  const r = spawnSync(process.execPath, [BIN, "--instalar"], { env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: "utf8" });
+  assert.notEqual(r.status, 0);
+  assert.match((r.stdout ?? "") + (r.stderr ?? ""), /npx dev-orchestra|npm run instalar/);
 });

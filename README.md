@@ -64,8 +64,13 @@ git clone https://github.com/daKires/dev-orchestra.git
 cd dev-orchestra
 npm install
 npm run build
-node bin/dev-orchestra.mjs   # runs the setup screen pointing at this clone
+node bin/dev-orchestra.mjs   # setup screen (first time)
 ```
+
+The tools never run the MCP from the clone: the installer copies the app to `~/.dev-orchestra/app`,
+so `git` and builds in the clone don't affect what is running. After changing the code, publish it to
+your tools with `npm run instalar` (build + copy + re-point the configured tools, keeping provider,
+model and key) and restart them.
 
 ## Desktop app (optional)
 

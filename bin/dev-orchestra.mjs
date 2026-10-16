@@ -9,7 +9,7 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { detectar, lerAtual, PROVEDORES, testarChave, salvar, localDoApp, copiarApp } from "../dist/setup.js";
+import { detectar, lerAtual, PROVEDORES, testarChave, salvar, localDoApp, copiarApp, ferramentasConfiguradas } from "../dist/setup.js";
 
 // pacote = a pasta acima de bin/ (a raiz do pacote publicado ou do clone).
 const BIN = path.dirname(fileURLToPath(import.meta.url));
@@ -128,6 +128,48 @@ async function tratarTestar(corpo, res) {
   responderJson(res, 200, resultado);
 }
 
+// Copia o app pra ~/.dev-orchestra/app e instala as deps de producao la'. Devolve o dist/index.js
+// que o MCP de cada ferramenta vai rodar.
+function instalarApp() {
+  const app = localDoApp(HOME);
+  const pastaApp = path.dirname(path.dirname(app));
+  try {
+    copiarApp(PACOTE, pastaApp);
+  } catch (e) {
+    throw new Error(`Falha ao copiar o app pra ${pastaApp}: ${msgErro(e)}`);
+  }
+  const inst = spawnSync("npm install --omit=dev --prefer-offline --no-audit --no-fund", { cwd: pastaApp, shell: true, encoding: "utf8" });
+  if (inst.status !== 0) {
+    const saida = `${inst.stderr ?? ""}${inst.stdout ?? ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
+    const detalhe = inst.error ? msgErro(inst.error) : saida || `npm install saiu com codigo ${inst.status}`;
+    throw new Error(`Falha ao instalar as dependencias: ${detalhe}`);
+  }
+  return app;
+}
+
+// `--instalar` (npm run instalar): atualiza a copia e reaponta as ferramentas ja' configuradas,
+// mantendo provedor, modelo e chave. Sem tela.
+function instalarSemTela() {
+  const atual = lerAtual(HOME);
+  const ferramentas = ferramentasConfiguradas(HOME);
+  if (!atual.provedor || !atual.modelo || ferramentas.length === 0) {
+    console.error("dev-orchestra: nada configurado ainda. Rode `npx dev-orchestra` (ou node bin/dev-orchestra.mjs) uma vez pela tela.");
+    process.exit(1);
+  }
+  try {
+    const app = instalarApp();
+    const r = salvar(HOME, { provedor: atual.provedor, modelo: atual.modelo, chave: "", ferramentas, app, skillsDir: SKILLS, perfis: perfisPowerShell() });
+    for (const [f, erro] of Object.entries(r.erros)) console.error(`dev-orchestra: ${f}: ${erro}`);
+    console.log(`dev-orchestra: app instalado em ${path.dirname(path.dirname(app))}; atualizado em ${r.ok.join(", ") || "nenhuma ferramenta"}. Reinicie as ferramentas pra pegar a versao nova.`);
+    process.exit(Object.keys(r.erros).length ? 1 : 0);
+  } catch (e) {
+    console.error(`dev-orchestra: ${msgErro(e)}`);
+    process.exit(1);
+  }
+}
+
+if (process.argv.includes("--instalar")) instalarSemTela();
+
 async function tratarSalvar(corpo, res) {
   const provedor = typeof corpo?.provedor === "string" ? corpo.provedor : "";
   const modelo = typeof corpo?.modelo === "string" ? corpo.modelo.trim() : "";
@@ -136,23 +178,12 @@ async function tratarSalvar(corpo, res) {
     ? corpo.ferramentas.filter((f) => typeof f === "string")
     : [];
 
-  // Clone git: roda do proprio clone. Pacote do npx: copia pra ~/.dev-orchestra/app e instala as deps.
-  const loc = localDoApp(PACOTE, HOME);
-  if (loc.copiar) {
-    const pastaApp = path.dirname(path.dirname(loc.app));
-    try {
-      copiarApp(PACOTE, pastaApp);
-    } catch (e) {
-      responderJson(res, 500, { erro: `Falha ao copiar o app pra ${pastaApp}: ${msgErro(e)}` });
-      return;
-    }
-    const inst = spawnSync("npm install --omit=dev", { cwd: pastaApp, shell: true, encoding: "utf8" });
-    if (inst.status !== 0) {
-      const saida = `${inst.stderr ?? ""}${inst.stdout ?? ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
-      const detalhe = inst.error ? msgErro(inst.error) : saida || `npm install saiu com codigo ${inst.status}`;
-      responderJson(res, 500, { erro: `Falha ao instalar as dependencias: ${detalhe}` });
-      return;
-    }
+  let app;
+  try {
+    app = instalarApp();
+  } catch (e) {
+    responderJson(res, 500, { erro: msgErro(e) });
+    return;
   }
 
   let resultado;
@@ -162,7 +193,7 @@ async function tratarSalvar(corpo, res) {
       modelo,
       chave,
       ferramentas,
-      app: loc.app,
+      app,
       skillsDir: SKILLS,
       perfis: perfisPowerShell(),
     });
