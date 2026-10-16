@@ -211,9 +211,23 @@ async function tratarSalvar(corpo, res) {
   }
 }
 
+// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele.
+function hostLocal(cabecalho, porta) {
+  const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
+  if (typeof h !== "string") return false;
+  const alvo = h.toLowerCase();
+  return alvo === `127.0.0.1:${porta}` || alvo === `localhost:${porta}`;
+}
+
 const servidor = http.createServer((req, res) => {
   Promise.resolve()
     .then(async () => {
+      const endereco = servidor.address();
+      const porta = typeof endereco === "object" && endereco ? endereco.port : 0;
+      if (!hostLocal(req.headers.host, porta)) {
+        respostaTexto(res, 403, "Host nao permitido");
+        return;
+      }
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const rota = url.pathname;
 

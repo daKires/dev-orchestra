@@ -21,6 +21,7 @@
     "build": "tsc && npm --prefix web run build",
     "instalar": "npm run build && node bin/dev-orchestra.mjs --instalar",
     "typecheck": "tsc --noEmit",
+    "t": "tsc && tsc -p tsconfig.test.json && node --test --test-concurrency=1",
     "test": "npm run build && node -e \"fs.rmSync('.teste',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node dist/index.js --selftest && node --test --test-concurrency=1 \".teste/*.test.js\" && npm --prefix web test",
     "desktop:build": "tsc -p desktop/tsconfig.json",
     "desktop:dev": "npm run build && npm run desktop:build && electron dist-desktop/main.js",

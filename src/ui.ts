@@ -350,6 +350,14 @@ function acaoValida(req: http.IncomingMessage): boolean {
 
 function broadcast(dado: unknown): void { for (const c of clientes) sse(c, dado); }
 
+// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele (e o X-Hermes).
+export function hostLocal(cabecalho: string | string[] | undefined, porta: number): boolean {
+  const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
+  if (typeof h !== "string") return false;
+  const alvo = h.toLowerCase();
+  return alvo === "127.0.0.1:" + porta || alvo === "localhost:" + porta;
+}
+
 // ---- canvas (S2): grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
 const LIMITE_BODY_CANVAS = 2 * 1024 * 1024;        // 2MB: lotes de ops
 const LIMITE_BODY_CANVAS_ASSET = 40 * 1024 * 1024; // 40MB: imagem em base64 (infla ~33%)
@@ -476,7 +484,11 @@ function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
   const alvo = path.join(CANVAS_DIR, id, "assets", arquivo);
   fs.readFile(alvo, (err, buf) => {
     if (err) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream" });
+    // sandbox: SVG aberto direto nao roda script na origem do hub.
+    res.writeHead(200, {
+      "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream",
+      "Content-Security-Policy": "sandbox",
+    });
     res.end(buf);
   });
 }
@@ -1323,6 +1335,11 @@ function criarServidor(): http.Server {
   return http.createServer(async (req, res) => {
     const url = req.url || "/";
     const caminho = url.split("?")[0];
+    if (!hostLocal(req.headers.host, req.socket.localPort ?? PORT)) {
+      res.shouldKeepAlive = false;
+      responderTexto(res, 403, "Host nao permitido");
+      return;
+    }
     if (url === "/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       res.write(": conectado\n\n");

@@ -1,5 +1,28 @@
 // Agentes Claude Code via PTY (F4 S1): logica PURA (CA-4d, 4e, 4f).
 // Roda com `node --experimental-strip-types`: apenas imports de `node:`; sem enum/namespace.
+import path from "node:path";
+
+/**
+ * `claude` a partir da saida do `where`, sem shell que reinterprete `& | > ^ % "`: o .exe nativo vence;
+ * senao o shim .cmd do npm vira node + cli.js do pacote; nada -> null.
+ */
+export function resolverClaude(
+  saidaWhere: string,
+  existe: (p: string) => boolean,
+  execPath: string,
+): { comando: string; args: string[] } | null {
+  const linhas = saidaWhere.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const exe = linhas.find((l) => /\.exe$/i.test(l));
+  if (exe) return { comando: exe, args: [] };
+  const shim = linhas.find((l) => /\.cmd$/i.test(l));
+  if (shim) {
+    // path.dirname e' platform-specific; a pasta do shim sai cortando o ultimo separador (\ ou /).
+    const pasta = shim.replace(/[\\/][^\\/]*$/, "");
+    const cli = path.join(pasta, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    if (existe(cli)) return { comando: execPath, args: [cli] };
+  }
+  return null;
+}
 
 // Argumentos do processo `claude` (CA-4d, 4h)
 
