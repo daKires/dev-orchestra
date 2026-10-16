@@ -17,7 +17,7 @@ const PORTA = process.env.HERMES_UI_PORT || "4123";
 
 // Drives injetados no hub (dist/ui.js -> iniciarUI): navegador por CDP e PTY dos agentes Claude.
 let navegador: ReturnType<typeof criarDriverCDP>; // criado depois do resolverRepo (precisa do repo)
-const pty = criarDriverPty();
+let pty: ReturnType<typeof criarDriverPty>; // criado depois do resolverRepo (precisa do repo)
 
 let janela: BrowserWindow | null = null;
 let focarAoCriar = false; // 2a instancia chegou antes da janela existir
@@ -55,6 +55,9 @@ async function resolverRepo(): Promise<boolean> {
 
 async function subirHub(): Promise<void> {
   navegador = criarDriverCDP(REPO);
+  pty = criarDriverPty(REPO);
+  // O resolverClaude (dist/claude-pty.js) precisa estar carregado antes de qualquer spawn (sincrono).
+  await pty.carregar();
   ui = await import(pathToFileURL(path.join(REPO, "dist", "ui.js")).href);
   await ui.iniciarUI({ sempreAssumir: true, navegador, pty });
 }

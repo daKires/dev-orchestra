@@ -350,6 +350,16 @@ function acaoValida(req: http.IncomingMessage): boolean {
 
 function broadcast(dado: unknown): void { for (const c of clientes) sse(c, dado); }
 
+// S1: barra DNS rebinding. Uma pagina de dominio alheio que resolve pra 127.0.0.1 vira "mesma origem"
+// pro browser e chega aqui com o Host do dominio DELA (e o header X-Hermes). So' aceita EXATAMENTE
+// 127.0.0.1:<porta> ou localhost:<porta> (case-insensitive): qualquer outro Host -> 403, antes de rota.
+export function hostLocal(cabecalho: string | string[] | undefined, porta: number): boolean {
+  const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
+  if (typeof h !== "string") return false;
+  const alvo = h.toLowerCase();
+  return alvo === "127.0.0.1:" + porta || alvo === "localhost:" + porta;
+}
+
 // ---- canvas (S2): grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
 const LIMITE_BODY_CANVAS = 2 * 1024 * 1024;        // 2MB: lotes de ops
 const LIMITE_BODY_CANVAS_ASSET = 40 * 1024 * 1024; // 40MB: imagem em base64 (infla ~33%)
@@ -476,7 +486,11 @@ function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
   const alvo = path.join(CANVAS_DIR, id, "assets", arquivo);
   fs.readFile(alvo, (err, buf) => {
     if (err) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream" });
+    // S2: 'sandbox' neutraliza script em SVG aberto direto (asset nao roda na origem do hub).
+    res.writeHead(200, {
+      "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream",
+      "Content-Security-Policy": "sandbox",
+    });
     res.end(buf);
   });
 }
@@ -1323,6 +1337,13 @@ function criarServidor(): http.Server {
   return http.createServer(async (req, res) => {
     const url = req.url || "/";
     const caminho = url.split("?")[0];
+    // S1: ANTES de qualquer rota (inclusive /events, /versao, /ceder e o estatico), o Host tem que ser
+    // o local; Host alheio -> 403 e a conexao encerra (DNS rebinding nao chega nem a ler o estado).
+    if (!hostLocal(req.headers.host, req.socket.localPort ?? PORT)) {
+      res.shouldKeepAlive = false;
+      responderTexto(res, 403, "Host nao permitido");
+      return;
+    }
     if (url === "/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       res.write(": conectado\n\n");

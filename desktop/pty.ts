@@ -1,6 +1,10 @@
 // Driver de PTY (F4 S3/S5): abre processos com um pseudo-terminal via @lydell/node-pty.
 // Usado pelo hub (iniciarUI -> POST /agentes tipo 'claude') para rodar o `claude` dentro de um PTY.
 import * as pty from "@lydell/node-pty";
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 export type PtyProc = {
   pid: number;
@@ -13,16 +17,46 @@ export type PtyProc = {
 
 export type PtyDriver = {
   spawn(opts: { comando: string; args: string[]; cwd: string; env: Record<string, string | undefined>; cols?: number; rows?: number }): PtyProc;
+  /** Resolve quando o modulo dist/claude-pty.js (resolverClaude) ja' esta' carregado. */
+  carregar(): Promise<void>;
 };
 
-/** Cria o driver de PTY (adapta a API do node-pty a' interface esperada pelo hub). */
-export function criarDriverPty(): PtyDriver {
+// Forma de resolverClaude de src/claude-pty.ts (compilado em dist/ e carregado em runtime).
+type ResolverClaude = (
+  saidaWhere: string,
+  existe: (p: string) => boolean,
+  execPath: string,
+) => { comando: string; args: string[] } | null;
+
+/**
+ * Cria o driver de PTY (adapta a API do node-pty a' interface esperada pelo hub). `repo` e' a raiz
+ * do hermes-bridge, de onde sai o dist/claude-pty.js com o resolverClaude. Como o spawn e' sincrono,
+ * o modulo e' carregado uma vez na criacao: aguarde `carregar()` antes de usar o driver.
+ */
+export function criarDriverPty(repo: string): PtyDriver {
+  let mod: { resolverClaude: ResolverClaude } | null = null;
+  const carregando = import(pathToFileURL(path.join(repo, "dist", "claude-pty.js")).href).then((m: any) => {
+    mod = m as { resolverClaude: ResolverClaude };
+  });
+
   return {
+    carregar: () => carregando,
     spawn(opts): PtyProc {
-      const win = process.platform === "win32";
-      // No Windows o `claude` e' um .cmd: precisa de cmd.exe /c pra ser executado.
-      const arquivo = win ? "cmd.exe" : opts.comando;
-      const args = win ? ["/c", opts.comando, ...opts.args] : opts.args;
+      let arquivo = opts.comando;
+      let args = opts.args;
+      if (process.platform === "win32") {
+        // `where` acha o claude real sem passar por um shell que reinterprete & | > ^ % ".
+        let saida = "";
+        try {
+          saida = execFileSync("where", [opts.comando], { encoding: "utf8", windowsHide: true });
+        } catch {
+          saida = "";
+        }
+        const r = mod ? mod.resolverClaude(saida, fs.existsSync, process.execPath) : null;
+        if (!r) throw new Error("claude não encontrado no PATH");
+        arquivo = r.comando;
+        args = [...r.args, ...opts.args];
+      }
       const p = pty.spawn(arquivo, args, {
         name: "xterm-256color",
         cols: opts.cols ?? 120,
