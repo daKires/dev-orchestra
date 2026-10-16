@@ -136,7 +136,7 @@ test("agente Claude: spawn com identidade/hooks/PATH, teclas, saida no SSE, stat
   assert.ok(args[iPrompt + 1].includes(`.orchestra/contexto/${id}/README.md`), "manda ler o contexto");
   assert.deepEqual(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2), ["--model", "sonnet"]);
   const settings = JSON.parse(await fs.readFile(args[args.indexOf("--settings") + 1], "utf8"));
-  assert.equal(settings.hooks.Stop[0].hooks[0].command, `canvas --eu ${id}:${tok} status ocioso`);
+  assert.equal(settings.hooks.Stop[0].hooks[0].command, `"${process.execPath.replace(/\\/g, "/")}" "${path.resolve(process.cwd(), "bin", "canvas.mjs").replace(/\\/g, "/")}" --eu ${id}:${tok} status ocioso`, "node + canvas.mjs absolutos");
 
   const lista = async () => (await (await fetch(`${BASE}/agentes?projeto=${encodeURIComponent(projeto)}`)).json()) as Array<{ id: string; tipo: string; status: string; ocupado: boolean }>;
   assert.equal((await lista()).find((a) => a.id === id)!.tipo, "claude");

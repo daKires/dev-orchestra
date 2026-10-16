@@ -14,12 +14,12 @@ test("MODELOS_CLAUDE: padrao + opus/sonnet/haiku (CA-5)", () => {
   assert.deepEqual(MODELOS_CLAUDE, ["", "opus", "sonnet", "haiku"]);
 });
 
-test("settingsHooks: UserPromptSubmit/Stop/Notification chamam canvas status com a identidade (CA-4e)", () => {
-  const s = settingsHooks("ag-1", "tok");
+test("settingsHooks: hooks chamam node + canvas.mjs absolutos (barras /) com a identidade (CA-4e, PR2 CA-7)", () => {
+  const s = (settingsHooks as any)("ag-1", "tok", "C:\\n\\node.exe", "D:\\a\\bin\\canvas.mjs");
   const cmd = (ev: string) => (s.hooks as any)[ev][0].hooks[0];
-  assert.deepEqual(cmd("UserPromptSubmit"), { type: "command", command: "canvas --eu ag-1:tok status ocupado" });
-  assert.deepEqual(cmd("Stop"), { type: "command", command: "canvas --eu ag-1:tok status ocioso" });
-  assert.deepEqual(cmd("Notification"), { type: "command", command: "canvas --eu ag-1:tok status aguardando" });
+  assert.deepEqual(cmd("UserPromptSubmit"), { type: "command", command: "\"C:/n/node.exe\" \"D:/a/bin/canvas.mjs\" --eu ag-1:tok status ocupado" });
+  assert.deepEqual(cmd("Stop"), { type: "command", command: "\"C:/n/node.exe\" \"D:/a/bin/canvas.mjs\" --eu ag-1:tok status ocioso" });
+  assert.deepEqual(cmd("Notification"), { type: "command", command: "\"C:/n/node.exe\" \"D:/a/bin/canvas.mjs\" --eu ag-1:tok status aguardando" });
   for (const ev of ["UserPromptSubmit", "Stop"]) assert.equal((s.hooks as any)[ev][0].matcher, "");
   assert.equal((s.hooks as any).Notification[0].matcher, "permission_prompt", "inatividade/login nao travam a fila");
   assert.deepEqual(Object.keys(s.hooks).sort(), ["Notification", "Stop", "UserPromptSubmit"]);

@@ -72,7 +72,7 @@ test("Claude Code: grava dev-orchestra, remove hermes-bridge, preserva env extra
   assert.deepEqual(j.mcpServers.outro, antes.mcpServers.outro);
   assert.equal("hermes-bridge" in j.mcpServers, false);
   assert.deepEqual(j.mcpServers["dev-orchestra"], {
-    type: "stdio", command: "node", args: [APP],
+    type: "stdio", command: process.execPath, args: [APP],
     env: { HERMES_MAX_TURNS: "100", OPENCODE_GO_API_KEY: "sk-go-123456789abcd", HERMES_MODEL: "glm-5.2" },
   }, "chave de outro provedor sai (senao a prioridade do bridge escolheria ela)");
   assert.deepEqual(json(arq + ".bak-dev-orchestra"), antes);
@@ -89,10 +89,10 @@ test("OpenCode, Cursor e Antigravity (2 caminhos) no formato de cada um (CA-9)",
   const o = json(oc);
   assert.equal(o.$schema, "https://opencode.ai/config.json");
   assert.equal("hermes-bridge" in o.mcp, false);
-  assert.deepEqual(o.mcp["dev-orchestra"], { type: "local", command: ["node", APP], environment: { HERMES_MAX_TURNS: "50", ...env }, enabled: true });
-  assert.deepEqual(json(path.join(home, ".cursor", "mcp.json")).mcpServers["dev-orchestra"], { command: "node", args: [APP], env });
+  assert.deepEqual(o.mcp["dev-orchestra"], { type: "local", command: [process.execPath, APP], environment: { HERMES_MAX_TURNS: "50", ...env }, enabled: true });
+  assert.deepEqual(json(path.join(home, ".cursor", "mcp.json")).mcpServers["dev-orchestra"], { command: process.execPath, args: [APP], env });
   for (const p of [path.join(home, ".gemini", "config", "mcp_config.json"), path.join(home, ".gemini", "antigravity", "mcp_config.json")])
-    assert.deepEqual(json(p).mcpServers["dev-orchestra"], { command: "node", args: [APP], env }, p);
+    assert.deepEqual(json(p).mcpServers["dev-orchestra"], { command: process.execPath, args: [APP], env }, p);
 });
 
 test("Codex: bloco TOML proprio, idempotente, sem mexer no resto do arquivo (CA-9)", async () => {
@@ -108,7 +108,7 @@ test("Codex: bloco TOML proprio, idempotente, sem mexer no resto do arquivo (CA-
   assert.match(t, /\[mcp_servers\.outro\]\ncommand = "x"/);
   assert.equal(t.split("[mcp_servers.dev-orchestra]").length - 1, 1, "um bloco so'");
   assert.equal(t.split("[mcp_servers.dev-orchestra.env]").length - 1, 1);
-  assert.match(t, /\[mcp_servers\.dev-orchestra\]\ncommand = "node"\nargs = \["C:\\\\x\\\\dev-orchestra\\\\dist\\\\index\.js"\]/);
+  assert.ok(t.includes(`[mcp_servers.dev-orchestra]\ncommand = "${process.execPath.replace(/\\/g, "\\\\")}"\nargs = ["C:\\\\x\\\\dev-orchestra\\\\dist\\\\index.js"]`), "node absoluto no Codex");
   assert.match(t, /OPENROUTER_API_KEY = "sk-or-v1-abcdefgh"/);
   assert.match(t, /HERMES_MODEL = "deepseek\/deepseek-v4\.1-flash"/);
   assert.ok(existsSync(toml + ".bak-dev-orchestra"));
