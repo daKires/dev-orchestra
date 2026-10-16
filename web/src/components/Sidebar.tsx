@@ -6,6 +6,8 @@ import { kpis, progresso, runsDoProjeto, statusVisivel, type Estado, type Run } 
 import { fmtIdade, fmtUSD, tomStatus } from "@/lib/formato";
 import { agentesDoPool, badgesArquivos, type Badge } from "@/lib/unido";
 import { cn } from "@/lib/utils";
+import { useDefaultLayout } from "react-resizable-panels";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { PontoStatus } from "./StatusIcon";
 
 type AgenteSidebar = { id: string; nome: string; modelo: string; ocupado: boolean; status: string };
@@ -64,6 +66,9 @@ export function Sidebar(p: Props) {
     return () => { vivo = false; };
   }, [p.projeto]);
 
+  // Alturas das 3 secoes (3:2:2 por padrao), persistidas; cada uma guarda ao menos o cabecalho (32px).
+  const layout = useDefaultLayout({ id: "hermes.layout.sidebar", storage: localStorage });
+
   const arvore = useMemo(() => arvoreDeCaminhos(caminhos), [caminhos]);
   const estaAberta = (caminho: string): boolean => abertos.get(caminho) ?? profundidade(caminho) < 2;
   const alternarPasta = (caminho: string) => {
@@ -72,9 +77,13 @@ export function Sidebar(p: Props) {
   };
 
   return (
-    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+    <ResizablePanelGroup
+      orientation="vertical" className="bg-sidebar text-sidebar-foreground"
+      defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}
+    >
       {/* (a) Explorador do projeto */}
-      <section className="flex min-h-0 flex-[3] flex-col border-b border-sidebar-border">
+      <ResizablePanel id="explorador" defaultSize="43" minSize={32}>
+      <section className="flex h-full min-h-0 flex-col">
         <div className={ROTULO}>
           <span className="truncate" title={`Explorador · ${p.projeto}`}>
             Explorador · {p.projeto ? nomePasta(p.projeto) : "—"}
@@ -94,9 +103,12 @@ export function Sidebar(p: Props) {
               ))}
         </div>
       </section>
+      </ResizablePanel>
+      <ResizableHandle />
 
       {/* (b) Runs recentes */}
-      <section className="flex min-h-0 flex-[2] flex-col border-b border-sidebar-border">
+      <ResizablePanel id="runs" defaultSize="29" minSize={32}>
+      <section className="flex h-full min-h-0 flex-col">
         <div className={ROTULO}>
           <span>Runs recentes</span>
           <span className="shrink-0 pl-2 font-normal tracking-normal">{runs.length}</span>
@@ -135,9 +147,12 @@ export function Sidebar(p: Props) {
           })}
         </div>
       </section>
+      </ResizablePanel>
+      <ResizableHandle />
 
       {/* (c) Pool de agentes */}
-      <section className="flex min-h-0 flex-[2] flex-col">
+      <ResizablePanel id="pool" defaultSize="28" minSize={32}>
+      <section className="flex h-full min-h-0 flex-col">
         <div className={ROTULO}>
           <span>Pool de agentes</span>
           <span className="shrink-0 pl-2 font-normal tracking-normal">{pool.length}</span>
@@ -162,7 +177,8 @@ export function Sidebar(p: Props) {
           ))}
         </div>
       </section>
-    </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 

@@ -1,6 +1,6 @@
 // Casca da tela unica: topbar, sidebar, canvas (com o painel direito) e status bar.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePanelRef } from "react-resizable-panels";
+import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/Sidebar";
@@ -27,6 +27,7 @@ export default function App() {
   const [arquivo, setArquivo] = useState<string | null>(null); // previa (ModalArquivo) de um arquivo sem diff
   const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
+  const layout = useDefaultLayout({ id: "hermes.layout.app", storage: localStorage });
 
   const runSel = runSelId ? estado.runs[runSelId] ?? null : null;
 
@@ -101,9 +102,9 @@ export default function App() {
         </header>
 
         <div className="min-h-0 flex-1">
-          <ResizablePanelGroup orientation="horizontal">
+          <ResizablePanelGroup orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
             <ResizablePanel
-              id="sidebar" panelRef={lateral}
+              id="sidebar" panelRef={lateral} className="overflow-hidden"
               defaultSize={280} minSize={200} maxSize="45" collapsible collapsedSize={0}
             >
               <Sidebar
