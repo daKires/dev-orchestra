@@ -6,3 +6,4 @@ release/
 .orchestra/
 .teste/
 dist/
+web/tsconfig.tsbuildinfo
