@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { aplicar, vazio, type Msg, type Run } from "./estado.ts";
 import { layoutRuns, semOutrasRuns } from "./layout.ts";
 import { runEmFoco, runsNovas } from "./unido.ts";
-import type { No } from "../../../canvas.ts";
+import type { No } from "../../../src/canvas.ts";
 
 const T = 1_000_000;
 function runDe(id: string, ts = T, fim = true): Run {

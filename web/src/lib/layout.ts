@@ -1,7 +1,7 @@
 // Layout automatico de runs e agentes no canvas (F2 S4; Run B: run expandida em 3 fases).
 // PURO: sem React, sem DOM. Tipos do hub e do modelo entram so' como `import type` (apagados na
 // compilacao, nao vao pro bundle).
-import type { No, Snapshot } from "../../../canvas.ts";
+import type { No, Snapshot } from "../../../src/canvas.ts";
 import type { Run, SliceEstado } from "./estado.ts";
 
 

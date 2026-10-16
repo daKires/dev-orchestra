@@ -1,7 +1,7 @@
 // Logica pura do canvas no front (S3): a mesma base do modelo do hub (S1), mas reimplementada aqui
 // para rodar no browser. NUNCA importamos nada de RUNTIME do hub: o modulo do hub usa node:crypto e
 // nao vai pro bundle do browser — so' tipos entram, via `import type` (apagado na compilacao).
-import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../canvas.ts";
+import type { No, Aresta, Op, Snapshot, TipoNo } from "../../../src/canvas.ts";
 
 // Aplicacao de operacoes (mesma regra de conflito do hub)
 

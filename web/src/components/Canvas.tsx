@@ -22,7 +22,7 @@ import { runAtiva, runDaSelecao, runEmFoco } from "@/lib/unido";
 import { useAgentes } from "@/hooks/useAgentes";
 import { useAgora, useRuns } from "@/hooks/useRuns";
 import { useCanvas } from "@/hooks/useCanvas";
-import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../canvas.ts";
+import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../src/canvas.ts";
 import { PainelRun } from "./canvas/PainelRun";
 import { CanvasCtx, edgeTypes, nodeTypes as nosNodeTypes } from "./canvas/Nos";
 import { AgentesCtx, NoAgente } from "./canvas/Agente";

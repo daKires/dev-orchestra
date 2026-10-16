@@ -17,7 +17,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 // Contexto: acoes que os cards/arestas chamam de volta pro Canvas
 

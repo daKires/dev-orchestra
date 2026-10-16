@@ -1,55 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "ES2022"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ES2022"],
+    "types": ["node"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "src",
+    "declaration": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": [
-    "index.ts",
-    "runs.ts",
-    "runs.test.ts",
-    "guarda-escrita.test.ts",
-    "s1-sem-reparo.test.ts",
-    "s2-sem-feature.test.ts",
-    "s3-dashboard.test.ts",
-    "setup.ts",
-    "s4-setup.test.ts",
-    "s5-cli.test.ts",
-    "s6-pacote.test.ts",
-    "s7-gate-timeout.test.ts",
-    
-    "hub.test.ts",
-    
-    
-    "ui-assumir.test.ts",
-    
-    "ui-canvas.test.ts",
-    "ui-agentes.test.ts",
-    "ui-agentes-f21.test.ts",
-    "ui-agentes-reconecta.test.ts",
-    "ui-agentes-reiniciar.test.ts",
-    "ui-cli.test.ts",
-    "ui-ceder.test.ts",
-    "ui-browser.test.ts",
-    "ui-claude.test.ts",
-    "ui-claude-env.test.ts",
-    "ui-acoes-run.test.ts",
-    
-    "ui-g3.test.ts",
-    "g3-agente.test.ts",
-    "ui-arvore-projeto.test.ts",
-    "acoes-run.ts"
-  ]
+  "include": ["src"]
 }

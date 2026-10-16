@@ -17,7 +17,7 @@ import { StatusIcon } from "@/components/StatusIcon";
 import { Alcas } from "./Nos";
 import { AgentesCtx } from "./Agente";
 import { ModalArquivo } from "./Explorador";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 
 export const RunsCtx = createContext<{

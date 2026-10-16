@@ -12,7 +12,7 @@ import { Alcas, CanvasCtx } from "./Nos";
 import { cn } from "@/lib/utils";
 import { temaXterm } from "@/lib/desktop";
 import { AgentesCtx } from "./Agente";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 const MONO = "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const VERDE = "#46d3a0"; // ocioso

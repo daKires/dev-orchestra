@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { miniatura, estiloNota, estiloForma } from "./canvas.ts";
-import type { No, Snapshot } from "../../../canvas.ts";
+import type { No, Snapshot } from "../../../src/canvas.ts";
 
 const no = (id: string, x: number, y: number, w: number, h: number, over: Partial<No> = {}): No =>
   ({ id, tipo: "nota", x, y, w, h, dados: {}, rev: 1, ...over });

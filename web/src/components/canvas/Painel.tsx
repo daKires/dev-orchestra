@@ -11,7 +11,7 @@ import { fmtPct, tomStatus } from "@/lib/formato";
 import { cn } from "@/lib/utils";
 import { Alcas, CanvasCtx } from "./Nos";
 import { RunsCtx } from "./Run";
-import type { No } from "../../../../canvas.ts";
+import type { No } from "../../../../src/canvas.ts";
 
 // Pecas comuns (tokens do Castor, como os outros cards)
 

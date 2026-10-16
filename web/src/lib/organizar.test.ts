@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { organizarPorTipo, alternarFixado, aplicarOpsLocal, paiDoNo, ESPACO_ORGANIZAR, LARGURA_ORGANIZAR } from "./canvas.ts";
-import type { No, Snapshot, TipoNo } from "../../../canvas.ts";
+import type { No, Snapshot, TipoNo } from "../../../src/canvas.ts";
 
 const no = (id: string, tipo: TipoNo, x: number, y: number, w = 300, h = 200, dados: Record<string, unknown> = {}): No =>
   ({ id, tipo, x, y, w, h, dados, rev: 1 });

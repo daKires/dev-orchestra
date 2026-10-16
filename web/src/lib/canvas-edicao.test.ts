@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { duplicarNos, ordemZ } from "./canvas.ts";
-import type { No, Snapshot } from "../../../canvas.ts";
+import type { No, Snapshot } from "../../../src/canvas.ts";
 
 const no = (id: string, x: number, over: Partial<No> = {}): No => ({ id, tipo: "nota", x, y: 0, w: 10, h: 10, dados: {}, rev: 1, ...over });
 let n = 0;

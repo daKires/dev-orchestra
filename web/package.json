@@ -5,27 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test \"src/lib/*.test.ts\"",
-    "test:anexos-forma": "node --experimental-strip-types --test src/lib/anexos-forma.test.ts",
-    "test:canvas": "node --experimental-strip-types --test src/lib/canvas.test.ts",
-    "test:estado-canvas": "node --experimental-strip-types --test src/lib/estado-canvas.test.ts",
-    "test:canvas-visual": "node --experimental-strip-types --test src/lib/canvas-visual.test.ts",
-    "test:canvas-ferramentas": "node --experimental-strip-types --test src/lib/canvas-ferramentas.test.ts",
-    "test:canvas-edicao": "node --experimental-strip-types --test src/lib/canvas-edicao.test.ts",
-    "test:canvas-historico": "node --experimental-strip-types --test src/lib/canvas-historico.test.ts",
-    "test:canvas-miniatura": "node --experimental-strip-types --test src/lib/canvas-miniatura.test.ts",
-    "test:canvas-medidas": "node --experimental-strip-types --test src/lib/canvas-medidas.test.ts",
-    "test:canvas-runs": "node --experimental-strip-types --test src/lib/canvas-runs.test.ts",
-    "test:canvas-f21": "node --experimental-strip-types --test src/lib/canvas-f21.test.ts",
-    "test:colab": "node --experimental-strip-types --test src/lib/colab.test.ts",
-    "test:desktop": "node --experimental-strip-types --test src/lib/desktop.test.ts",
-    "test:organizar": "node --experimental-strip-types --test src/lib/organizar.test.ts",
-    "test:arvore": "node --experimental-strip-types --test src/lib/arvore.test.ts src/lib/canvas-runs.test.ts src/lib/canvas-f21.test.ts",
-    "test:g2": "node --experimental-strip-types --test src/lib/g2.test.ts",
-    "test:g3": "node --experimental-strip-types --test src/lib/g3.test.ts",
-    "test:unido": "node --experimental-strip-types --test src/lib/unido.test.ts",
-    "test:fases": "node --experimental-strip-types --test src/lib/fases.test.ts",
-    "test:limpeza": "node --experimental-strip-types --test src/lib/limpeza.test.ts"
+    "test": "node --experimental-strip-types --test \"src/lib/*.test.ts\""
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
