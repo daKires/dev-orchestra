@@ -44,6 +44,7 @@ export function criarDriverPty(repo: string): PtyDriver {
     spawn(opts): PtyProc {
       let arquivo = opts.comando;
       let args = opts.args;
+      let env = opts.env;
       if (process.platform === "win32") {
         // `where` acha o claude real sem passar por um shell que reinterprete & | > ^ % ".
         let saida = "";
@@ -56,13 +57,16 @@ export function criarDriverPty(repo: string): PtyDriver {
         if (!r) throw new Error("claude não encontrado no PATH");
         arquivo = r.comando;
         args = [...r.args, ...opts.args];
+        // No Electron, process.execPath e' o executavel do app, nao o node. Quando o resolver devolve
+        // o shim .cmd do npm (execPath + cli.js), ligue ELECTRON_RUN_AS_NODE pro Electron rodar como node.
+        if (r.comando === process.execPath) env = { ...opts.env, ELECTRON_RUN_AS_NODE: "1" };
       }
       const p = pty.spawn(arquivo, args, {
         name: "xterm-256color",
         cols: opts.cols ?? 120,
         rows: opts.rows ?? 32,
         cwd: opts.cwd,
-        env: opts.env,
+        env,
       });
       return {
         pid: p.pid,
