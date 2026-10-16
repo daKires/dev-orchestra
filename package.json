@@ -27,7 +27,8 @@
     "desktop:build": "tsc -p desktop/tsconfig.json",
     "desktop:dev": "npm run build && npm run desktop:build && electron dist-desktop/main.js",
     "desktop:dist": "npm run build && npm run desktop:build && electron-builder --config desktop/electron-builder.yml",
-    "desktop:check": "tsc -p desktop/tsconfig.json --noEmit"
+    "desktop:check": "tsc -p desktop/tsconfig.json --noEmit",
+    "e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
@@ -36,6 +37,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "@types/node": "^26.0.0",
     "electron": "^44.6.0",
     "electron-builder": "^26.15.3",

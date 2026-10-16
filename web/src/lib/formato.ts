@@ -20,6 +20,14 @@ export function fmtHora(ts: number): string {
   return new Date(ts).toLocaleTimeString("pt-BR", { hour12: false });
 }
 
+// Tarefa sem o prefixo S<idx> da propria slice (o card ja' mostra 'S<idx> · ').
+export function tituloDaSlice(idx: number, tarefa: string): string {
+  const m = tarefa.match(new RegExp(`^s${idx}(?:\\s*[·:-]\\s*|\\s+)`, "i"));
+  if (!m) return tarefa;
+  const resto = tarefa.slice(m[0].length).trim();
+  return resto || tarefa;
+}
+
 export const fmtUSD = (v: number) => "$" + v.toFixed(v < 1 ? 4 : 2);
 export const fmtTok = (n: number) => (n >= 1000 ? (n / 1000).toFixed(n >= 10_000 ? 0 : 1) + "k" : String(n));
 export const fmtPct = (v: number | null) => (v == null ? "—" : Math.round(v * 100) + "%");

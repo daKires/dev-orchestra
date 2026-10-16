@@ -401,10 +401,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     if (no) upsertNo(no, { expandida: no.dados.expandida !== true });
   };
 
-  /** Clique na slice (G1/S3): alterna `dados.aberta` do no' worker:<id>:<idx> (card ao vivo x compacto). */
+  /** Clique na slice: alterna `dados.aberta` e grava a slice viva do momento (`vivaNoClique`). */
   const alternarSlice = (runId: string, idx: number) => {
     const no = buscarNo(`worker:${runId}:${idx}`);
-    if (no) upsertNo(no, { aberta: no.dados.aberta !== true });
+    if (!no) return;
+    const run = runsEstado.runs[runId] ?? runsProjeto.find((r) => r.id === runId);
+    const vivaNoClique = run?.slices.find((s) => s.status === "rodando")?.idx ?? 0;
+    upsertNo(no, { aberta: no.dados.aberta !== true, vivaNoClique });
   };
 
   /**
