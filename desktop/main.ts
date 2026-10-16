@@ -4,7 +4,6 @@ import { app, BrowserWindow, dialog, type Session, type WebContents } from "elec
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { criarDriverCDP } from "./cdp.js";
 import { criarDriverPty } from "./pty.js";
@@ -37,20 +36,12 @@ let ui: any = null; // modulo dist/ui.js (para chamar pararUI antes de sair)
 const sessoesComDownload = new WeakSet<Session>();
 
 // Sobe o hub (dist/ui.js) na porta da UI, assumindo a porta de qualquer hub Hermes anterior.
-// Sem HERMES_REPO no app instalado: pede a pasta do repositório Dev Orchestra uma vez e grava (setx).
+// Sem dist/ui.js no repo/local: o app nao tem o que rodar; avisa e sai (o usuario instala pelo npx).
 async function resolverRepo(): Promise<boolean> {
-  const valido = (p: string) => !!p && fs.existsSync(path.join(p, "dist", "ui.js"));
-  if (valido(REPO)) return true;
-  const r = await dialog.showOpenDialog({ title: "Onde está a pasta do repositório Dev Orchestra?", properties: ["openDirectory"] });
-  const p = r.filePaths[0] ?? "";
-  if (r.canceled || !valido(p)) {
-    dialog.showErrorBox("Hermes", "App do Dev Orchestra não encontrado (precisa ter dist/ui.js). Rode `npx dev-orchestra` para instalar.");
-    return false;
-  }
-  REPO = p;
-  log("repo escolhido no dialogo: " + p);
-  execFile("setx", ["HERMES_REPO", p], () => {});
-  return true;
+  if (fs.existsSync(path.join(REPO, "dist", "ui.js"))) return true;
+  log("dist/ui.js ausente em: " + REPO);
+  dialog.showErrorBox("Dev Orchestra", "App do Dev Orchestra não encontrado. Rode npx github:daKires/dev-orchestra para instalar.");
+  return false;
 }
 
 async function subirHub(): Promise<void> {

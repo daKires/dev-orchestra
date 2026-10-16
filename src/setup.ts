@@ -56,6 +56,13 @@ function garantirPasta(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
+// Acha o npm-cli.js ao lado do node em execucao, pra nao depender do `npm` no PATH.
+// Sem o cli ao lado do node -> null (o chamador cai no `npm` do PATH).
+export function comandoNpm(execPath: string, existe: (p: string) => boolean): { comando: string; args: string[] } | null {
+  const cli = path.join(path.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  return existe(cli) ? { comando: execPath, args: [cli] } : null;
+}
+
 function backupSeExistir(arquivo: string): void {
   if (existsSync(arquivo)) {
     try {
@@ -165,6 +172,57 @@ function lerCursorEnv(home: string): Env {
   return lerEntrada(path.join(home, ".cursor", "mcp.json"), mcpServersEntrada, "env");
 }
 
+// Antigravity: o mesmo MCP e' gravado em 2 mcp_config.json; a leitura combina os dois.
+function lerAntigravityEnv(home: string): Env {
+  return {
+    ...lerEntrada(path.join(home, ".gemini", "config", "mcp_config.json"), mcpServersEntrada, "env"),
+    ...lerEntrada(path.join(home, ".gemini", "antigravity", "mcp_config.json"), mcpServersEntrada, "env"),
+  };
+}
+
+// TOML nao tem parser no projeto: des-escapa so' o que o gravador produz (\\ e \").
+function desescaparToml(v: string): string {
+  return v.replace(/\\(["\\])/g, "$1");
+}
+
+// Codex: le o bloco [mcp_servers.dev-orchestra.env] (ou o legado hermes-bridge) do config.toml.
+// Pega as linhas CHAVE = "valor" ate' o proximo cabecalho que comece com '['.
+function lerCodexEnv(home: string): Env {
+  const arquivo = path.join(home, ".codex", "config.toml");
+  if (!existsSync(arquivo)) return {};
+  let txt: string;
+  try {
+    txt = readFileSync(arquivo, "utf8");
+  } catch {
+    return {};
+  }
+  const env: Env = {};
+  let noBloco = false;
+  for (const linha of txt.split("\n")) {
+    const t = linha.trim();
+    if (t.startsWith("[")) {
+      noBloco = t === "[mcp_servers.dev-orchestra.env]" || t === "[mcp_servers.hermes-bridge.env]";
+      continue;
+    }
+    if (!noBloco) continue;
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(.*)"$/.exec(t);
+    if (!m) continue;
+    env[m[1]] = desescaparToml(m[2]);
+  }
+  return env;
+}
+
+// Env combinado das 5 ferramentas: a config atual pode estar em qualquer uma delas.
+function lerEnvCombinado(home: string): Env {
+  return {
+    ...lerClaudeEnv(home),
+    ...lerOpencodeEnv(home),
+    ...lerCodexEnv(home),
+    ...lerCursorEnv(home),
+    ...lerAntigravityEnv(home),
+  };
+}
+
 // Env "extra" da propria ferramenta: pega o env da entrada antiga dela, tirando as 3 envs de
 // chave e HERMES_MODEL — o que sobra e' configuracao do usuario (ex.: HERMES_MAX_TURNS) e e'
 // preservado. Cada ferramenta usa o seu, nao o das outras.
@@ -172,12 +230,9 @@ function envExtraFerramenta(home: string, ferramenta: string): Env {
   let cru: Env = {};
   if (ferramenta === "claude") cru = lerClaudeEnv(home);
   else if (ferramenta === "cursor") cru = lerCursorEnv(home);
-  else if (ferramenta === "antigravity") {
-    cru = {
-      ...lerEntrada(path.join(home, ".gemini", "config", "mcp_config.json"), mcpServersEntrada, "env"),
-      ...lerEntrada(path.join(home, ".gemini", "antigravity", "mcp_config.json"), mcpServersEntrada, "env"),
-    };
-  } else if (ferramenta === "opencode") cru = lerOpencodeEnv(home);
+  else if (ferramenta === "antigravity") cru = lerAntigravityEnv(home);
+  else if (ferramenta === "opencode") cru = lerOpencodeEnv(home);
+  else if (ferramenta === "codex") cru = lerCodexEnv(home);
 
   const extra: Env = {};
   for (const [k, v] of Object.entries(cru)) {
@@ -194,7 +249,7 @@ export interface ConfigAtual {
 }
 
 export function lerAtual(home: string): ConfigAtual {
-  const env: Env = { ...lerClaudeEnv(home), ...lerOpencodeEnv(home), ...lerCursorEnv(home) };
+  const env = lerEnvCombinado(home);
   let provedor: ProvedorId | null = null;
   let chave: string | null = null;
   for (const id of ORDEM_PROVEDORES) {
@@ -210,22 +265,31 @@ export function lerAtual(home: string): ConfigAtual {
   return { provedor, modelo, chaveMascarada: mascarar(chave) };
 }
 
+// Chave atual do provedor em qualquer das 5 ferramentas (a config pode estar em qualquer uma).
+// Provedor invalido ou chave ausente -> "" (sem chave pra reaproveitar).
+export function chaveAtual(home: string, provedor: string): string {
+  const env = PROVEDORES[provedor as ProvedorId]?.env;
+  if (!env) return "";
+  const v = lerEnvCombinado(home)[env];
+  return typeof v === "string" ? v.trim() : "";
+}
+
 // ---------------------------------------------------------------------------
 // Gravacao do MCP por ferramenta
 // ---------------------------------------------------------------------------
 
-function gravarClaude(home: string, app: string, env: Env): void {
+function gravarClaude(home: string, app: string, env: Env, node: string): void {
   const arquivo = path.join(home, ".claude.json");
   let j: any = {};
   if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8")); // invalido -> throw (nao sobrescreve)
   j = objetoOuVazio(j);
   j.mcpServers = objetoOuVazio(j.mcpServers);
   delete j.mcpServers["hermes-bridge"];
-  j.mcpServers["dev-orchestra"] = { type: "stdio", command: "node", args: [app], env };
+  j.mcpServers["dev-orchestra"] = { type: "stdio", command: node, args: [app], env };
   escreverJson(arquivo, j);
 }
 
-function gravarOpencode(home: string, app: string, env: Env): void {
+function gravarOpencode(home: string, app: string, env: Env, node: string): void {
   const arquivo = path.join(home, ".config", "opencode", "opencode.json");
   let j: any = {};
   if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8"));
@@ -233,17 +297,17 @@ function gravarOpencode(home: string, app: string, env: Env): void {
   if (!j.$schema) j.$schema = "https://opencode.ai/config.json";
   j.mcp = objetoOuVazio(j.mcp);
   delete j.mcp["hermes-bridge"];
-  j.mcp["dev-orchestra"] = { type: "local", command: ["node", app], environment: env, enabled: true };
+  j.mcp["dev-orchestra"] = { type: "local", command: [node, app], environment: env, enabled: true };
   escreverJson(arquivo, j);
 }
 
-function gravarFormatoCursor(arquivo: string, app: string, env: Env): void {
+function gravarFormatoCursor(arquivo: string, app: string, env: Env, node: string): void {
   let j: any = {};
   if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8"));
   j = objetoOuVazio(j);
   j.mcpServers = objetoOuVazio(j.mcpServers);
   delete j.mcpServers["hermes-bridge"];
-  j.mcpServers["dev-orchestra"] = { command: "node", args: [app], env };
+  j.mcpServers["dev-orchestra"] = { command: node, args: [app], env };
   escreverJson(arquivo, j);
 }
 
@@ -272,36 +336,36 @@ function tomlEscape(v: string): string {
   return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function gravarCodex(home: string, app: string, env: Env): void {
+function gravarCodex(home: string, app: string, env: Env, node: string): void {
   const arquivo = path.join(home, ".codex", "config.toml");
   let txt = existsSync(arquivo) ? readFileSync(arquivo, "utf8") : "";
   txt = removerBlocosToml(txt);
   if (txt.length > 0 && !txt.endsWith("\n")) txt += "\n";
 
-  let bloco = `\n[mcp_servers.dev-orchestra]\ncommand = "node"\nargs = ["${tomlEscape(app)}"]\n`;
+  let bloco = `\n[mcp_servers.dev-orchestra]\ncommand = "${tomlEscape(node)}"\nargs = ["${tomlEscape(app)}"]\n`;
   bloco += `\n[mcp_servers.dev-orchestra.env]\n`;
   for (const [k, v] of Object.entries(env)) bloco += `${k} = "${tomlEscape(v)}"\n`;
 
   escreverTexto(arquivo, txt + bloco);
 }
 
-function gravarMcp(home: string, ferramenta: string, app: string, env: Env): void {
+function gravarMcp(home: string, ferramenta: string, app: string, env: Env, node: string): void {
   switch (ferramenta) {
     case "claude":
-      gravarClaude(home, app, env);
+      gravarClaude(home, app, env, node);
       break;
     case "opencode":
-      gravarOpencode(home, app, env);
+      gravarOpencode(home, app, env, node);
       break;
     case "cursor":
-      gravarFormatoCursor(path.join(home, ".cursor", "mcp.json"), app, env);
+      gravarFormatoCursor(path.join(home, ".cursor", "mcp.json"), app, env, node);
       break;
     case "antigravity":
-      gravarFormatoCursor(path.join(home, ".gemini", "config", "mcp_config.json"), app, env);
-      gravarFormatoCursor(path.join(home, ".gemini", "antigravity", "mcp_config.json"), app, env);
+      gravarFormatoCursor(path.join(home, ".gemini", "config", "mcp_config.json"), app, env, node);
+      gravarFormatoCursor(path.join(home, ".gemini", "antigravity", "mcp_config.json"), app, env, node);
       break;
     case "codex":
-      gravarCodex(home, app, env);
+      gravarCodex(home, app, env, node);
       break;
     default:
       break;
@@ -396,6 +460,7 @@ export interface ConfigSalvar {
   ferramentas: string[];
   app: string;
   skillsDir: string;
+  node?: string;
   perfis?: string[];
 }
 
@@ -407,16 +472,16 @@ export interface ResultadoSalvar {
 export function salvar(home: string, cfg: ConfigSalvar): ResultadoSalvar {
   const { provedor, modelo, ferramentas, app, skillsDir } = cfg;
   const perfis = cfg.perfis ?? [];
+  // Node absoluto gravado nas configs de MCP: padrao = o node que esta rodando o instalador.
+  const node = cfg.node ?? process.execPath;
 
   // Chave: vazia = mantem a atual (do mesmo provedor); sem atual -> erro.
   let chave = (cfg.chave ?? "").trim();
   if (!chave) {
-    const cru: Env = { ...lerClaudeEnv(home), ...lerOpencodeEnv(home), ...lerCursorEnv(home) };
-    const encontrada = cru[PROVEDORES[provedor].env];
-    if (!encontrada || !encontrada.trim()) {
+    chave = chaveAtual(home, provedor);
+    if (!chave) {
       throw new Error("Informe a chave do provedor (nao encontrei nenhuma chave atual pra reutilizar).");
     }
-    chave = encontrada.trim();
   }
 
   // Env gravado no MCP: env extra da propria ferramenta + a chave do provedor escolhido + HERMES_MODEL.
@@ -431,7 +496,7 @@ export function salvar(home: string, cfg: ConfigSalvar): ResultadoSalvar {
         [PROVEDORES[provedor].env]: chave,
         HERMES_MODEL: modelo,
       };
-      gravarMcp(home, ferramenta, app, env);
+      gravarMcp(home, ferramenta, app, env, node);
       instalarSkills(home, skillsDir, ferramenta);
       ok.push(ferramenta);
     } catch (e) {

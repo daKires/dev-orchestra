@@ -6,10 +6,10 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { detectar, lerAtual, PROVEDORES, testarChave, salvar, localDoApp, copiarApp, ferramentasConfiguradas } from "../dist/setup.js";
+import { detectar, lerAtual, PROVEDORES, testarChave, salvar, localDoApp, copiarApp, ferramentasConfiguradas, comandoNpm, chaveAtual } from "../dist/setup.js";
 
 // pacote = a pasta acima de bin/ (a raiz do pacote publicado ou do clone).
 const BIN = path.dirname(fileURLToPath(import.meta.url));
@@ -45,35 +45,6 @@ function lerCorpo(req) {
     req.on("end", () => ok(dados));
     req.on("error", falha);
   });
-}
-
-// Le a chave que ja esta gravada (pra "deixe em branco pra manter" no testar). Nao mascara nem
-// imprime: so' serve pra chamar o provedor de volta.
-function chaveAtual(provedor) {
-  const env = PROVEDORES[provedor]?.env;
-  if (!env) return "";
-  const arquivos = [
-    path.join(HOME, ".claude.json"),
-    path.join(HOME, ".config", "opencode", "opencode.json"),
-    path.join(HOME, ".cursor", "mcp.json"),
-    path.join(HOME, ".gemini", "config", "mcp_config.json"),
-    path.join(HOME, ".gemini", "antigravity", "mcp_config.json"),
-  ];
-  for (const arquivo of arquivos) {
-    try {
-      const j = JSON.parse(readFileSync(arquivo, "utf8"));
-      const servidores = { ...(j?.mcpServers ?? {}), ...(j?.mcp ?? {}) };
-      for (const nome of ["dev-orchestra", "hermes-bridge"]) {
-        const entrada = servidores?.[nome];
-        const vars = entrada?.env ?? entrada?.environment;
-        const v = vars?.[env];
-        if (typeof v === "string" && v.trim()) return v.trim();
-      }
-    } catch {
-      /* arquivo ausente ou invalido: segue */
-    }
-  }
-  return "";
 }
 
 // Perfis do PowerShell: onde o instalador antigo podia ter deixado uma linha pra remover.
@@ -119,7 +90,7 @@ async function tratarTestar(corpo, res) {
     return;
   }
   let chave = typeof corpo?.chave === "string" ? corpo.chave.trim() : "";
-  if (!chave) chave = chaveAtual(provedor); // chave vazia = testa a atual (se houver)
+  if (!chave) chave = chaveAtual(HOME, provedor); // chave vazia = testa a atual (se houver)
   if (!chave) {
     responderJson(res, 400, { ok: false, erro: "Informe a chave do provedor." });
     return;
@@ -138,7 +109,13 @@ function instalarApp() {
   } catch (e) {
     throw new Error(`Falha ao copiar o app pra ${pastaApp}: ${msgErro(e)}`);
   }
-  const inst = spawnSync("npm install --omit=dev --prefer-offline --no-audit --no-fund", { cwd: pastaApp, shell: true, encoding: "utf8" });
+  // Usa o npm-cli.js ao lado do node em execucao (nao depende do `npm` no PATH); sem ele, cai no PATH.
+  const args = ["install", "--omit=dev", "--prefer-offline", "--no-audit", "--no-fund"];
+  const n = comandoNpm(process.execPath, existsSync);
+  const cmdFallback = "npm " + args.join(" ");
+  const inst = n
+    ? spawnSync(n.comando, [...n.args, ...args], { cwd: pastaApp, encoding: "utf8", windowsHide: true })
+    : spawnSync(cmdFallback, { cwd: pastaApp, shell: true, encoding: "utf8" });
   if (inst.status !== 0) {
     const saida = `${inst.stderr ?? ""}${inst.stdout ?? ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
     const detalhe = inst.error ? msgErro(inst.error) : saida || `npm install saiu com codigo ${inst.status}`;
@@ -153,7 +130,7 @@ function instalarSemTela() {
   const atual = lerAtual(HOME);
   const ferramentas = ferramentasConfiguradas(HOME);
   if (!atual.provedor || !atual.modelo || ferramentas.length === 0) {
-    console.error("dev-orchestra: nada configurado ainda. Rode `npx dev-orchestra` (ou node bin/dev-orchestra.mjs) uma vez pela tela.");
+    console.error("dev-orchestra: nada configurado ainda. Rode `npx github:daKires/dev-orchestra` (ou `npm run instalar`) uma vez pela tela.");
     process.exit(1);
   }
   try {

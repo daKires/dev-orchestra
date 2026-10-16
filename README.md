@@ -3,7 +3,8 @@
 Plan with a strong model, build with a cheap swarm. **Your tool plans and reviews; the swarm implements
 and commits locally.** You describe a feature; your assistant splits it into slices and writes the tests;
 a swarm of agents implements each slice, runs a deterministic gate (typecheck/tests) and makes a **local
-commit** on an `orchestra/<slug>` branch. Nothing is ever pushed.
+commit** on an `orchestra/<slug>` branch. The swarm only commits locally; push and PR happen only from
+the dashboard button, when you ask for them.
 
 ```
 you: "use o orchestra"  ->  your tool plans slices and writes the tests
@@ -17,8 +18,12 @@ packaged as an optional Electron desktop app.
 ## Install
 
 ```bash
-npx dev-orchestra
+npx github:daKires/dev-orchestra
 ```
+
+The package is not published on npm yet, so plain `npx dev-orchestra` will not work — use the GitHub
+form above. The first use builds the app (and installs its production dependencies) before opening the
+screen.
 
 This opens a screen where you pick:
 
@@ -47,8 +52,8 @@ the diff grow live.
 
 ## Change the configuration
 
-Run `npx dev-orchestra` again: change provider, model, key or which tools are connected whenever you
-want.
+Run `npx github:daKires/dev-orchestra` again: change provider, model, key or which tools are connected
+whenever you want.
 
 Some limits can be tuned with environment variables:
 

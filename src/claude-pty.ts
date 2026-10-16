@@ -60,12 +60,15 @@ export type HookMatcher = { matcher: string; hooks: HookCommand[] };
 export type SettingsHooks = { hooks: Record<"UserPromptSubmit" | "Stop" | "Notification", HookMatcher[]> };
 
 /**
- * Settings do Claude com hooks que chamam `canvas --eu id:token status ...`: ocupado ao enviar
- * prompt, ocioso ao parar e aguardando em Notification (CA-4e).
+ * Settings do Claude com hooks que chamam `"<node>" "<canvasMjs>" --eu id:token status ...`: ocupado ao
+ * enviar prompt, ocioso ao parar e aguardando em Notification (CA-4e). Os dois caminhos vao absolutos
+ * (o hook nao herda o cwd/PATH de quem abriu) e com barras '/' entre aspas duplas (no Windows o Claude
+ * roda o comando por cmd, onde '\' em alguns contextos escapa).
  */
-export function settingsHooks(id: string, token: string): SettingsHooks {
+export function settingsHooks(id: string, token: string, node: string, canvasMjs: string): SettingsHooks {
+  const citar = (p: string) => `"${p.replace(/\\/g, "/")}"`;
   const ev = (status: string, matcher = ""): HookMatcher[] => [
-    { matcher, hooks: [{ type: "command", command: `canvas --eu ${id}:${token} status ${status}` }] },
+    { matcher, hooks: [{ type: "command", command: `${citar(node)} ${citar(canvasMjs)} --eu ${id}:${token} status ${status}` }] },
   ];
   return {
     hooks: {
