@@ -223,7 +223,6 @@ export async function baseline(cwd: string, feature: string, emit: Emitir): Prom
     }
   } else {
     const atual = (await git(cwd, ["branch", "--show-current"])).trim();
-    // status --porcelain ja ignora o que o git ignora: saida nao vazia = ha WIP do usuario
     const sujeira = (await git(cwd, ["status", "--porcelain"])).trim();
     // WIP fora da branch da run nunca pode entrar no commit da run: aborta ANTES de criar/mexer em branch.
     if (sujeira && atual !== branch) throw new Error("o projeto tem mudanças não commitadas: faça commit ou stash antes de rodar o orchestra");
@@ -280,9 +279,8 @@ export function ehTeste(rel: string): boolean {
   return false;
 }
 
-// Custo em USD do slice por provedor: OpenCode Go e' ASSINATURA (custo por token 0); DeepSeek nativa e
-// OpenRouter seguem o preco por token. Nesses dois: PEAK nos dias uteis (UTC) das 01h-04h e 06h-10h;
-// senao OFF-PEAK. Precos por milhao de tokens via env (defaults da DeepSeek nativa). Pura -> selftest.
+// Custo em USD do slice: Go e' assinatura (0); senao PEAK nos dias uteis (UTC) 01h-04h e 06h-10h, senao
+// OFF-PEAK. Precos por milhao de tokens via env (defaults da DeepSeek nativa).
 export function custoUSD(tin: number, tout: number, when: Date = new Date(), provedor: string = PROVEDOR_ID): number {
   if (provedor === "go") return 0; // assinatura: nao ha custo por token
   const dia = when.getUTCDay();   // 0=domingo, 6=sabado

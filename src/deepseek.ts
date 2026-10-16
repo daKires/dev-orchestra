@@ -33,7 +33,6 @@ const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const GO_KEY = process.env.OPENCODE_GO_API_KEY?.trim() || undefined;
 const PROVEDOR = escolherProvedor(DEEPSEEK_KEY, OPENROUTER_KEY, GO_KEY);
 
-// Provedor ativo (id): o custo por slice usa isto pra saber que 'go' e' assinatura (custo 0).
 export const PROVEDOR_ID: ProvedorId = PROVEDOR.id;
 
 export const MODEL = process.env.HERMES_MODEL || PROVEDOR.model;

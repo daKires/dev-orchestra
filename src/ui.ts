@@ -126,9 +126,7 @@ function parse(txt: string): Evento[] {
   return evs;
 }
 
-// Arquivos que viram RUN: JSONL do RUNS_DIR, MENOS os <runId>.instrucao.jsonl (caixa de instrucoes
-// da slice, mesmo padrao do <runId>.cancel): sem isso cada pedido de instrucao viraria run fantasma.
-// A poda (podar()) continua vendo os .jsonl em geral, entao tambem limpa os de instrucao.
+// <runId>.instrucao.jsonl e' a caixa de instrucoes da slice, nao uma run.
 function ehJsonlDeRun(f: string): boolean {
   return f.endsWith(".jsonl") && !f.endsWith(".instrucao.jsonl");
 }
@@ -482,9 +480,7 @@ function salvarProjeto(raiz: string, nome?: unknown, cor?: unknown): void {
 }
 
 // Le o corpo de um POST com teto de bytes; null = estourou o limite (o chamador responde 400).
-// Acumula os Buffers crus e so' decodifica UTF-8 no fim: um acento partido entre dois chunks chega
-// integro (decodificar chunk a chunk trocaria o par de bytes por U+FFFD). O limite e' contado em BYTES,
-// pela soma dos tamanhos dos chunks.
+// Decodifica so' no fim: acento partido entre chunks chega integro.
 function lerCorpo(req: http.IncomingMessage, limite: number): Promise<string | null> {
   return new Promise((ok) => {
     const partes: Buffer[] = [];
@@ -1419,7 +1415,6 @@ function criarServidor(): http.Server {
       const acao = j && typeof j.acao === "string" ? j.acao : "";
       if (!ACOES_RUN.has(acao)) { res.writeHead(400); res.end(); return; }
       const id = new URL(url, "http://x").searchParams.get("run") || "";
-      // id ANTES de procurar a run: id fora do formato (<runId> e' [a-z0-9-]) nunca toca o disco.
       if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return; }
       const evs = eventosDaRun(id);
       const runEv = evs && evs.find((e) => e.t === "run");
