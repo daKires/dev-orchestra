@@ -50,11 +50,15 @@ function indexarSalvos(snap: Snapshot): Map<string, No> {
   return new Map(snap.nos.map((n) => [n.id, n]));
 }
 
-/** No' com id salvo no snapshot: usa x,y,w,h e (mescla) os dados salvos; senao devolve o proprio no'. */
+/**
+ * No' com id salvo no snapshot: mescla APENAS os dados salvos (e o rev); a geometria (x,y,w,h) vem
+ * SEMPRE do layout automatico — o canvas e' so' visualizacao, entao posicao/tamanho salvo ficam velhos
+ * e nao podem vencer (era a causa dos cards abertos cobrindo os de baixo e do buraco na coluna).
+ */
 function comSalvo(no: No, salvos: Map<string, No>): No {
   const s = salvos.get(no.id);
   if (!s) return no;
-  return { ...no, x: s.x, y: s.y, w: s.w, h: s.h, dados: { ...no.dados, ...s.dados }, rev: s.rev };
+  return { ...no, dados: { ...no.dados, ...s.dados }, rev: s.rev };
 }
 
 /**
@@ -89,7 +93,8 @@ export function semOutrasRuns(nos: No[], runId: string | null): No[] {
 
 /**
  * Largura/altura de uma fase (grupo): a maior entre o minimo e o bounding box dos filhos + margem.
- * As posicoes salvas dos filhos vencem, entao a fase cresce pra conter o filho onde ele estiver.
+ * A geometria dos filhos vem SEMPRE do layout (comSalvo nao reaproveita x,y,w,h salvos), entao a fase
+ * fica exatamente do tamanho do conteudo atual — sem sobra de posicao velha nem filho pra fora.
  */
 function caixaDoGrupo(x: number, y: number, minW: number, minH: number, filhos: No[]): { w: number; h: number } {
   return {
@@ -107,14 +112,17 @@ function caixaDoGrupo(x: number, y: number, minW: number, minH: number, filhos: 
  * e' anterior a `agora - 10 min` conta como PARADA (processo morreu) e NAO abre sozinha (o salvo
  * continua vencendo); sem `agora`, nao checa. As fases sao:
  * - `fase1:<id>`: card `pedido:<id>` (300x170) e, havendo planejador do cwd, os slots 620x420 abaixo;
- * - `fase2:<id>`: os `worker:<id>:<k>` em coluna (compacta 260x64 / aberta 620x380 pelo `dados.aberta`
- *   salvo ou pela slice rodando);
+ * - `fase2:<id>`: os `worker:<id>:<k>` em coluna (compacta 260x64 / aberta 620x380). Quem decide e' a
+ *   slice VIVA da run (a de status 'rodando'; 0 se nenhuma): o `dados.aberta` salvo so' vale enquanto o
+ *   `dados.vivaNoClique` gravado no clique for o idx dessa viva (clicou, vale ate' a viva trocar); salvo
+ *   antigo sem `vivaNoClique` e' ignorado e vale `status === 'rodando'`;
  * - `fase3:<id>`: `gate:<id>` (420x220) e `diff:<id>` (620x380) abaixo.
  * Arestas: pedido -> run, run -> cada worker, ultimo worker -> gate (sem slices: run -> gate) e
  * gate -> diff. A coluna fica a ESQUERDA de todo o conteudo do usuario (nos sem dados.auto e que nao
  * sao 'agente'), reservando espaco pra largura das 3 fases; sem conteudo do usuario, mantem a coluna
- * padrao (COLUNA_X). A posicao salva (comSalvo) vence apenas pro CARD da run e pros cards das fases
- * (filhos), nunca pro empilhamento nem pro tamanho das fases.
+ * padrao (COLUNA_X). A posicao SALVA nunca vence no layout: comSalvo so' mescla os dados, entao x,y,w,h
+ * do card da run, das fases e dos filhos vem sempre do calculo (a excecao e' o card da run arrastado,
+ * que so' e' reposicionado quando `dados.movido === true`).
  *
  * Planejadores: cada um vai pra fase 1 da run MAIS RECENTE do cwd dele (normalizado por cwdChave),
  * abaixo do pedido, e so' quando essa run esta' expandida — devolvidos em `agentes`.
@@ -207,6 +215,9 @@ export function layoutRuns(
     arestas.push({ id: `${pedidoId}->${cardId}`, de: pedidoId, para: cardId });
 
     const n = Math.max(run.plano.length, run.slices.length);
+    // Slice VIVA da run: a que esta' rodando (0 quando nenhuma). O clique na slice so' vale enquanto o
+    // `vivaNoClique` que ele gravou continuar sendo este idx; trocou a viva, o layout volta a decidir.
+    const viva = run.slices.find((s) => s.status === "rodando")?.idx ?? 0;
     const fase2X = faseX + fase1.w + FASE_GAP;
     const filhos2: No[] = [];
     let colunaY = faseY + PAD; // cursor dos workers, abaixo da anterior
@@ -214,8 +225,11 @@ export function layoutRuns(
     let maiorLargura = SLICE_W_COMPACTA;
     for (let idx = 1; idx <= n; idx++) {
       const slice: SliceEstado | undefined = run.slices.find((s) => s.idx === idx);
-      const salvaAberta = salvos.get(`worker:${run.id}:${idx}`)?.dados?.aberta;
-      const aberta = typeof salvaAberta === "boolean" ? salvaAberta : slice?.status === "rodando";
+      const salvoDados = salvos.get(`worker:${run.id}:${idx}`)?.dados;
+      // Clicou com a viva de agora: o `aberta` salvo vale. Salvo antigo (sem vivaNoClique) e' ignorado.
+      const aberta = salvoDados?.vivaNoClique === viva && typeof salvoDados?.aberta === "boolean"
+        ? salvoDados.aberta
+        : slice?.status === "rodando";
       const w = aberta ? SLICE_W_ABERTA : SLICE_W_COMPACTA;
       const h = aberta ? SLICE_H_ABERTA : SLICE_H_COMPACTA;
       const worker = comSalvo({
