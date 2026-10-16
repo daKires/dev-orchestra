@@ -1,17 +1,13 @@
 // Spec da S1 (F4): logica pura dos agentes Claude Code via PTY (CA-4d, 4e, 4f).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { argsClaude, settingsHooks, textoParaPty, MODELOS_CLAUDE } from "../dist/claude-pty.js";
+import { argsClaude, settingsHooks, textoParaPty } from "../dist/claude-pty.js";
 import { validarAgente } from "../dist/agentes.js";
 
 test("argsClaude: prompt de sistema, settings, modelo opcional e --continue (CA-4d, 4h)", () => {
   assert.deepEqual(argsClaude({ prompt: "P", settingsPath: "C:\\s.json" }), ["--append-system-prompt", "P", "--settings", "C:\\s.json"]);
   assert.deepEqual(argsClaude({ prompt: "P", settingsPath: "s", modelo: "opus" }), ["--append-system-prompt", "P", "--settings", "s", "--model", "opus"]);
   assert.deepEqual(argsClaude({ prompt: "P", settingsPath: "s", modelo: "", continuar: true }), ["--continue", "--append-system-prompt", "P", "--settings", "s"]);
-});
-
-test("MODELOS_CLAUDE: padrao + opus/sonnet/haiku (CA-5)", () => {
-  assert.deepEqual(MODELOS_CLAUDE, ["", "opus", "sonnet", "haiku"]);
 });
 
 test("settingsHooks: hooks chamam node + canvas.mjs absolutos (barras /) com a identidade (CA-4e, PR2 CA-7)", () => {

@@ -68,11 +68,11 @@ export function baseDaBranch(cwdOuRaiz: string, branch: string): string {
 
 // Merge local da branch da run na sua base (na pasta principal). Recusa com a pasta suja, aborta em
 // conflito (listando os arquivos) e, no sucesso, remove o worktree e apaga a branch.
-export function mergeLocal(ctx: { cwd: string; branch: string }): ResultadoAcao {
+export function mergeLocal(ctx: { cwd: string; branch: string; base?: string }): ResultadoAcao {
   const { cwd, branch } = ctx;
   try {
     const raiz = raizRepo(cwd);
-    const base = baseDaBranch(raiz, branch);
+    const base = ctx.base || baseDaBranch(raiz, branch); // base da run quando conhecida; senao reflog
     garantirExcludeClaude(raiz); // .claude/ (worktrees) nao pode sujar o status da pasta principal
     if (git(raiz, ["status", "--porcelain"]).trim()) return { ok: false, erro: "a pasta principal tem mudanças não commitadas" };
     const atual = git(raiz, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
@@ -95,7 +95,7 @@ export function mergeLocal(ctx: { cwd: string; branch: string }): ResultadoAcao 
 
 // Descarta a run: worktree some com a branch; na pasta principal, exige arvore limpa, volta pra base
 // e apaga a branch.
-export function descartarRun(ctx: { cwd: string; branch: string }): ResultadoAcao {
+export function descartarRun(ctx: { cwd: string; branch: string; base?: string }): ResultadoAcao {
   const { cwd, branch } = ctx;
   try {
     const raiz = raizRepo(cwd);
@@ -106,7 +106,7 @@ export function descartarRun(ctx: { cwd: string; branch: string }): ResultadoAca
     }
     garantirExcludeClaude(raiz);
     if (git(raiz, ["status", "--porcelain"]).trim()) return { ok: false, erro: "a pasta tem mudanças não commitadas" };
-    const base = baseDaBranch(raiz, branch);
+    const base = ctx.base || baseDaBranch(raiz, branch); // base da run quando conhecida; senao reflog
     const atual = git(raiz, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
     if (atual !== base) git(raiz, ["checkout", base]);
     git(raiz, ["branch", "-D", branch]);
@@ -119,14 +119,14 @@ export function descartarRun(ctx: { cwd: string; branch: string }): ResultadoAca
 // Abre o PR: push da branch + `gh pr create` (titulo = feature cortada em 70; corpo + selo). Devolve a
 // url que o gh imprimir. `rodar` e' injetavel pra testar sem sair da maquina.
 export function abrirPr(
-  ctx: { cwd: string; branch: string; feature: string; corpo: string },
+  ctx: { cwd: string; branch: string; feature: string; corpo: string; base?: string },
   rodar: (cmd: string, args: string[]) => string = (cmd, args) => execFileSync(cmd, args, { cwd: ctx.cwd, encoding: "utf8", windowsHide: true }),
 ): ResultadoAcao {
   const { cwd, branch, feature, corpo } = ctx;
   const titulo = feature.slice(0, 70);
   const body = corpo + "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)";
   try {
-    const base = baseDaBranch(raizRepo(cwd), branch);
+    const base = ctx.base || baseDaBranch(raizRepo(cwd), branch); // --base do painel quando conhecida; senao reflog
     rodar("git", ["push", "-u", "origin", branch]);
     const saida = rodar("gh", ["pr", "create", "--base", base, "--head", branch, "--title", titulo, "--body", body]);
     const linhas = saida.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);

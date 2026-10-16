@@ -149,6 +149,11 @@ if (process.argv.includes("--instalar")) instalarSemTela();
 async function tratarSalvar(corpo, res) {
   const provedor = typeof corpo?.provedor === "string" ? corpo.provedor : "";
   const modelo = typeof corpo?.modelo === "string" ? corpo.modelo.trim() : "";
+  // Provedor/modelo validados ANTES de instalarApp(): entrada invalida nao copia o app nem roda npm install.
+  if (!Object.hasOwn(PROVEDORES, provedor) || !PROVEDORES[provedor]?.modelos.includes(modelo)) {
+    responderJson(res, 400, { erro: "Escolha um provedor e um modelo validos." });
+    return;
+  }
   const chave = typeof corpo?.chave === "string" ? corpo.chave.trim() : "";
   const ferramentas = Array.isArray(corpo?.ferramentas)
     ? corpo.ferramentas.filter((f) => typeof f === "string")

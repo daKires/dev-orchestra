@@ -82,7 +82,7 @@ export type Evento = { ts?: number } & (
   | { t: "comando"; slice: number; cmd: string; status: "rodando" }
   | { t: "gate"; cmd: string; status: "rodando" | "ok" | "falha"; tentativa?: number; saida?: string }
   | { t: "diff"; arquivo: string; patch: string }
-  | { t: "painel"; status: string; branch: string; baseline?: string; linhas: string[] }
+  | { t: "painel"; status: string; branch: string; baseline?: string; base?: string; linhas: string[] }
   | { t: "metrica"; slice: number; iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente?: number; tokensIn: number; tokensOut: number; custoUSD: number; ms?: number }
   | { t: "instrucao"; slice: number; texto: string; descartada?: boolean }
   | { t: "pausa"; slice: number; estado: "pausada" | "retomada"; motivo?: string }
@@ -126,11 +126,16 @@ function parse(txt: string): Evento[] {
   return evs;
 }
 
+// <runId>.instrucao.jsonl e' a caixa de instrucoes da slice, nao uma run.
+function ehJsonlDeRun(f: string): boolean {
+  return f.endsWith(".jsonl") && !f.endsWith(".instrucao.jsonl");
+}
+
 // Le a pasta de runs e devolve os eventos agrupados por run (basename do arquivo). Testavel.
 export function lerRuns(dir: string): Map<string, Evento[]> {
   const m = new Map<string, Evento[]>();
   let files: string[] = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { return m; }
+  try { files = fs.readdirSync(dir).filter(ehJsonlDeRun); } catch { return m; }
   for (const f of files) {
     try { m.set(f.slice(0, -6), parse(fs.readFileSync(path.join(dir, f), "utf8"))); } catch {}
   }
@@ -301,7 +306,7 @@ function atualizarPlanejadores(): void {
 function rescan(): void {
   atualizarPlanejadores();
   let files: string[] = [];
-  try { files = fs.readdirSync(RUNS_DIR).filter((f) => f.endsWith(".jsonl")); } catch { return; }
+  try { files = fs.readdirSync(RUNS_DIR).filter(ehJsonlDeRun); } catch { return; }
   const drops: string[] = [];
   const presentes = new Set(files.map((f) => f.slice(0, -6)));
   for (const run of estado.keys()) if (!presentes.has(run)) drops.push(run);
@@ -475,16 +480,19 @@ function salvarProjeto(raiz: string, nome?: unknown, cor?: unknown): void {
 }
 
 // Le o corpo de um POST com teto de bytes; null = estourou o limite (o chamador responde 400).
+// Decodifica so' no fim: acento partido entre chunks chega integro.
 function lerCorpo(req: http.IncomingMessage, limite: number): Promise<string | null> {
   return new Promise((ok) => {
-    let corpo = "";
+    const partes: Buffer[] = [];
+    let total = 0;
     let cortou = false;
     req.on("data", (d: Buffer) => {
       if (cortou) return;
-      corpo += d.toString();
-      if (Buffer.byteLength(corpo) > limite) { cortou = true; ok(null); }
+      partes.push(d);
+      total += d.length;
+      if (total > limite) { cortou = true; ok(null); }
     });
-    req.on("end", () => { if (!cortou) ok(corpo); });
+    req.on("end", () => { if (!cortou) ok(Buffer.concat(partes).toString("utf8")); });
     req.on("error", () => { if (!cortou) { cortou = true; ok(null); } });
   });
 }
@@ -1101,7 +1109,7 @@ function aplicarOpsProjeto(projeto: string, ops: Op[]): void {
   canvasCache.set(id, snapNovo);
   gravarCanvasDebounced(id);
   broadcast({ canvasOp: { projeto, ops } });
-  try { sincronizarContexto(projeto, snapNovo); } catch {}
+  try { sincronizarContexto(snapNovo); } catch {}
 }
 
 // ---- navegador controlado por agentes (F4/S2): rotas /cli/browser-* ----
@@ -1267,8 +1275,8 @@ function assetLocal(url: string): string | null {
   return path.join(CANVAS_DIR, id, "assets", arquivo);
 }
 
-// Apos cada /canvas/op: sincroniza o contexto dos nos 'agente' do projeto e enfileira os avisos.
-function sincronizarContexto(projeto: string, snap: Snapshot): void {
+// Apos cada /canvas/op: sincroniza o contexto dos nos 'agente' e enfileira os avisos.
+function sincronizarContexto(snap: Snapshot): void {
   for (const no of snap.nos) {
     if (no.tipo !== "agente") continue;
     const aid = typeof no.dados.agenteId === "string" ? no.dados.agenteId : "";
@@ -1407,16 +1415,17 @@ function criarServidor(): http.Server {
       const acao = j && typeof j.acao === "string" ? j.acao : "";
       if (!ACOES_RUN.has(acao)) { res.writeHead(400); res.end(); return; }
       const id = new URL(url, "http://x").searchParams.get("run") || "";
-      const evs = id ? eventosDaRun(id) : null;
+      if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return; }
+      const evs = eventosDaRun(id);
       const runEv = evs && evs.find((e) => e.t === "run");
       if (!runEv || runEv.t !== "run") { res.writeHead(404); res.end(); return; }
       const painel = [...evs!].reverse().find((e) => e.t === "painel");
       if (!painel || painel.t !== "painel") { responderTexto(res, 409, "run ainda rodando"); return; }
       if ((acao === "merge" || acao === "pr") && painel.status !== "COMPLETE") { responderTexto(res, 409, "só para runs COMPLETE"); return; }
       let r: ResultadoAcao;
-      if (acao === "merge") r = mergeLocal({ cwd: runEv.cwd, branch: painel.branch });
-      else if (acao === "descartar") r = descartarRun({ cwd: runEv.cwd, branch: painel.branch });
-      else r = abrirPr({ cwd: runEv.cwd, branch: painel.branch, feature: runEv.feature, corpo: corpoDoPr(evs!) });
+      if (acao === "merge") r = mergeLocal({ cwd: runEv.cwd, branch: painel.branch, base: painel.base });
+      else if (acao === "descartar") r = descartarRun({ cwd: runEv.cwd, branch: painel.branch, base: painel.base });
+      else r = abrirPr({ cwd: runEv.cwd, branch: painel.branch, feature: runEv.feature, corpo: corpoDoPr(evs!), base: painel.base });
       res.writeHead(r.ok ? 200 : 409, { "Content-Type": "application/json" });
       res.end(JSON.stringify(r));
       return;
@@ -1469,7 +1478,7 @@ function criarServidor(): http.Server {
       canvasCache.set(id, snapNovo);
       gravarCanvasDebounced(id);
       broadcast({ canvasOp: { projeto, ops } });
-      try { sincronizarContexto(projeto, snapNovo); } catch {}
+      try { sincronizarContexto(snapNovo); } catch {}
       res.writeHead(204); res.end();
       return;
     }

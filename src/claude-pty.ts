@@ -48,11 +48,6 @@ export function argsClaude(o: ArgsClaudeOpts): string[] {
   return args;
 }
 
-// Modelos (CA-5)
-
-/** Modelos aceitos: "" (padrao do Claude) + opus/sonnet/haiku. */
-export const MODELOS_CLAUDE: readonly string[] = ["", "opus", "sonnet", "haiku"];
-
 // Hooks de status (CA-4e)
 
 export type HookCommand = { type: "command"; command: string };
