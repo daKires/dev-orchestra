@@ -33,16 +33,34 @@ import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-r
 import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 
 const PORT = Number(process.env.HERMES_UI_PORT || "4123");
-export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(os.tmpdir(), "hermes", "runs"); // barramento em disco, compartilhado entre processos
+// Dados do hub fora do TEMP (o Windows limpa %TEMP%): tudo vive em ~/.dev-orchestra/dados.
+const DADOS_DIR = path.join(os.homedir(), ".dev-orchestra", "dados");
+export const RUNS_DIR = process.env.HERMES_RUNS_DIR || path.join(DADOS_DIR, "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: um JSON por worktree com o chat do planejador.
-export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(os.tmpdir(), "hermes", "planejadores");
+export const PLANEJADORES_DIR = process.env.HERMES_PLANEJADORES_DIR || path.join(DADOS_DIR, "planejadores");
 // Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
-export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(os.tmpdir(), "hermes", "canvas");
+export const CANVAS_DIR = process.env.HERMES_CANVAS_DIR || path.join(DADOS_DIR, "canvas");
 // Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
-export const AGENTES_DIR = process.env.HERMES_AGENTES_DIR || path.join(os.tmpdir(), "hermes", "agentes");
+export const AGENTES_DIR = process.env.HERMES_AGENTES_DIR || path.join(DADOS_DIR, "agentes");
 const SWARM_ID = randomUUID().slice(0, 8);                        // um id por processo/sessao
 const PODA_MS = 7 * 24 * 3600 * 1000;                             // historico de 7 dias
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
+
+// Copia o antigo pro novo uma vez so': nunca toca num destino que ja existe.
+export function migrarDadosAntigos(antigo: string, novo: string): boolean {
+  try {
+    if (!fs.existsSync(antigo) || fs.existsSync(novo)) return false;
+    fs.cpSync(antigo, novo, { recursive: true });
+    return true;
+  } catch { return false; }
+}
+
+// Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (<tmp>/hermes).
+const PASTAS_PADRAO = !process.env.HERMES_RUNS_DIR && !process.env.HERMES_PLANEJADORES_DIR
+  && !process.env.HERMES_CANVAS_DIR && !process.env.HERMES_AGENTES_DIR;
+if (PASTAS_PADRAO) {
+  try { migrarDadosAntigos(path.join(os.tmpdir(), "hermes"), DADOS_DIR); } catch {}
+}
 
 try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch {}
 
@@ -569,14 +587,13 @@ function caminhoOpencode(): string {
   return "opencode";
 }
 
-// PATH do processo do serve com a pasta bin/ do dev-orchestra na frente (o CLI `canvas` fica la).
-// No Windows a chave pode vir como 'Path': normaliza para PATH (uma so' chave no env do filho).
+// PATH do serve: bin/ (CLI `canvas`) e a pasta do node na frente. No Windows a chave pode vir como 'Path'.
 function envServe(): NodeJS.ProcessEnv {
   const bin = path.join(RAIZ_BRIDGE, "bin");
   const env: NodeJS.ProcessEnv = { ...process.env };
   const atual = env.PATH ?? env.Path ?? "";
   delete env.Path;
-  env.PATH = bin + path.delimiter + atual;
+  env.PATH = bin + path.delimiter + path.dirname(process.execPath) + path.delimiter + atual;
   return env;
 }
 
@@ -904,7 +921,7 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string)
   const settingsPath = path.join(AGENTES_DIR, a.id + ".settings.json");
   try {
     fs.mkdirSync(AGENTES_DIR, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settingsHooks(a.id, a.token ?? "")));
+    fs.writeFileSync(settingsPath, JSON.stringify(settingsHooks(a.id, a.token ?? "", process.execPath, path.join(RAIZ_BRIDGE, "bin", "canvas.mjs"))));
   } catch {}
   if (!ptyAtual) throw new Error("abra o app Hermes para usar agentes Claude");
   const prompt = promptClaude(a.instrucao ?? "", a.id, a.nome, a.token ?? "");
@@ -912,7 +929,12 @@ function subirPtyClaude(a: RegistroAgente, continuar: boolean, inicial?: string)
     comando: "claude",
     args: argsClaude({ prompt, settingsPath, modelo: a.modelo, continuar, inicial }),
     cwd: a.cwd,
-    env: { ...envClaude(), HERMES_EU: `${a.id}:${a.token}` }, // um processo por agente: `canvas` ja' sai identificado
+    env: {
+      ...envClaude(),
+      HERMES_EU: `${a.id}:${a.token}`, // um processo por agente: `canvas` ja' sai identificado
+      // app Electron: o `node` do hook e' o exe do app; sem isso ele abriria uma nova janela do Hermes.
+      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    },
     cols: tamanhoPty.get(a.id)?.cols ?? 120,
     rows: tamanhoPty.get(a.id)?.rows ?? 32,
   });

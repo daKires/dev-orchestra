@@ -101,5 +101,5 @@ conforme o STATUS:
   cancele no dashboard.
 - agente quer rodar build/teste mas cai em "comando nao permitido": faltou o comando em
   `override.cmds`.
-- CHAVE INVALIDA ou erro do provedor: rode `npx dev-orchestra` de novo pra trocar
+- CHAVE INVALIDA ou erro do provedor: rode `npx github:daKires/dev-orchestra` de novo pra trocar
   provedor/modelo/chave.

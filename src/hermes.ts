@@ -93,8 +93,13 @@ export function recusaComando(cmd: string, scripts: Record<string, string> = {})
 
 // Roda um comando no shell do bridge (o mesmo dos agentes e do gate). Nunca lanca, exceto cancelamento.
 export async function rodarShell(cmd: string, cwd: string, signal?: AbortSignal, timeout = CMD_TIMEOUT): Promise<{ code: number | string; saida: string; timeout: boolean }> {
+  // Pasta do node na frente do PATH: a ferramenta que abriu o MCP pode ter um PATH velho sem node/npm.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const atual = env.PATH ?? env.Path ?? "";
+  delete env.Path;
+  env.PATH = path.dirname(process.execPath) + path.delimiter + atual;
   try {
-    const { stdout, stderr } = await pshell(cmd, { cwd, windowsHide: true, timeout, maxBuffer: 10 * 1024 * 1024, signal });
+    const { stdout, stderr } = await pshell(cmd, { cwd, windowsHide: true, timeout, maxBuffer: 10 * 1024 * 1024, signal, env });
     return { code: 0, saida: String(stdout + stderr).slice(-4000), timeout: false };
   } catch (e: any) {
     if (signal?.aborted) throw new CanceladoError();

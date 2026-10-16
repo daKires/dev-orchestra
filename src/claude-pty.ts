@@ -60,12 +60,13 @@ export type HookMatcher = { matcher: string; hooks: HookCommand[] };
 export type SettingsHooks = { hooks: Record<"UserPromptSubmit" | "Stop" | "Notification", HookMatcher[]> };
 
 /**
- * Settings do Claude com hooks que chamam `canvas --eu id:token status ...`: ocupado ao enviar
- * prompt, ocioso ao parar e aguardando em Notification (CA-4e).
+ * Hooks de status (ocupado/ocioso/aguardando) chamando node + canvas.mjs absolutos: o hook nao herda o
+ * PATH. Barras '/' entre aspas funcionam no bash e no cmd.
  */
-export function settingsHooks(id: string, token: string): SettingsHooks {
+export function settingsHooks(id: string, token: string, node: string, canvasMjs: string): SettingsHooks {
+  const citar = (p: string) => `"${p.replace(/\\/g, "/")}"`;
   const ev = (status: string, matcher = ""): HookMatcher[] => [
-    { matcher, hooks: [{ type: "command", command: `canvas --eu ${id}:${token} status ${status}` }] },
+    { matcher, hooks: [{ type: "command", command: `${citar(node)} ${citar(canvasMjs)} --eu ${id}:${token} status ${status}` }] },
   ];
   return {
     hooks: {
