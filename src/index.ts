@@ -105,7 +105,6 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   const poll = setInterval(() => { if (existsSync(cancelFile)) porArquivo.abort(); }, 1000);
   const signal = porArquivo.signal;
   try {
-    const base = path.resolve(cwd);
     emit({ t: "fase", nome: "comandos", info: origem + (cmds.length ? " (" + cmds.length + " cmd)" : " (sem comandos)") });
     // PREFLIGHT (antes de baseline/agentes, custo $0): roda allowlist + gate pelo MESMO shell dos agentes.
     // Ambiente quebrado ou comando recusado (exec, migrate...) = ENV-FAILED sem tocar no repo.
@@ -122,7 +121,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       toFile(painel + "\n");
       return painel;
     }
-    const { baselineRef, branch } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
+    const { baselineRef, branch, base: baseRun } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
     // G3/S2: caixa de instrucoes/pausa de cada slice, ligada aos arquivos da run corrente em RUNS_DIR.
     const caixaDe = (idx: number): CaixaSlice => {
       const id = runAtual();
@@ -182,7 +181,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     linhas.push("branch " + branch);
     if (baselineRef) linhas.push("REVERTER: git checkout " + baselineRef.slice(0, 8) + " -- .");
     const painel = frame({ titulo: "HERMES // " + branch, cwd, linhas, status });
-    emit({ t: "painel", status, branch, baseline: baselineRef, linhas });
+    emit({ t: "painel", status, branch, baseline: baselineRef, ...(baseRun ? { base: baseRun } : {}), linhas });
     toFile(painel + "\n");
     // o frame corta linha longa: a saida completa do que falhou vai DEPOIS do painel (orquestrador decide)
     const falha = amb ?? (g.rodou && !g.ok && !parou && !cancelado ? { cmd: g.cmd, saida: g.saida } : null);
@@ -225,7 +224,9 @@ if (process.argv.includes("--selftest")) {
   // custoUSD: mesma quantidade de tokens custa MAIS no pico (quarta 02:00 UTC) que off-peak (domingo 12:00 UTC)
   const quartaPico = new Date(Date.UTC(2024, 0, 3, 2, 0, 0)); // quarta-feira, 02:00 UTC (peak)
   const domingoOff = new Date(Date.UTC(2024, 0, 7, 12, 0, 0)); // domingo, 12:00 UTC (off-peak)
-  assert.ok(custoUSD(1e6, 1e6, quartaPico) > custoUSD(1e6, 1e6, domingoOff), "peak > off-peak");
+  // provedor explicito: o default e' o provedor do ambiente (go = assinatura -> 0)
+  assert.ok(custoUSD(1e6, 1e6, quartaPico, "deepseek") > custoUSD(1e6, 1e6, domingoOff, "deepseek"), "peak > off-peak");
+  assert.strictEqual(custoUSD(1e6, 1e6, quartaPico, "go"), 0, "Go e' assinatura: custo por token 0");
   // classificacao de falha de ambiente (incidente career-copilot 05/10: saida real com mojibake do cmd.exe)
   assert.strictEqual(ehFalhaAmbiente("'pnpm' n\uFFFDo \uFFFD reconhecido como um comando interno\r\nou externo"), true);
   assert.strictEqual(ehFalhaAmbiente("bash: lune: command not found"), true);

@@ -1,6 +1,6 @@
 // O swarm Hermes: BASELINE -> AGENTES DeepSeek (serial, com ferramentas) -> GATE -> commit local.
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
-import { mensagem as mensagemReal, CanceladoError, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
+import { mensagem as mensagemReal, CanceladoError, PROVEDOR_ID, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
 import { type Evento, type Emitir } from "./ui.js";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
@@ -200,13 +200,18 @@ export function slug(feature: string): string {
   return s || "feature";
 }
 
-// SNAPSHOT do estado original ANTES de qualquer agente. Devolve baselineRef (pra reverter) + branch de trabalho.
-export async function baseline(cwd: string, feature: string, emit: Emitir): Promise<{ baselineRef: string; branch: string }> {
+// SNAPSHOT do estado original ANTES de qualquer agente. Devolve baselineRef (pra reverter) + branch de
+// trabalho + base (branch de origem da run, capturada ANTES de criar/trocar pra branch da run).
+export async function baseline(cwd: string, feature: string, emit: Emitir): Promise<{ baselineRef: string; branch: string; base: string }> {
   const repo = await gitOk(cwd, ["rev-parse", "--is-inside-work-tree"]);
+  const branch = "orchestra/" + slug(feature);
   let baselineRef: string;
+  let base = ""; // branch de origem da run ('' = desconhecida: ja' na branch da run, detached ou vazio)
+  let jaNaBranch = false;
   if (!repo) {
     emit({ t: "fase", nome: "baseline", info: "git init (novo repo)" });
     await git(cwd, ["init"]);
+    base = (await git(cwd, ["branch", "--show-current"])).trim(); // branch criada pelo init
     await ensureIdentity(cwd);
     await git(cwd, ["add", "-A"]);
     if (await gitOk(cwd, ["commit", "-m", "baseline: estado antes do orchestra"])) {
@@ -217,16 +222,24 @@ export async function baseline(cwd: string, feature: string, emit: Emitir): Prom
       baselineRef = (await git(cwd, ["rev-parse", "HEAD"])).trim();
     }
   } else {
+    const atual = (await git(cwd, ["branch", "--show-current"])).trim();
+    // status --porcelain ja ignora o que o git ignora: saida nao vazia = ha WIP do usuario
+    const sujeira = (await git(cwd, ["status", "--porcelain"])).trim();
+    // WIP fora da branch da run nunca pode entrar no commit da run: aborta ANTES de criar/mexer em branch.
+    if (sujeira && atual !== branch) throw new Error("o projeto tem mudanças não commitadas: faça commit ou stash antes de rodar o orchestra");
     await ensureIdentity(cwd);
-    // captura mudancas nao commitadas SEM mexer no working tree; se limpo, usa HEAD
-    const stash = (await git(cwd, ["stash", "create"]).catch(() => "")).trim();
-    baselineRef = stash || (await git(cwd, ["rev-parse", "HEAD"]).catch(() => "")).trim();
+    jaNaBranch = atual === branch;
+    // base = branch atual capturada ANTES de criar/trocar pra branch da run; ja' nela (correcao) = desconhecida
+    base = jaNaBranch ? "" : atual;
+    // so na branch da run (run de correcao) captura WIP sem mexer no working tree; se limpo, usa HEAD
+    baselineRef = sujeira ? (await git(cwd, ["stash", "create"]).catch(() => "")).trim() : "";
+    baselineRef = baselineRef || (await git(cwd, ["rev-parse", "HEAD"]).catch(() => "")).trim();
   }
   emit({ t: "fase", nome: "baseline", info: baselineRef ? baselineRef.slice(0, 8) : "(vazio)" });
-  const branch = "orchestra/" + slug(feature);
-  if (await gitOk(cwd, ["checkout", "-b", branch])) emit({ t: "fase", nome: "branch", info: branch });
-  else { await gitOk(cwd, ["checkout", branch]); emit({ t: "fase", nome: "branch", info: branch + " (existente)" }); }
-  return { baselineRef, branch };
+  if (jaNaBranch) emit({ t: "fase", nome: "branch", info: branch });
+  else if (await gitOk(cwd, ["checkout", "-b", branch])) emit({ t: "fase", nome: "branch", info: branch });
+  else { await git(cwd, ["checkout", branch]); emit({ t: "fase", nome: "branch", info: branch + " (existente)" }); }
+  return { baselineRef, branch, base };
 }
 
 // Guarda anti-destruicao: escrita que zera, encolhe demais, trunca, ou perde marcador estrutural e' recusada.
@@ -267,9 +280,11 @@ export function ehTeste(rel: string): boolean {
   return false;
 }
 
-// Custo em USD do slice: PEAK nos dias uteis (UTC) das 01h-04h e 06h-10h; senao OFF-PEAK. Precos por
-// milhao de tokens via env (defaults da DeepSeek nativa). Pura -> testavel no selftest.
-export function custoUSD(tin: number, tout: number, when: Date = new Date()): number {
+// Custo em USD do slice por provedor: OpenCode Go e' ASSINATURA (custo por token 0); DeepSeek nativa e
+// OpenRouter seguem o preco por token. Nesses dois: PEAK nos dias uteis (UTC) das 01h-04h e 06h-10h;
+// senao OFF-PEAK. Precos por milhao de tokens via env (defaults da DeepSeek nativa). Pura -> selftest.
+export function custoUSD(tin: number, tout: number, when: Date = new Date(), provedor: string = PROVEDOR_ID): number {
+  if (provedor === "go") return 0; // assinatura: nao ha custo por token
   const dia = when.getUTCDay();   // 0=domingo, 6=sabado
   const hora = when.getUTCHours();
   const peak = dia >= 1 && dia <= 5 && ((hora >= 1 && hora < 4) || (hora >= 6 && hora < 10));

@@ -8,13 +8,19 @@ import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
 import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 
+// Provedor de fato usado: alimenta o custo (go = assinatura, custo por token 0).
+export type ProvedorId = "go" | "deepseek" | "openrouter";
+
 // Pura: decide o provedor a partir de quais chaves existem. Ordem: OpenCode Go > DeepSeek nativa >
 // OpenRouter. Extraida assim (em vez de inline em obter()) pra dar pra testar no --selftest sem
-// precisar mexer em env var em runtime.
-export function escolherProvedor(deepseekKey?: string, openrouterKey?: string, goKey?: string) {
-  if (goKey) return { kind: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "deepseek-v4.1-flash", useAuthToken: true };
+// precisar mexer em env var em runtime. O `id` acompanha a escolha (custo por provedor).
+export function escolherProvedor(deepseekKey?: string, openrouterKey?: string, goKey?: string): {
+  id: ProvedorId; kind: "openai" | "anthropic"; baseURL: string; model: string; useAuthToken: boolean;
+} {
+  if (goKey) return { id: "go", kind: "openai", baseURL: "https://opencode.ai/zen/go/v1", model: "deepseek-v4.1-flash", useAuthToken: true };
   const viaOpenRouter = !deepseekKey && !!openrouterKey;
   return {
+    id: viaOpenRouter ? "openrouter" : "deepseek",
     kind: "anthropic",
     baseURL: viaOpenRouter ? "https://openrouter.ai/api" : "https://api.deepseek.com/anthropic",
     model: viaOpenRouter ? "deepseek/deepseek-v4.1-flash" : "deepseek-flash",
@@ -26,6 +32,9 @@ const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const GO_KEY = process.env.OPENCODE_GO_API_KEY?.trim() || undefined;
 const PROVEDOR = escolherProvedor(DEEPSEEK_KEY, OPENROUTER_KEY, GO_KEY);
+
+// Provedor ativo (id): o custo por slice usa isto pra saber que 'go' e' assinatura (custo 0).
+export const PROVEDOR_ID: ProvedorId = PROVEDOR.id;
 
 export const MODEL = process.env.HERMES_MODEL || PROVEDOR.model;
 const BASE_URL = process.env.HERMES_BASE_URL || PROVEDOR.baseURL;
@@ -191,10 +200,4 @@ async function mensagemOpenAI(system: string, messages: Msg[], tools: Ferramenta
     consumirSSE(buf + "\n", est);
     return finalizar(est);
   }, { signal: opts.signal, onTentativa: opts.onTentativa });
-}
-
-// Chamada simples sem ferramentas: devolve o texto concatenado (usado pelo revisor).
-export async function texto(system: string, user: string): Promise<string> {
-  const { blocos } = await mensagem(system, [{ role: "user", content: user }], []);
-  return blocos.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
 }
