@@ -5,3 +5,4 @@ dist-desktop/
 release/
 .orchestra/
 .teste/
+dist/
