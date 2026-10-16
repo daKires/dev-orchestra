@@ -17,11 +17,11 @@ function portaLivre(): Promise<number> {
 
 const PORTA = await portaLivre();
 const CANVAS = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-runs-"));
-process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-plan-"));
-process.env.HERMES_CANVAS_DIR = CANVAS;
-process.env.HERMES_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-ag-"));
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-runs-"));
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-plan-"));
+process.env.DEV_ORCHESTRA_CANVAS_DIR = CANVAS;
+process.env.DEV_ORCHESTRA_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-asset-ag-"));
 const ui = await import("../dist/ui.js");
 
 test("GET /canvas/asset sai com Content-Security-Policy: sandbox (CA-3)", async (t) => {

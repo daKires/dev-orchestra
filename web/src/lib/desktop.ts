@@ -1,6 +1,6 @@
 // Utilitarios do front para o app desktop (F4 S6): ponte do preload, tema do xterm e particao da webview.
 
-/** Ponte exposta pelo preload (window.hermesDesktop) dentro do app Electron. */
+/** Ponte exposta pelo preload (window.devOrchestraDesktop) dentro do app Electron. */
 export type PonteDesktop = {
   registrarNavegador(noId: string, webContentsId: number): void;
   desregistrarNavegador(noId: string): void;
@@ -16,13 +16,13 @@ export const temaXterm = {
 
 /** Particao persistente de sessao da webview, isolada por projeto. */
 export function particaoDoProjeto(id: string): string {
-  return "persist:hermes-" + id;
+  return "persist:dev-orchestra-" + id;
 }
 
 /** true somente quando a ponte do preload esta presente (rodando dentro do app Electron). */
 export function emDesktop(win: unknown): boolean {
-  const w = win as { hermesDesktop?: Partial<PonteDesktop> } | undefined | null;
-  return !!w && typeof w.hermesDesktop?.registrarNavegador === "function";
+  const w = win as { devOrchestraDesktop?: Partial<PonteDesktop> } | undefined | null;
+  return !!w && typeof w.devOrchestraDesktop?.registrarNavegador === "function";
 }
 
 /**
@@ -56,7 +56,7 @@ export type ElementoWebview = HTMLWebViewElement & {
 
 declare global {
   interface Window {
-    /** Ponte do preload do app Hermes (so' existe dentro do Electron). */
-    hermesDesktop?: PonteDesktop;
+    /** Ponte do preload do app Dev Orchestra (so' existe dentro do Electron). */
+    devOrchestraDesktop?: PonteDesktop;
   }
 }

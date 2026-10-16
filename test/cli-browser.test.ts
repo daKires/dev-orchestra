@@ -19,7 +19,7 @@ function hubFalso(resposta: (r: Req) => { status: number; texto: string }) {
     req.on("data", (d) => { c += d; });
     req.on("end", () => {
       let j: any = null; try { j = c ? JSON.parse(c) : null; } catch {}
-      const r: Req = { metodo: req.method || "", url: req.url || "", eu: String(req.headers["x-eu"] ?? ""), hermes: String(req.headers["x-hermes"] ?? ""), corpo: j };
+      const r: Req = { metodo: req.method || "", url: req.url || "", eu: String(req.headers["x-eu"] ?? ""), hermes: String(req.headers["x-dev-orchestra"] ?? ""), corpo: j };
       reqs.push(r);
       const out = resposta(r);
       res.writeHead(out.status, { "Content-Type": "text/plain; charset=utf-8" });
@@ -31,7 +31,7 @@ function hubFalso(resposta: (r: Req) => { status: number; texto: string }) {
 
 function rodar(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
   return new Promise((ok) => {
-    const p = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, HERMES_EU: "", ...env } });
+    const p = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, DEV_ORCHESTRA_EU: "", ...env } });
     let out = ""; let err = "";
     p.stdout.on("data", (d) => { out += d; });
     p.stderr.on("data", (d) => { err += d; });
@@ -48,7 +48,7 @@ test("browser e status viram o POST certo; nav opcional pelo numero de argumento
   const h = hubFalso((r) => ({ status: 200, texto: "ok " + r.url }));
   const porta = await subir(h);
   t.after(() => h.srv.close());
-  const env = { HERMES_UI_PORT: String(porta) };
+  const env = { DEV_ORCHESTRA_UI_PORT: String(porta) };
   const eu = ["--eu", "ag-1:tok"];
   const casos: Array<[string[], string, unknown]> = [
     [["browser", "create", "pesquisa", "https://www.google.com"], "/cli/browser-create", { nome: "pesquisa", url: "https://www.google.com" }],
@@ -79,7 +79,7 @@ test("browser/status com uso errado: exit 1 com uso, sem chamar o hub", async (t
   const porta = await subir(h);
   t.after(() => h.srv.close());
   for (const args of [["browser"], ["browser", "voar"], ["browser", "create", "so-nome"], ["browser", "click"], ["browser", "type", "3"], ["browser", "nav"], ["status"]]) {
-    const r = await rodar(["--eu", "a:b", ...args], { HERMES_UI_PORT: String(porta) });
+    const r = await rodar(["--eu", "a:b", ...args], { DEV_ORCHESTRA_UI_PORT: String(porta) });
     assert.equal(r.code, 1, JSON.stringify(args));
     assert.match(r.out + r.err, /uso:/i, JSON.stringify(args));
   }

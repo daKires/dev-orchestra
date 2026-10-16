@@ -17,11 +17,11 @@ function portaLivre(): Promise<number> {
 }
 const PORTA = await portaLivre();
 const TMP = mkdtempSync(path.join(os.tmpdir(), "hermes-arvproj-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = path.join(TMP, "runs");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = path.join(TMP, "runs");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
 const ui = await import("../dist/ui.js");
 const BASE = `http://127.0.0.1:${PORTA}`;
 
@@ -38,7 +38,7 @@ test("/arvore e /arquivo com ?projeto= (CA-5, 6)", async (t) => {
   t.after(() => ui.pararUI());
 
   const cad = await fetch(BASE + "/canvas/projetos", {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify({ raiz }),
+    method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify({ raiz }),
   });
   assert.equal(cad.status, 204);
 

@@ -18,16 +18,16 @@ const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-g3-hub-"));
 const RUNS = path.join(TMP, "runs");
 await fs.mkdir(RUNS, { recursive: true });
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = RUNS;
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = RUNS;
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
 const ui = await import("../dist/ui.js");
 const BASE = `http://127.0.0.1:${PORTA}`;
 
 const post = (rota: string, corpo: unknown) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify(corpo),
+  method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify(corpo),
 });
 const linhas = (id: string) => {
   const f = path.join(RUNS, id + ".instrucao.jsonl");

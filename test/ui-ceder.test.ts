@@ -62,15 +62,15 @@ function openCodeFalso() {
 
 const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
 const ui = await import("../dist/ui.js");
 
 const BASE = `http://127.0.0.1:${PORTA}`;
 const post = (rota: string, body: unknown, hermes = true) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(body),
 });
 const ate = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   for (let i = 0; i < ms / 50; i++) { if (await cond()) return true; await new Promise((r) => setTimeout(r, 50)); }
@@ -83,7 +83,7 @@ test("ceder() fecha as pontes do /event (o hub antigo nao fica pendurado)", asyn
   await new Promise<void>((ok) => falso.srv.listen(0, "127.0.0.1", () => ok()));
   const baseFalso = `http://127.0.0.1:${(falso.srv.address() as net.AddressInfo).port}`;
   const conexoes = () => falso.srv.getConnections ? new Promise<number>((ok) => falso.srv.getConnections((_e, n) => ok(n))) : Promise.resolve(0);
-  const dir = process.env.HERMES_AGENTES_DIR!;
+  const dir = process.env.DEV_ORCHESTRA_AGENTES_DIR!;
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "ag-pendura.json"), JSON.stringify({
     id: "ag-pendura", projeto: "D:\cd", cwd: "D:\cd", base: baseFalso, sessao: "ses_1", nome: "P", papel: "livre",
@@ -109,7 +109,7 @@ test("corrida: reconexao em voo nao abre ponte depois de ceder/pararUI", async (
   });
   await new Promise<void>((ok) => lento.listen(0, "127.0.0.1", () => ok()));
   const base = `http://127.0.0.1:${(lento.address() as net.AddressInfo).port}`;
-  const dir = process.env.HERMES_AGENTES_DIR!;
+  const dir = process.env.DEV_ORCHESTRA_AGENTES_DIR!;
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "ag-lento.json"), JSON.stringify({
@@ -136,7 +136,7 @@ test("corrida (pararUI): reconexao em voo nao abre ponte depois de pararUI", asy
   });
   await new Promise<void>((ok) => lento.listen(0, "127.0.0.1", () => ok()));
   const base = `http://127.0.0.1:${(lento.address() as net.AddressInfo).port}`;
-  const dir = process.env.HERMES_AGENTES_DIR!;
+  const dir = process.env.DEV_ORCHESTRA_AGENTES_DIR!;
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "ag-lento2.json"), JSON.stringify({

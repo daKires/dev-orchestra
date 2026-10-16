@@ -3,9 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emDesktop, temaXterm, particaoDoProjeto } from "./desktop.ts";
 
-test("emDesktop: so com a ponte do preload (window.hermesDesktop) (CA-16d)", () => {
+test("emDesktop: so com a ponte do preload (window.devOrchestraDesktop) (CA-16d)", () => {
   assert.equal(emDesktop({}), false);
-  assert.equal(emDesktop({ hermesDesktop: { registrarNavegador() {} } }), true);
+  assert.equal(emDesktop({ devOrchestraDesktop: { registrarNavegador() {} } }), true);
   assert.equal(emDesktop(undefined), false);
 });
 
@@ -16,6 +16,6 @@ test("temaXterm: cores do canvas Castor (CA-4d)", () => {
 });
 
 test("particaoDoProjeto: persistente e isolada por projeto (CA-7a)", () => {
-  assert.equal(particaoDoProjeto("abc123"), "persist:hermes-abc123");
+  assert.equal(particaoDoProjeto("abc123"), "persist:dev-orchestra-abc123");
   assert.notEqual(particaoDoProjeto("a"), particaoDoProjeto("b"));
 });

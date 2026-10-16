@@ -32,11 +32,11 @@ function pedir(porta: number, host: string, rota: string, metodo = "GET", corpo 
 }
 
 const PORTA = await portaLivre();
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-runs-"));
-process.env.HERMES_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-plan-"));
-process.env.HERMES_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-canvas-"));
-process.env.HERMES_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-ag-"));
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-runs-"));
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-plan-"));
+process.env.DEV_ORCHESTRA_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-canvas-"));
+process.env.DEV_ORCHESTRA_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "seg-ag-"));
 const ui = await import("../dist/ui.js");
 
 test("hub: Host alheio -> 403 em GET, POST e /events; Host local segue normal (CA-1)", async (t) => {
@@ -46,8 +46,8 @@ test("hub: Host alheio -> 403 em GET, POST e /events; Host local segue normal (C
   assert.equal(await pedir(PORTA, mau, "/versao"), 403, "GET /versao");
   assert.equal(await pedir(PORTA, mau, "/events"), 403, "SSE");
   assert.equal(await pedir(PORTA, mau, "/canvas?projeto=x"), 403, "GET de dados");
-  assert.equal(await pedir(PORTA, mau, "/agentes/ag-x/teclas", "POST", JSON.stringify({ dados: "dir\r" }), { "X-Hermes": "1" }), 403, "POST com X-Hermes");
-  assert.equal(await pedir(PORTA, mau, "/ceder", "POST", "", { "X-Hermes": "1" }), 403, "ceder nao derruba o hub");
+  assert.equal(await pedir(PORTA, mau, "/agentes/ag-x/teclas", "POST", JSON.stringify({ dados: "dir\r" }), { "X-Dev-Orchestra": "1" }), 403, "POST com X-Hermes");
+  assert.equal(await pedir(PORTA, mau, "/ceder", "POST", "", { "X-Dev-Orchestra": "1" }), 403, "ceder nao derruba o hub");
   assert.equal(await pedir(PORTA, `127.0.0.1.evil.com:${PORTA}`, "/versao"), 403, "prefixo enganoso");
   assert.equal(await pedir(PORTA, "127.0.0.1:1", "/versao"), 403, "porta errada");
   assert.equal(await pedir(PORTA, `127.0.0.1:${PORTA}`, "/versao"), 200, "127.0.0.1");

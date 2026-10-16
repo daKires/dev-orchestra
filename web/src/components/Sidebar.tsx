@@ -68,7 +68,7 @@ export function Sidebar(p: Props) {
   }, [p.projeto]);
 
   // Alturas das 3 secoes (3:2:2 por padrao), persistidas; cada uma guarda ao menos o cabecalho (32px).
-  const layout = useDefaultLayout({ id: "hermes.layout.sidebar", storage: localStorage });
+  const layout = useDefaultLayout({ id: "dev-orchestra.layout.sidebar", storage: localStorage });
 
   const arvore = useMemo(() => arvoreDeCaminhos(caminhos), [caminhos]);
   const estaAberta = (caminho: string): boolean => abertos.get(caminho) ?? profundidade(caminho) < 2;

@@ -62,15 +62,15 @@ function openCodeFalso() {
 
 const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
 const ui = await import("../dist/ui.js");
 
 const BASE = `http://127.0.0.1:${PORTA}`;
 const post = (rota: string, body: unknown, hermes = true) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(body),
 });
 const ate = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   for (let i = 0; i < ms / 50; i++) { if (await cond()) return true; await new Promise((r) => setTimeout(r, 50)); }
@@ -103,14 +103,14 @@ async function montar(t: any, opts: { navegador?: unknown }) {
   t.after(() => { ui.pararUI(); falso.srv.closeAllConnections(); falso.srv.close(); });
   const projeto = cwd; // projeto = a propria pasta
   const criar = async (nome: string) => (await (await post("/agentes", { projeto, cwd, papel: "livre", nome })).json() as { id: string }).id;
-  const token = async (id: string) => JSON.parse(await fs.readFile(path.join(process.env.HERMES_AGENTES_DIR!, id + ".json"), "utf8")).token as string;
+  const token = async (id: string) => JSON.parse(await fs.readFile(path.join(process.env.DEV_ORCHESTRA_AGENTES_DIR!, id + ".json"), "utf8")).token as string;
   const a = await criar("Líder");
   const b = await criar("Outro");
   const eA = `${a}:${await token(a)}`;
   const eB = `${b}:${await token(b)}`;
   const no = (nid: string, dados: Record<string, unknown>, x: number) => ({ id: nid, tipo: "agente", x, y: 0, w: 620, h: 420, dados, rev: Date.now() });
   await post("/canvas/op", { projeto, ops: [{ op: "upsert", tipo: "no", item: no("ag:" + a, { agenteId: a }, 0) }, { op: "upsert", tipo: "no", item: no("ag:" + b, { agenteId: b }, 2000) }] });
-  const cli = (cmd: string, corpo: unknown, eu: string) => fetch(`${BASE}/cli/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1", "X-Eu": eu }, body: JSON.stringify(corpo) });
+  const cli = (cmd: string, corpo: unknown, eu: string) => fetch(`${BASE}/cli/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1", "X-Eu": eu }, body: JSON.stringify(corpo) });
   const snap = async () => await (await fetch(`${BASE}/canvas?projeto=${encodeURIComponent(projeto)}`)).json() as { nos: Array<{ id: string; tipo: string; dados: any }>; arestas: Array<{ de: string; para: string }> };
   return { projeto, cwd, a, b, eA, eB, cli, snap };
 }
@@ -186,9 +186,9 @@ test("browser shot: PNG em .orchestra/shots, card de imagem ligado e .orchestra 
   assert.equal(asset.status, 200);
 });
 
-test("browser sem app (sem driver): erro 'abra o app Hermes' (CA-7c, 16d)", async (t) => {
+test("browser sem app (sem driver): erro 'abra o app Dev Orchestra' (CA-7c, 16d)", async (t) => {
   const m = await montar(t, {});
   const r = await m.cli("browser-create", { nome: "p", url: "https://example.com" }, m.eA);
   assert.equal(r.status, 400);
-  assert.match(await r.text(), /navegador indisponível: abra o app Hermes/);
+  assert.match(await r.text(), /navegador indisponível: abra o app Dev Orchestra/);
 });

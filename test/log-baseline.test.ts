@@ -8,7 +8,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const H: any = await import("../dist/hermes.js");
+const H: any = await import("../dist/swarm.js");
 const nada = () => {};
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 function repo(): string {

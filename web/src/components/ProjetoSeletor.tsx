@@ -60,7 +60,7 @@ export function ProjetoSeletor({ projeto, onProjeto }: Props) {
     try {
       const r = await fetch("/canvas/projetos", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Hermes": "1" },
+        headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" },
         body: JSON.stringify({ raiz, nome: nome.trim() || undefined }),
       });
       if (!r.ok) { setErro("O hub recusou o pedido. Confira a pasta e tente de novo."); return; }

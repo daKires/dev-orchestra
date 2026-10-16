@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { agente } from "../dist/hermes.js";
+import { agente } from "../dist/swarm.js";
 
 const usarListar = { blocos: [{ type: "tool_use", id: "u1", name: "listar", input: { caminho: "." } }], stop: "tool_use" };
 const fim = { blocos: [{ type: "text", text: "fim" }], stop: "end_turn" };

@@ -73,7 +73,7 @@ test("Claude Code: grava dev-orchestra, remove hermes-bridge, preserva env extra
   assert.equal("hermes-bridge" in j.mcpServers, false);
   assert.deepEqual(j.mcpServers["dev-orchestra"], {
     type: "stdio", command: process.execPath, args: [APP],
-    env: { HERMES_MAX_TURNS: "100", OPENCODE_GO_API_KEY: "sk-go-123456789abcd", HERMES_MODEL: "glm-5.2" },
+    env: { DEV_ORCHESTRA_MAX_TURNS: "100", OPENCODE_GO_API_KEY: "sk-go-123456789abcd", DEV_ORCHESTRA_MODEL: "glm-5.2" },
   }, "chave de outro provedor sai (senao a prioridade do bridge escolheria ela)");
   assert.deepEqual(json(arq + ".bak-dev-orchestra"), antes);
 });
@@ -85,11 +85,11 @@ test("OpenCode, Cursor e Antigravity (2 caminhos) no formato de cada um (CA-9)",
   writeFileSync(oc, JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp: { "hermes-bridge": { type: "local", command: ["node", "v.js"], environment: { HERMES_MAX_TURNS: "50" }, enabled: true } } }));
   const r = S.salvar(home, base(home, await skillsTmp(), { ferramentas: ["opencode", "cursor", "antigravity"], provedor: "deepseek", modelo: "deepseek-flash", chave: "sk-ds-abcdefghij" }));
   assert.deepEqual(r.erros, {});
-  const env = { DEEPSEEK_API_KEY: "sk-ds-abcdefghij", HERMES_MODEL: "deepseek-flash" };
+  const env = { DEEPSEEK_API_KEY: "sk-ds-abcdefghij", DEV_ORCHESTRA_MODEL: "deepseek-flash" };
   const o = json(oc);
   assert.equal(o.$schema, "https://opencode.ai/config.json");
   assert.equal("hermes-bridge" in o.mcp, false);
-  assert.deepEqual(o.mcp["dev-orchestra"], { type: "local", command: [process.execPath, APP], environment: { HERMES_MAX_TURNS: "50", ...env }, enabled: true });
+  assert.deepEqual(o.mcp["dev-orchestra"], { type: "local", command: [process.execPath, APP], environment: { DEV_ORCHESTRA_MAX_TURNS: "50", ...env }, enabled: true });
   assert.deepEqual(json(path.join(home, ".cursor", "mcp.json")).mcpServers["dev-orchestra"], { command: process.execPath, args: [APP], env });
   for (const p of [path.join(home, ".gemini", "config", "mcp_config.json"), path.join(home, ".gemini", "antigravity", "mcp_config.json")])
     assert.deepEqual(json(p).mcpServers["dev-orchestra"], { command: process.execPath, args: [APP], env }, p);
@@ -110,7 +110,7 @@ test("Codex: bloco TOML proprio, idempotente, sem mexer no resto do arquivo (CA-
   assert.equal(t.split("[mcp_servers.dev-orchestra.env]").length - 1, 1);
   assert.ok(t.includes(`[mcp_servers.dev-orchestra]\ncommand = "${process.execPath.replace(/\\/g, "\\\\")}"\nargs = ["C:\\\\x\\\\dev-orchestra\\\\dist\\\\index.js"]`), "node absoluto no Codex");
   assert.match(t, /OPENROUTER_API_KEY = "sk-or-v1-abcdefgh"/);
-  assert.match(t, /HERMES_MODEL = "deepseek\/deepseek-v4\.1-flash"/);
+  assert.match(t, /DEV_ORCHESTRA_MODEL = "deepseek\/deepseek-v4\.1-flash"/);
   assert.ok(existsSync(toml + ".bak-dev-orchestra"));
 });
 
@@ -172,7 +172,7 @@ test("lerAtual: provedor/modelo atuais e chave mascarada; chave em branco mantem
   assert.deepEqual(S.lerAtual(home), { provedor: "go", modelo: "glm-5.2", chaveMascarada: "sk-…abcd" });
   S.salvar(home, base(home, skills, { ferramentas: ["claude", "cursor"], modelo: "kimi-k3", chave: "" }));
   const env = json(path.join(home, ".cursor", "mcp.json")).mcpServers["dev-orchestra"].env;
-  assert.deepEqual(env, { OPENCODE_GO_API_KEY: "sk-go-123456789abcd", HERMES_MODEL: "kimi-k3" });
+  assert.deepEqual(env, { OPENCODE_GO_API_KEY: "sk-go-123456789abcd", DEV_ORCHESTRA_MODEL: "kimi-k3" });
 });
 
 test("chave em branco sem chave atual e' erro (CA-12)", async () => {

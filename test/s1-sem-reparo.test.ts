@@ -38,18 +38,18 @@ async function bridge() {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   Object.assign(env, {
-    HERMES_UI_PORT: String(await portaLivre()),
-    HERMES_RUNS_DIR: path.join(tmp, "runs"),
-    HERMES_AGENTES_DIR: path.join(tmp, "agentes"),
-    HERMES_CANVAS_DIR: path.join(tmp, "canvas"),
-    HERMES_PLANEJADORES_DIR: path.join(tmp, "plan"),
-    HERMES_ABRIR_LOG: path.join(tmp, "abrir.log"),
+    DEV_ORCHESTRA_UI_PORT: String(await portaLivre()),
+    DEV_ORCHESTRA_RUNS_DIR: path.join(tmp, "runs"),
+    DEV_ORCHESTRA_AGENTES_DIR: path.join(tmp, "agentes"),
+    DEV_ORCHESTRA_CANVAS_DIR: path.join(tmp, "canvas"),
+    DEV_ORCHESTRA_PLANEJADORES_DIR: path.join(tmp, "plan"),
+    DEV_ORCHESTRA_ABRIR_LOG: path.join(tmp, "abrir.log"),
     OPENCODE_GO_API_KEY: "", DEEPSEEK_API_KEY: "", OPENROUTER_API_KEY: "",
   });
-  delete env.HERMES_REPAIR_TRIES;
+  delete env.DEV_ORCHESTRA_REPAIR_TRIES;
   const client = new Client({ name: "s1", version: "1.0.0" });
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(DIST, "index.js")], env, stderr: "ignore" }));
-  return { client, runsDir: env.HERMES_RUNS_DIR };
+  return { client, runsDir: env.DEV_ORCHESTRA_RUNS_DIR };
 }
 
 const texto = (r: any) => (r.content as any[]).map((c) => c.text).join("\n");
@@ -107,10 +107,10 @@ test("descricao da tool nao promete revisor (CA-2)", { timeout: 60000 }, async (
 });
 
 test("revisor e reparo sairam do codigo (CA-2)", async () => {
-  const hermes: Record<string, unknown> = await import("../dist/hermes.js");
+  const hermes: Record<string, unknown> = await import("../dist/swarm.js");
   for (const nome of ["revisar", "podeReparar", "REPAIR_TRIES", "diffStaged"]) assert.equal(nome in hermes, false, nome);
-  for (const arq of ["src/index.ts", "src/hermes.ts"]) {
+  for (const arq of ["src/index.ts", "src/swarm.ts"]) {
     const src = await fs.readFile(path.join(RAIZ, arq), "utf8");
-    assert.doesNotMatch(src, /HERMES_REPAIR_TRIES|podeReparar|revisar\(/, arq);
+    assert.doesNotMatch(src, /DEV_ORCHESTRA_REPAIR_TRIES|podeReparar|revisar\(/, arq);
   }
 });

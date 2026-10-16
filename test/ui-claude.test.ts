@@ -62,15 +62,15 @@ function openCodeFalso() {
 
 const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
 const ui = await import("../dist/ui.js");
 
 const BASE = `http://127.0.0.1:${PORTA}`;
 const post = (rota: string, body: unknown, hermes = true) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(body),
 });
 const ate = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   for (let i = 0; i < ms / 50; i++) { if (await cond()) return true; await new Promise((r) => setTimeout(r, 50)); }
@@ -126,7 +126,7 @@ test("agente Claude: spawn com identidade/hooks/PATH, teclas, saida no SSE, stat
   assert.equal(p.opts.cwd, cwd);
   const pathVar = p.opts.env.PATH ?? p.opts.env.Path ?? "";
   assert.match(pathVar.split(path.delimiter)[0], /[\\/]bin$/, "bin/ no PATH do claude");
-  const reg = JSON.parse(await fs.readFile(path.join(process.env.HERMES_AGENTES_DIR!, id + ".json"), "utf8"));
+  const reg = JSON.parse(await fs.readFile(path.join(process.env.DEV_ORCHESTRA_AGENTES_DIR!, id + ".json"), "utf8"));
   assert.equal(reg.tipo, "claude");
   const tok = reg.token as string;
   const args: string[] = p.opts.args;
@@ -151,14 +151,14 @@ test("agente Claude: spawn com identidade/hooks/PATH, teclas, saida no SSE, stat
 
   // um OpenCode ligado pergunta ao Claude; fila respeita os hooks
   const lid = (await (await post("/agentes", { projeto, cwd, papel: "lider", nome: "Líder" })).json() as { id: string }).id;
-  const tLid = JSON.parse(await fs.readFile(path.join(process.env.HERMES_AGENTES_DIR!, lid + ".json"), "utf8")).token;
+  const tLid = JSON.parse(await fs.readFile(path.join(process.env.DEV_ORCHESTRA_AGENTES_DIR!, lid + ".json"), "utf8")).token;
   const no = (nid: string, dados: Record<string, unknown>, x: number) => ({ id: nid, tipo: "agente", x, y: 0, w: 620, h: 420, dados, rev: Date.now() });
   await post("/canvas/op", { projeto, ops: [
     { op: "upsert", tipo: "no", item: no("ag:" + id, { agenteId: id }, 0) },
     { op: "upsert", tipo: "no", item: no("ag:" + lid, { agenteId: lid }, 800) },
     { op: "upsert", tipo: "aresta", item: { id: "e1", de: "ag:" + lid, para: "ag:" + id, rev: Date.now() } },
   ] });
-  const cli = (cmd: string, corpo: unknown, eu: string) => fetch(`${BASE}/cli/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1", "X-Eu": eu }, body: JSON.stringify(corpo) });
+  const cli = (cmd: string, corpo: unknown, eu: string) => fetch(`${BASE}/cli/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1", "X-Eu": eu }, body: JSON.stringify(corpo) });
   const eC = `${id}:${tok}`;
   assert.equal((await cli("status", { estado: "ocupado" }, eC)).status, 200);
   assert.equal((await lista()).find((a) => a.id === id)!.ocupado, true);
@@ -186,7 +186,7 @@ test("agente Claude: spawn com identidade/hooks/PATH, teclas, saida no SSE, stat
   assert.equal(pty.procs[1].morto, true);
 });
 
-test("agente Claude: claude ausente -> falhou; sem driver de PTY -> 'abra o app Hermes' (CA-4d, 16d)", async (t) => {
+test("agente Claude: claude ausente -> falhou; sem driver de PTY -> 'abra o app Dev Orchestra' (CA-4d, 16d)", async (t) => {
   await new Promise((r) => setTimeout(r, 500)); // o hub do caso anterior ainda solta a porta (close espera o SSE)
   t.after(() => ui.pararUI()); // sempre derruba o hub, mesmo se um assert falhar
   await ui.iniciarUI({ subirServe: async () => ({ base: "http://127.0.0.1:1", pid: 9 }), matarProcesso: () => {}, pty: ptyFalso(true) } as any);
@@ -198,5 +198,5 @@ test("agente Claude: claude ausente -> falhou; sem driver de PTY -> 'abra o app 
   await ui.iniciarUI({ subirServe: async () => ({ base: "http://127.0.0.1:1", pid: 9 }), matarProcesso: () => {} } as any);
   j = await (await post("/agentes", { projeto: cwd, cwd, tipo: "claude", papel: "dev" })).json() as { status: string; erro: string };
   assert.equal(j.status, "falhou");
-  assert.match(j.erro, /abra o app Hermes/);
+  assert.match(j.erro, /abra o app Dev Orchestra/);
 });

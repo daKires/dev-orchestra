@@ -14,7 +14,7 @@ export function CancelDialog({ r, aberto, onAberto }: Props) {
     if (!r) return;
     setErro("");
     try {
-      const res = await fetch(`/cancel?run=${encodeURIComponent(r.id)}`, { method: "POST", headers: { "X-Hermes": "1" } });
+      const res = await fetch(`/cancel?run=${encodeURIComponent(r.id)}`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
       if (!res.ok) throw new Error("HTTP " + res.status);
       onAberto(false);
     } catch (e) {

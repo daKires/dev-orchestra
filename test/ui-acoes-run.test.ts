@@ -1,5 +1,5 @@
 // Spec da G1 (CA-G1b): rota POST /runs/acao?run=<id> {acao} do hub, sobre o acoes-run.ts.
-// Pasta de runs isolada por HERMES_RUNS_DIR (o teste nunca toca o %TEMP%\hermes\runs de verdade).
+// Pasta de runs isolada por DEV_ORCHESTRA_RUNS_DIR (o teste nunca toca o %TEMP%\hermes\runs de verdade).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -17,11 +17,11 @@ function portaLivre(): Promise<number> {
 }
 const PORTA = await portaLivre();
 const TMP = mkdtempSync(path.join(os.tmpdir(), "hermes-acoes-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = path.join(TMP, "runs");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = path.join(TMP, "runs");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
 const ui = await import("../dist/ui.js");
 const BASE = `http://127.0.0.1:${PORTA}`;
 
@@ -37,15 +37,15 @@ function repoWorktree() {
   return { raiz, cwd };
 }
 function gravarRun(id: string, cwd: string, status: string) {
-  mkdirSync(process.env.HERMES_RUNS_DIR!, { recursive: true });
+  mkdirSync(process.env.DEV_ORCHESTRA_RUNS_DIR!, { recursive: true });
   const evs = [
     { t: "run", feature: "Exportar PDF", cwd, total: 1, ts: 1 },
     { t: "painel", status, branch: "orchestra/x", linhas: [], ts: 2 },
   ];
-  writeFileSync(path.join(process.env.HERMES_RUNS_DIR!, id + ".jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  writeFileSync(path.join(process.env.DEV_ORCHESTRA_RUNS_DIR!, id + ".jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 const acao = (run: string, corpo: unknown, hermes = true) => fetch(`${BASE}/runs/acao?run=${run}`, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(corpo),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(corpo),
 });
 
 test("POST /runs/acao: valida, acha a run pelo log e faz merge/descartar no repo dela (CA-G1b)", async (t) => {

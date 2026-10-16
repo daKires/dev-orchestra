@@ -35,14 +35,14 @@ const PROVEDOR = escolherProvedor(DEEPSEEK_KEY, OPENROUTER_KEY, GO_KEY);
 
 export const PROVEDOR_ID: ProvedorId = PROVEDOR.id;
 
-export const MODEL = process.env.HERMES_MODEL || PROVEDOR.model;
-const BASE_URL = process.env.HERMES_BASE_URL || PROVEDOR.baseURL;
-const MAX_TOKENS = Number(process.env.HERMES_MAX_TOKENS || "32000");
+export const MODEL = process.env.DEV_ORCHESTRA_MODEL || PROVEDOR.model;
+const BASE_URL = process.env.DEV_ORCHESTRA_BASE_URL || PROVEDOR.baseURL;
+const MAX_TOKENS = Number(process.env.DEV_ORCHESTRA_MAX_TOKENS || "32000");
 // Teto TOTAL do SDK bem alto: quem detecta travamento e' o timer ocioso (sem bytes por OCIOSO_MS),
 // assim geracao longa mas ativa nunca e' cortada (a causa do travamento da run E1).
-const TIMEOUT = Number(process.env.HERMES_TIMEOUT_MS || String(30 * 60 * 1000));
-const OCIOSO_MS = Number(process.env.HERMES_OCIOSO_MS || "60000");
-const TENTATIVAS = Number(process.env.HERMES_TENTATIVAS || "3");
+const TIMEOUT = Number(process.env.DEV_ORCHESTRA_TIMEOUT_MS || String(30 * 60 * 1000));
+const OCIOSO_MS = Number(process.env.DEV_ORCHESTRA_OCIOSO_MS || "60000");
+const TENTATIVAS = Number(process.env.DEV_ORCHESTRA_TENTATIVAS || "3");
 
 export type Ferramenta = { name: string; description: string; input_schema: Record<string, unknown> };
 export type Msg = { role: "user" | "assistant"; content: unknown };

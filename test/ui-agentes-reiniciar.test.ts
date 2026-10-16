@@ -62,15 +62,15 @@ function openCodeFalso() {
 
 const PORTA = await portaLivre();
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-ag-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
 const ui = await import("../dist/ui.js");
 
 const BASE = `http://127.0.0.1:${PORTA}`;
 const post = (rota: string, body: unknown, hermes = true) => fetch(BASE + rota, {
-  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Hermes": "1" } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { "Content-Type": "application/json", ...(hermes ? { "X-Dev-Orchestra": "1" } : {}) }, body: JSON.stringify(body),
 });
 const ate = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   for (let i = 0; i < ms / 50; i++) { if (await cond()) return true; await new Promise((r) => setTimeout(r, 50)); }
@@ -81,7 +81,7 @@ test("POST /agentes/:id/reiniciar: sobe serve, cria sessao nova, reabre a ponte 
   const falso = openCodeFalso();
   await new Promise<void>((ok) => falso.srv.listen(0, "127.0.0.1", () => ok()));
   const baseFalso = `http://127.0.0.1:${(falso.srv.address() as net.AddressInfo).port}`;
-  const dir = process.env.HERMES_AGENTES_DIR!;
+  const dir = process.env.DEV_ORCHESTRA_AGENTES_DIR!;
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "ag-velho.json"), JSON.stringify({
     id: "ag-velho", projeto: "D:\rs", cwd: "D:\rs", base: "http://127.0.0.1:1", sessao: "ses_morta", nome: "Velho", papel: "dev",

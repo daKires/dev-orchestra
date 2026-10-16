@@ -33,7 +33,7 @@ test("pelo bash, `canvas --eu ... ask ...` chega no hub com os argumentos intact
   const porta = (srv.address() as net.AddressInfo).port;
   const out = await new Promise<{ code: number; out: string; err: string }>((ok) => {
     const p = spawn("bash", ["-c", `canvas --eu ag-1:tok ask designer "Proponha um título curto, por favor"`], {
-      env: { ...process.env, PATH: BIN + path.delimiter + (process.env.PATH ?? process.env.Path ?? ""), HERMES_UI_PORT: String(porta) },
+      env: { ...process.env, PATH: BIN + path.delimiter + (process.env.PATH ?? process.env.Path ?? ""), DEV_ORCHESTRA_UI_PORT: String(porta) },
     });
     let o = ""; let e = "";
     p.stdout.on("data", (d) => { o += d; });

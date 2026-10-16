@@ -18,11 +18,11 @@ function portaLivre(): Promise<number> {
 }
 const PORTA = await portaLivre();
 const TMP = mkdtempSync(path.join(os.tmpdir(), "log-hub-"));
-process.env.HERMES_UI_PORT = String(PORTA);
-process.env.HERMES_RUNS_DIR = path.join(TMP, "runs");
-process.env.HERMES_AGENTES_DIR = path.join(TMP, "agentes");
-process.env.HERMES_CANVAS_DIR = path.join(TMP, "canvas");
-process.env.HERMES_PLANEJADORES_DIR = path.join(TMP, "plan");
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_RUNS_DIR = path.join(TMP, "runs");
+process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(TMP, "agentes");
+process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(TMP, "canvas");
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(TMP, "plan");
 const ui: any = await import("../dist/ui.js");
 const BASE = `http://127.0.0.1:${PORTA}`;
 
@@ -40,7 +40,7 @@ test("hub: corpo com acento partido entre chunks chega integro; /runs/acao com i
   const corte = corpo.indexOf(Buffer.from("ç", "utf8")) + 1; // no meio dos 2 bytes do 'ç'
   const status = await new Promise<number>((ok, falha) => {
     const req = http.request({ host: "127.0.0.1", port: PORTA, path: "/canvas/projetos", method: "POST",
-      headers: { "Content-Type": "application/json", "X-Hermes": "1", "Content-Length": corpo.length } }, (res) => { res.resume(); ok(res.statusCode ?? 0); });
+      headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1", "Content-Length": corpo.length } }, (res) => { res.resume(); ok(res.statusCode ?? 0); });
     req.on("error", falha);
     req.write(corpo.subarray(0, corte));
     setTimeout(() => req.end(corpo.subarray(corte)), 50);
@@ -50,7 +50,7 @@ test("hub: corpo com acento partido entre chunks chega integro; /runs/acao com i
   assert.equal(projetos.find((p) => p.raiz === "D:\\proj\\acentos")?.nome, "Ação");
 
   for (const id of ["../x", "A..B", "run%2F..%2Fx"]) {
-    const r = await fetch(`${BASE}/runs/acao?run=${id}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Hermes": "1" }, body: JSON.stringify({ acao: "merge" }) });
+    const r = await fetch(`${BASE}/runs/acao?run=${id}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify({ acao: "merge" }) });
     assert.equal(r.status, 400, id);
   }
 });

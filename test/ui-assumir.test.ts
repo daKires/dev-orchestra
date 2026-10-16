@@ -26,11 +26,11 @@ function portaLivre(): Promise<number> {
 }
 
 const PORTA = await portaLivre();
-process.env.HERMES_UI_PORT = String(PORTA);
+process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
 const PLAN = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-plan-a-"));
-process.env.HERMES_PLANEJADORES_DIR = PLAN;
-process.env.HERMES_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-ag-")); // nunca os agentes reais
-process.env.HERMES_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-cv-"));
+process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = PLAN;
+process.env.DEV_ORCHESTRA_AGENTES_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-ag-")); // nunca os agentes reais
+process.env.DEV_ORCHESTRA_CANVAS_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-assumir-cv-"));
 const ui = await import("../dist/ui.js");
 
 const ms = (n: number) => new Promise((r) => setTimeout(r, n));
@@ -49,7 +49,7 @@ async function esperarVersao(porta: number, msTotal = 15000): Promise<boolean> {
 // Sobe um filho index.js --ui (o "app" de verdade, via CLI) numa porta isolada.
 function subirUi(porta: number): ChildProcess {
   return spawn(process.execPath, [path.join(AQUI, "index.js"), "--ui"], {
-    env: { ...process.env, HERMES_UI_PORT: String(porta), HERMES_PLANEJADORES_DIR: PLAN },
+    env: { ...process.env, DEV_ORCHESTRA_UI_PORT: String(porta), DEV_ORCHESTRA_PLANEJADORES_DIR: PLAN },
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -73,7 +73,7 @@ function servidorFalso(porta: number, versao: number, fecharAoCeder = false): Pr
         res.end(JSON.stringify({ versao }));
         return;
       }
-      if (versao > 0 && url === "/ceder" && req.method === "POST" && req.headers["x-hermes"] === "1") {
+      if (versao > 0 && url === "/ceder" && req.method === "POST" && req.headers["x-dev-orchestra"] === "1") {
         cedes++;
         res.writeHead(204);
         res.end();
@@ -164,7 +164,7 @@ test("sem onCeder (modo stdio): /ceder solta a porta e o processo SEGUE vivo (CA
   t.after(() => ui.pararUI());
   await ui.iniciarUI({}); // stdio: cede a porta mas NAO morre
   assert.ok(await versaoOK(PORTA), "o modulo subiu o servidor na porta");
-  const resp = await fetch(`http://127.0.0.1:${PORTA}/ceder`, { method: "POST", headers: { "X-Hermes": "1" } });
+  const resp = await fetch(`http://127.0.0.1:${PORTA}/ceder`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
   assert.equal(resp.status, 204);
   await ms(400); // ceder() e' agendado ~50ms depois do 204
   await assert.rejects(fetch(`http://127.0.0.1:${PORTA}/versao`), /fetch failed/, "a porta foi solta");

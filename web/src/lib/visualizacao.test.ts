@@ -23,10 +23,10 @@ test("Canvas e' so' leitura: pan e zoom, sem selecao/arrasto/conexao", () => {
 
 test("layout redimensionavel e persistido (CA-7..CA-10)", () => {
   const ids: Record<string, string> = {
-    "../App.tsx": "hermes.layout.app",
-    "Canvas.tsx": "hermes.layout.canvas",
-    "Sidebar.tsx": "hermes.layout.sidebar",
-    "canvas/PainelRun.tsx": "hermes.layout.diff",
+    "../App.tsx": "dev-orchestra.layout.app",
+    "Canvas.tsx": "dev-orchestra.layout.canvas",
+    "Sidebar.tsx": "dev-orchestra.layout.sidebar",
+    "canvas/PainelRun.tsx": "dev-orchestra.layout.diff",
   };
   for (const [arq, id] of Object.entries(ids)) {
     const src = readFileSync(comp(arq), "utf8");
