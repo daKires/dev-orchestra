@@ -554,34 +554,29 @@ export async function agente(
   }
 }
 
-// Evento "run" da UI + o pid do processo que abriu a run (campo gravado pelo MCP; opcional nas runs antigas).
-type EventoRun = Extract<Evento, { t: "run" }> & { pid?: number };
-
-// Compara dois caminhos de projeto (mesma pasta com barra/maiuscula diferente conta igual; win32 e' case-insensitive).
+// win32 e' case-insensitive
 function mesmaCwd(a: string, b: string): boolean {
   const ra = path.resolve(a);
   const rb = path.resolve(b);
   return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
 }
 
-// Retomada: acha a run MORTA (mesma feature + mesmo cwd, sem evento painel e com o pid ja' morto) pra
-// pular na run nova o prefixo de slices que ela ja' concluiu. Sem pid (runs antigas) conta como morta.
-// Devolve { de: <id da morta>, slices: [1, 2, ...] } (vazio = nada a pular) ou null se nao ha candidata.
+// Run MORTA = mesma feature+cwd, sem painel, pid morto (sem pid = run antiga = morta). slices = prefixo
+// 1-based ja' ok com a mesma tarefa; [] = achou mas nada a pular.
 export function acharRunMorta(
   runs: Map<string, Evento[]>, cwd: string, feature: string, plano: { tarefa: string }[], vivo: (pid: number) => boolean,
 ): { de: string; slices: number[] } | null {
   let morta: { id: string; evs: Evento[]; ts: number } | null = null;
   for (const [id, evs] of runs) {
-    const run = evs.find((e) => e.t === "run") as EventoRun | undefined;
+    const run = evs.find((e) => e.t === "run");
     if (!run || run.t !== "run") continue;
     if (run.feature !== feature || !mesmaCwd(run.cwd, cwd)) continue;
-    if (evs.some((e) => e.t === "painel")) continue;                  // ja' terminou (tem painel final)
-    if (typeof run.pid === "number" && vivo(run.pid)) continue;      // o processo ainda esta vivo: nao e' morta
+    if (evs.some((e) => e.t === "painel")) continue;
+    if (typeof run.pid === "number" && vivo(run.pid)) continue;
     const ts = run.ts ?? 0;
-    if (!morta || ts > morta.ts) morta = { id, evs, ts };            // entre as mortas, vale a mais recente
+    if (!morta || ts > morta.ts) morta = { id, evs, ts };
   }
   if (!morta) return null;
-  // prefixo 1-based: o ULTIMO evento 'slice' com idx=i+1 tem que estar 'ok' e ser a mesma tarefa do plano.
   const slices: number[] = [];
   for (let i = 0; i < plano.length; i++) {
     const ev = [...morta.evs].reverse().find((e) => e.t === "slice" && e.idx === i + 1);
@@ -591,7 +586,6 @@ export function acharRunMorta(
   return { de: morta.id, slices };
 }
 
-// Marca a run morta como INTERROMPIDA no proprio JSONL (append): a UI mostra que a run nova a retomou.
 export function marcarInterrompida(dir: string, id: string, novo: string): void {
   const ev: Evento = { t: "painel", status: "INTERROMPIDA", branch: "", linhas: ["retomada por " + novo], ts: Date.now() };
   try { appendFileSync(path.join(dir, id + ".jsonl"), JSON.stringify(ev) + "\n"); } catch {}
@@ -625,7 +619,6 @@ export async function construir(
     const t = plano[idx];
     const sliceIdx = idx + 1;
     const inicio = Date.now();
-    // Retomada: slice ja' concluida na run morta NUNCA chama o modelo (nem emite "rodando").
     if (retomada?.slices.includes(sliceIdx)) {
       const motivo = "retomada de " + retomada.de;
       emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "ok", escritos: [], comandos: [], motivo, ms: 0 });

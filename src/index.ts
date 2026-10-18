@@ -123,8 +123,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       return painel;
     }
     const { baselineRef, branch, base: baseRun } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
-    // Retomada: run MORTA no mesmo cwd+feature (sem painel, pid morto) tem o prefixo de slices ok pulado aqui.
-    // process.kill(pid, 0) sem erro = vivo; EPERM (processo de outro usuario) tambem conta como vivo.
+    // Retomada: pula o prefixo ja' ok da run morta. EPERM (processo de outro usuario) conta como vivo.
     const vivoPid = (pid: number): boolean => {
       try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
     };
