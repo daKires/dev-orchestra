@@ -1,7 +1,5 @@
-// Hub do navegador controlado por agentes (S3 do partir-ui): driver injetado pelo app desktop e os
-// utilitarios de resolucao dos nos 'navegador' (acessiveis ao agente, cache de elementos e leitura).
-// Codigo movido LITERALMENTE do ui.ts, sem mudanca de comportamento (CA-7). Este modulo NUNCA importa
-// ./ui.js (dependencia de mao unica: o ui.ts importa daqui).
+// Navegador controlado por agentes: driver injetado pelo app desktop e a resolucao dos nos 'navegador'
+// (acessiveis ao agente, cache de elementos). Nunca importa ./ui.js.
 import { idProjeto, type No, type Snapshot } from "./canvas.js";
 import { slugNome } from "./colaboracao.js";
 import type { Elemento, Leitura } from "./navegador.js";

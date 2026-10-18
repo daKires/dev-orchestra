@@ -1,7 +1,6 @@
 // Núcleo do hub do dashboard: pastas de dados compartilhadas, JSONL das runs, registros de
 // planejadores e o barramento SSE (quem pega a porta empurra TODOS os arquivos pro browser).
-// S1 do partir-ui: codigo movido LITERALMENTE do ui.ts, sem mudanca de comportamento (CA-7).
-// Este modulo NUNCA importa ./ui.js (dependencia de mao unica: o ui.ts importa daqui).
+// Nunca importa ./ui.js (o ui.ts importa daqui).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +20,7 @@ export const DADOS_DIR = path.join(os.homedir(), ".dev-orchestra", "dados");
 export const RUNS_DIR = process.env.DEV_ORCHESTRA_RUNS_DIR || path.join(DADOS_DIR, "runs"); // barramento em disco, compartilhado entre processos
 // Registros dos planejadores: um JSON por worktree com o chat do planejador.
 export const PLANEJADORES_DIR = process.env.DEV_ORCHESTRA_PLANEJADORES_DIR || path.join(DADOS_DIR, "planejadores");
-// Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
+// Canvas: um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
 export const CANVAS_DIR = process.env.DEV_ORCHESTRA_CANVAS_DIR || path.join(DADOS_DIR, "canvas");
 // Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
 export const AGENTES_DIR = process.env.DEV_ORCHESTRA_AGENTES_DIR || path.join(DADOS_DIR, "agentes");
@@ -355,7 +354,6 @@ export function hostLocal(cabecalho: string | string[] | undefined, porta: numbe
   return alvo === "127.0.0.1:" + porta || alvo === "localhost:" + porta;
 }
 
-// Resposta HTTP simples de texto puro (S4c: generica, usada por varias rotas do ui.ts).
 export function responderTexto(res: ServerResponse, status: number, texto: string): void {
   res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   res.end(texto);

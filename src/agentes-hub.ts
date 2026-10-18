@@ -1,10 +1,8 @@
-// Hub dos agentes (S4a/S4b/S4c do partir-ui): registro em disco, serve do OpenCode (subir/reaproveitar),
+// Agentes do hub: registro em disco, serve do OpenCode (subir/reaproveitar),
 // a ponte SSE do /event que vira transcricao, a lista de modelos do provider, o PTY dos agentes Claude,
 // a colaboracao entre agentes (identidade por token, conversas e fila de entregas), o contexto em disco
 // e as rotas /agentes*, /arvore e /arquivo (rotasAgentes).
-// Codigo movido LITERALMENTE do ui.ts, sem mudanca de comportamento (CA-7). Este modulo NUNCA importa
-// ./ui.js (dependencia de mao unica: o ui.ts importa daqui). O que ainda mora no ui.ts (servidor e
-// hubAtivo) chega por GANCHO, mesmo padrao do definirGanchosHub/definirGanchosCanvas.
+// Nunca importa ./ui.js: o que depende do servidor entra por gancho (definirGanchosAgentes).
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -13,8 +11,6 @@ import { execSync, spawn } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { idProjeto, mesclarProjetos, type Aresta, type No, type Snapshot } from "./canvas.js";
 import { AGENTES_DIR, CANVAS_DIR, WEB_DIR, acaoValida, broadcast, lerCorpo, planejadores, responderTexto, type Planejador } from "./hub.js";
-// S4c: raizDeProjeto cruza as raizes descobertas (runs/planejadores) com os projetos salvos do canvas.
-// S5: as rotas /cli/* (rotasCli) tambem usam o lerCanvas/aplicarOpsProjeto daqui.
 import { lerCanvas, aplicarOpsProjeto, lerProjetosSalvos, raizesDescobertas } from "./canvas-hub.js";
 import {
   PAPEIS, agenteDePlanejador, validarAgente, normalizarEvento, aplicarLinhas, separarModelo, FilaAvisos,
@@ -661,9 +657,7 @@ export function pararAgentes(): void {
   aguardandoSet.clear();
 }
 
-// ---- S4c do partir-ui: arvore, sessoes do OpenCode, contexto em disco e as rotas /agentes*, /arvore e
-// /arquivo. Codigo movido LITERALMENTE do ui.ts (CA-7), sem mudanca de comportamento: os handlers do
-// criarServidor viraram o `rotasAgentes` (true = tratou; o ui.ts so' chama e retorna no mesmo lugar). ----
+// ---- arvore, sessoes do OpenCode, contexto em disco e rotas /agentes*, /arvore, /arquivo ----
 
 // Arvore do worktree do agente: `git ls-files` + nao rastreados (exclui ignorados), barras '/', ate 5000.
 function listarArvore(cwd: string): string[] {
@@ -1054,9 +1048,6 @@ export async function rotasAgentes(req: IncomingMessage, res: ServerResponse, ca
   return false;
 }
 
-// ---- S5 do partir-ui: as rotas /cli/* do criarServidor viram o rotasCli (true = tratou; o ui.ts so'
-// chama e retorna no mesmo lugar, como faz com o rotasAgentes/rotasCanvas). Codigo movido LITERALMENTE
-// do ui.ts (CA-7), sem mudanca de comportamento: cada `return;` interno virou `return true;`.
 // ---- CLI dos agentes (F3/S2): POST /cli/<cmd> com X-Dev-Orchestra e X-Eu: id:token ----
 export async function rotasCli(req: IncomingMessage, res: ServerResponse, caminho: string, url: string): Promise<boolean> {
   if (!caminho.startsWith("/cli/")) return false;

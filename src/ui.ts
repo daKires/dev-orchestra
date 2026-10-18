@@ -7,9 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// S1/S6 do partir-ui: o nucleo do hub (pastas de dados, JSONL das runs, planejadores, SSE, utilitarios
-// HTTP e as rotas das acoes da run) mora em ./hub.js; aqui ficam so' o servidor/roteador e o handoff da
-// porta. A API publica deste modulo NAO muda: o que saiu daqui e' reexportado do hub logo abaixo.
+// Aqui ficam so' o roteador e o handoff da porta; o resto mora em hub/canvas-hub/navegador-hub/agentes-hub
+// (nenhum deles importa este modulo). A API publica continua aqui, reexportada.
 import {
   PORT, DADOS_DIR, RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR,
   clientes, planejadores, sse, enviar, rescan, podar, servirEstatico,
@@ -17,33 +16,22 @@ import {
   responderTexto, rotasRuns, migrarDadosAntigos, definirGanchosHub, type Cliente,
 } from "./hub.js";
 
-// S2 do partir-ui: o canvas (grafo por projeto, projetos/assets em disco e as rotas /canvas*) mora em
-// ./canvas-hub.js; aqui fica so' o roteador do servidor, que chama rotasCanvas.
 import {
   rotasCanvas, descarregarCanvas, definirGanchosCanvas,
 } from "./canvas-hub.js";
 
-// S3 do partir-ui: o navegador dos agentes (driver injetado + resolucao dos nos 'navegador') mora em
-// ./navegador-hub.js; aqui so' se liga/desliga o driver (as rotas do CLI que o usam ficam no agentes-hub).
 import {
   definirNavegador, pararNavegador,
   type Navegador,
 } from "./navegador-hub.js";
 
-// S4a/S4b/S4c do partir-ui: o registro dos agentes, o serve do OpenCode, a ponte do /event, o PTY do
-// Claude, a colaboracao, o contexto em disco e as rotas /agentes*/arvore/arquivo moram em
-// ./agentes-hub.js; aqui fica so' o roteador do servidor, que chama rotasAgentes e rotasCli.
-// `envClaude` continua na API publica deste modulo (reexportado logo abaixo).
 import {
   envClaude, pontes, ptyProcs, ptyBuffers,
   reconectarPontes, definirGanchosAgentes, iniciarAgentes, pararAgentes,
-  // PTY do Claude e colaboracao (S4b)
   aguardandoSet, filaEntregas,
   tentarLiberarAviso, tentarLiberarEntregas,
   iniciarExpiracao, pararExpiracao, garantirTokenPlanejador,
-  // S4c: contexto em disco (gancho do canvas) e as rotas /agentes*, /arvore e /arquivo
   sincronizarContexto, rotasAgentes,
-  // S5: as rotas CLI dos agentes (POST <cli>/<cmd>), com o mesmo contrato do rotasAgentes
   rotasCli,
   type PtyDriver,
 } from "./agentes-hub.js";
@@ -77,8 +65,7 @@ definirGanchosHub({
   },
 });
 
-// O canvas-hub nao conhece agentes: a sincronizacao do contexto em disco (nos 'agente', S4c no
-// agentes-hub) e' ligada por gancho — mesma dependencia de mao unica do hub.
+// O canvas-hub nao conhece agentes: o contexto em disco dos nos 'agente' entra por gancho.
 definirGanchosCanvas({ aoAplicarOps: (snap) => sincronizarContexto(snap) });
 
 // Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (nome anterior do produto).
@@ -90,7 +77,6 @@ if (PASTAS_PADRAO) {
 
 try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch {}
 
-// ---- servidor/rotas deste processo: o estado do SSE e as pastas de dados vem de ./hub.js ----
 let servidor: http.Server | null = null;
 // Promessa do fechamento do ultimo servidor: o proximo escutar() espera o socket ser liberado de fato
 // (sem isso, um iniciarUI imediatamente apos pararUI liga numa porta ainda presa pelo socket antigo).
@@ -101,14 +87,6 @@ let limpeza: NodeJS.Timeout | null = null;   // poda os registros de planejadore
 let reassumir: NodeJS.Timeout | null = null; // quem ficou sem porta tenta de novo
 let onCeder: (() => void) | null = null;     // chamado no fim do ceder() (modo --ui encerra o processo)
 let sempreAssumir = false;                   // modo --ui: assume a porta de QUALQUER hub Dev Orchestra (sem comparar versao)
-
-// ---- canvas (S2): grafo por projeto, projetos/assets e rotas /canvas* em ./canvas-hub.js ----
-
-// Agentes (F2/S3, CA-4a/4c/5/9): o estado dos agentes, o serve do OpenCode, a ponte do /event, o PTY
-// do Claude, a colaboracao, o contexto em disco e as rotas /agentes*, /arvore e /arquivo moram em
-// ./agentes-hub.js (S4a/S4b/S4c) — novoToken, portaLivre, caminhoOpencode, envServe/envClaude,
-// conversas, fila de entregas, tokens dos planejadores, expiracao e os drivers injetados
-// (iniciarAgentes/pararAgentes) e o roteador do servidor.
 
 // Libera a porta (pedido de um processo com UI mais nova). No modo --ui, onCeder encerra o processo.
 function ceder(): void {
@@ -173,9 +151,7 @@ function criarServidor(): http.Server {
     }
     // ---- acoes da run no card (G1/S2 merge|pr|descartar e G3 instrucao|pausa): rotasRuns no hub ----
     if (await rotasRuns(req, res, caminho, url)) return;
-    // ---- canvas (S2) ----
     if (await rotasCanvas(req, res, caminho, url)) return;
-    // ---- agentes (F2/S3 + S4c): /agentes*, /arvore e /arquivo moram em ./agentes-hub.js ----
     if (await rotasAgentes(req, res, caminho, url)) return;
     // ---- CLI dos agentes (F3/S2 + S5): as rotas POST <cli>/<cmd> moram no agentes-hub (rotasCli) ----
     if (await rotasCli(req, res, caminho, url)) return;
@@ -257,8 +233,6 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   if (servidor) return;
   onCeder = opts.onCeder ?? null;
   sempreAssumir = opts.sempreAssumir ?? false;
-  // S4b: os drivers (serve do OpenCode, matar processo e PTY do Claude) e os registros em disco ficam
-  // no agentes-hub; aqui so' se liga o que este modulo possui.
   iniciarAgentes({ subirServe: opts.subirServe, matarProcesso: opts.matarProcesso, pty: opts.pty });
   definirNavegador(opts.navegador); // F4/S2: sem driver, toda rota browser-* responde 400
   if (!(await escutar())) await tentarAssumir();
@@ -281,8 +255,6 @@ export function pararUI(): void {
   if (intervalo) { clearInterval(intervalo); intervalo = null; }
   if (reassumir) { clearInterval(reassumir); reassumir = null; }
   if (limpeza) { clearInterval(limpeza); limpeza = null; }
-  // S4b: expiracao das conversas, pontes do /event, serves do OpenCode, PTYs dos agentes Claude
-  // (processos e buffers) e o 'aguardando' dos hooks — tudo no agentes-hub.
   pararAgentes();
   if (watcher) { try { watcher.close(); } catch {} watcher = null; }
   descarregarCanvas(); // grava ops pendentes do debounce antes de desligar

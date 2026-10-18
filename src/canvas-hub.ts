@@ -1,7 +1,5 @@
-// Hub do canvas (S2 do partir-ui): grafo por projeto, projetos/assets em disco e as rotas /canvas*.
-// Codigo movido LITERALMENTE do ui.ts, sem mudanca de comportamento (CA-7). Este modulo NUNCA importa
-// ./ui.js (dependencia de mao unica: o ui.ts importa daqui) e liga, por gancho, o contexto dos agentes
-// que continua no ui.ts — o canvas NAO conhece agentes, so' avisa quem aplica ops.
+// Canvas do hub: grafo por projeto, projetos/assets em disco e as rotas /canvas*. Nao conhece agentes:
+// so' avisa (gancho) quem aplica ops. Nunca importa ./ui.js.
 import fs from "node:fs";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -15,7 +13,7 @@ export type GanchosCanvas = { aoAplicarOps: (snap: Snapshot) => void };
 let ganchosCanvas: GanchosCanvas = { aoAplicarOps: () => {} };
 export function definirGanchosCanvas(g: GanchosCanvas): void { ganchosCanvas = g; }
 
-// ---- canvas (S2): grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
+// ---- grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
 const LIMITE_BODY_CANVAS = 2 * 1024 * 1024;        // 2MB: lotes de ops
 const LIMITE_BODY_CANVAS_ASSET = 40 * 1024 * 1024; // 40MB: imagem em base64 (infla ~33%)
 const CANVAS_DEBOUNCE_MS = 300;                    // gravacao em disco com debounce
