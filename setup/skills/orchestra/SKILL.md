@@ -70,7 +70,7 @@ Passos (em PT-BR):
    Os agentes tem buscar/listar/ler_arquivo pra explorar e editar_arquivo (troca de trecho) pra mudar
    arquivo existente; nao coloque git/grep na allowlist pra isso.
    A tool e ASSINCRONA: volta na hora com `RUN INICIADA: <runId>`. Chame `status_orchestra` com esse
-   runId EM LOOP (cada chamada espera ~45s) enquanto vier `RODANDO`; pare quando vier o painel final.
+   runId EM LOOP (cada chamada espera ~20s) enquanto vier `RODANDO`; pare quando vier o painel final.
    Cancelar e so pelo botao do dashboard (parar o chat NAO cancela a run).
 7. Mostre INTEGRALMENTE o painel final que `status_orchestra` retornar, incluindo o LINK DO DASHBOARD
    que vem na propria resposta. Lembre o usuario que o progresso ao vivo (cada slice, tool call, o

@@ -4,7 +4,7 @@ import { mensagem as mensagemReal, CanceladoError, PROVEDOR_ID, type MensagemFn,
 import { type Evento, type Emitir } from "./ui.js";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
-import { promises as fs } from "node:fs";
+import { promises as fs, appendFileSync } from "node:fs";
 import path from "node:path";
 
 const pexec = promisify(execFile); // git
@@ -484,6 +484,7 @@ export async function agente(
     "antigo -> novo) e crie arquivo novo com escrever_arquivo (conteudo COMPLETO, sem cercas ```); remova arquivo com apagar_arquivo; havendo comando de verificacao permitido rode " +
     "com rodar_comando e conserte os erros ate passar. Ao EDITAR arquivo existente, preserve toda a estrutura; " +
     "mude so o que a tarefa pede. Quando terminar, responda um resumo curto (sem mais tool calls). " +
+    "Rode so o comando de verificacao desta slice (nao rode suites extras); assim que passar, encerre com o resumo. " +
     "Se chegar uma mensagem comecando com 'INSTRUCAO DO USUARIO:', ela vem do dono da run durante a execucao e tem prioridade sobre a tarefa original: cumpra-a (mesmo que mude arquivos fora dos alvos) antes de terminar.";
   const user =
     `Feature: ${feature}\nTarefa: ${t.tarefa}\nArquivos-alvo: ${t.arquivos_alvo.join(", ") || "(voce decide)"}\n` +
@@ -553,6 +554,49 @@ export async function agente(
   }
 }
 
+// Evento "run" da UI + o pid do processo que abriu a run (campo gravado pelo MCP; opcional nas runs antigas).
+type EventoRun = Extract<Evento, { t: "run" }> & { pid?: number };
+
+// Compara dois caminhos de projeto (mesma pasta com barra/maiuscula diferente conta igual; win32 e' case-insensitive).
+function mesmaCwd(a: string, b: string): boolean {
+  const ra = path.resolve(a);
+  const rb = path.resolve(b);
+  return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+// Retomada: acha a run MORTA (mesma feature + mesmo cwd, sem evento painel e com o pid ja' morto) pra
+// pular na run nova o prefixo de slices que ela ja' concluiu. Sem pid (runs antigas) conta como morta.
+// Devolve { de: <id da morta>, slices: [1, 2, ...] } (vazio = nada a pular) ou null se nao ha candidata.
+export function acharRunMorta(
+  runs: Map<string, Evento[]>, cwd: string, feature: string, plano: { tarefa: string }[], vivo: (pid: number) => boolean,
+): { de: string; slices: number[] } | null {
+  let morta: { id: string; evs: Evento[]; ts: number } | null = null;
+  for (const [id, evs] of runs) {
+    const run = evs.find((e) => e.t === "run") as EventoRun | undefined;
+    if (!run || run.t !== "run") continue;
+    if (run.feature !== feature || !mesmaCwd(run.cwd, cwd)) continue;
+    if (evs.some((e) => e.t === "painel")) continue;                  // ja' terminou (tem painel final)
+    if (typeof run.pid === "number" && vivo(run.pid)) continue;      // o processo ainda esta vivo: nao e' morta
+    const ts = run.ts ?? 0;
+    if (!morta || ts > morta.ts) morta = { id, evs, ts };            // entre as mortas, vale a mais recente
+  }
+  if (!morta) return null;
+  // prefixo 1-based: o ULTIMO evento 'slice' com idx=i+1 tem que estar 'ok' e ser a mesma tarefa do plano.
+  const slices: number[] = [];
+  for (let i = 0; i < plano.length; i++) {
+    const ev = [...morta.evs].reverse().find((e) => e.t === "slice" && e.idx === i + 1);
+    if (!ev || ev.t !== "slice" || ev.status !== "ok" || ev.tarefa !== plano[i].tarefa) break;
+    slices.push(i + 1);
+  }
+  return { de: morta.id, slices };
+}
+
+// Marca a run morta como INTERROMPIDA no proprio JSONL (append): a UI mostra que a run nova a retomou.
+export function marcarInterrompida(dir: string, id: string, novo: string): void {
+  const ev: Evento = { t: "painel", status: "INTERROMPIDA", branch: "", linhas: ["retomada por " + novo], ts: Date.now() };
+  try { appendFileSync(path.join(dir, id + ".jsonl"), JSON.stringify(ev) + "\n"); } catch {}
+}
+
 export type Resultado = {
   tarefa: string; ok: boolean; escritos: string[]; comandos: string[]; motivo: string;
   iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente: number; tokensIn: number; tokensOut: number;
@@ -561,9 +605,10 @@ export type Resultado = {
 // Executa o plano SERIAL: um agente por slice, na ordem. Emite "fila" pra todas de saida, depois
 // "rodando"/"ok"/"incompleta" conforme cada uma processa, e uma "metrica" por slice. PARA na primeira
 // slice que falhar (as seguintes costumam depender dela) ou no cancelamento: o resto vira "pulada".
+// `retomada` (opcional): slices do prefixo ja' concluido pela run morta `de` — nao chamam agente.
 export async function construir(
   cwd: string, feature: string, plano: Tarefa[], emit: Emitir, cmds: string[], signal?: AbortSignal,
-  msgFn: MensagemFn = mensagemReal, caixaDe?: (sliceIdx: number) => CaixaSlice,
+  msgFn: MensagemFn = mensagemReal, caixaDe?: (sliceIdx: number) => CaixaSlice, retomada?: { de: string; slices: number[] },
 ): Promise<{ escritos: string[]; rejeitados: string[]; resultados: Resultado[]; cancelado: boolean; ambiente?: AmbienteError }> {
   const base = path.resolve(cwd);
   const escritos: string[] = [];
@@ -580,6 +625,20 @@ export async function construir(
     const t = plano[idx];
     const sliceIdx = idx + 1;
     const inicio = Date.now();
+    // Retomada: slice ja' concluida na run morta NUNCA chama o modelo (nem emite "rodando").
+    if (retomada?.slices.includes(sliceIdx)) {
+      const motivo = "retomada de " + retomada.de;
+      emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "ok", escritos: [], comandos: [], motivo, ms: 0 });
+      resultados.push({
+        tarefa: t.tarefa, ok: true, escritos: [], comandos: [], motivo: "",
+        iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, falhasAmbiente: 0, tokensIn: 0, tokensOut: 0,
+      });
+      emitMetrica({
+        t: "metrica", slice: sliceIdx, iteracoes: 0, passouDePrimeira: false, tocouNoTeste: 0, falhasAmbiente: 0,
+        tokensIn: 0, tokensOut: 0, custoUSD: 0, ms: 0,
+      });
+      continue;
+    }
     emit({ t: "slice", idx: sliceIdx, total: plano.length, tarefa: t.tarefa, status: "rodando" });
     let r;
     try {

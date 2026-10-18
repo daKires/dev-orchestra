@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import {
   baseline, construir, commit, slug, destrutivo, agente, gate,
   resolverComandos, custoUSD, ehTeste, ehFalhaAmbiente, preflight, textoPreflight, recusaComando, escritaProibida, exesDe, AmbienteError,
+  acharRunMorta, marcarInterrompida,
   PAUSA_MAX_MS,
   type Tarefa, type Override, type CaixaSlice,
 } from "./swarm.js";
@@ -98,7 +99,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   };
   // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
   const { cmds, gate: gateCmds, origem, scripts } = await resolverComandos(cwd, override);
-  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds, gate: gateCmds });
+  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds, gate: gateCmds, pid: process.pid });
   // Cancelamento: SO pelo botao da UI (arquivo <run>.cancel, visto por poll de 1s).
   const porArquivo = new AbortController();
   const cancelFile = arquivoCancel(runAtual());
@@ -122,6 +123,16 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       return painel;
     }
     const { baselineRef, branch, base: baseRun } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
+    // Retomada: run MORTA no mesmo cwd+feature (sem painel, pid morto) tem o prefixo de slices ok pulado aqui.
+    // process.kill(pid, 0) sem erro = vivo; EPERM (processo de outro usuario) tambem conta como vivo.
+    const vivoPid = (pid: number): boolean => {
+      try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
+    };
+    const morta = acharRunMorta(lerRuns(RUNS_DIR), cwd, feature, plano, vivoPid);
+    if (morta) {
+      marcarInterrompida(RUNS_DIR, morta.de, runAtual());
+      emit({ t: "log", texto: "RETOMANDO run " + morta.de + (morta.slices.length ? ": pulando S" + morta.slices.join(",S") : ": nada a pular") });
+    }
     // G3/S2: caixa de instrucoes/pausa de cada slice, ligada aos arquivos da run corrente em RUNS_DIR.
     const caixaDe = (idx: number): CaixaSlice => {
       const id = runAtual();
@@ -141,7 +152,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
         },
       };
     };
-    const { rejeitados, resultados, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal, undefined, caixaDe);
+    const { rejeitados, resultados, cancelado, ambiente } = await construir(cwd, feature, plano, emit, cmds, signal, undefined, caixaDe, morta ? { de: morta.de, slices: morta.slices } : undefined);
     const parou = cancelado || rejeitados.length > 0; // slice falhou ou cancelou: sem gate, sem commit
 
     // GATE deterministico (fail-closed): sem comandos resolvidos, g.rodou=false e segue como antes.
@@ -646,7 +657,7 @@ server.registerTool(
     title: "Status Orchestra (swarm)",
     description:
       "Consulta o andamento de uma run assincrona iniciada por executar_orchestra. " +
-      "Aguarda ate ~45s: se a run terminar, devolve o painel final; senao devolve as ultimas linhas e " +
+      "Aguarda ate ~20s: se a run terminar, devolve o painel final; senao devolve as ultimas linhas e " +
       "pede pra chamar de novo.",
     inputSchema: {
       runId: z.string().describe("runId devolvido por executar_orchestra"),
@@ -654,7 +665,7 @@ server.registerTool(
   },
   async ({ runId }) => {
     try {
-      const r = await esperar(runId, 45000);
+      const r = await esperar(runId, 20000);
       if ("fim" in r) return { content: [{ type: "text", text: r.fim }] };
       const linhas = r.rodando.length ? r.rodando.join("\n") : "(sem saida ainda)";
       // G3/S2: se a run corrente esta pausada (ultimo evento de pausa), o prefixo vira PAUSADA.
