@@ -16,11 +16,11 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { ChevronLeft, ChevronRight, WifiOff } from "lucide-react";
 import { alternarFixado, limitarZoom, mesclarNosRf, pontaDaAresta } from "@/lib/canvas";
 import { arestasPlanejadorRun, layoutAgentes, layoutRuns, mesclarComLayout, pedidoAtivo, semOutrasRuns } from "@/lib/layout";
-import { runsDoProjeto } from "@/lib/estado";
+import { runsDoProjeto, type Estado } from "@/lib/estado";
 import { arestasEmConversa, type EmConversa } from "@/lib/colab";
 import { runAtiva, runDaSelecao, runEmFoco } from "@/lib/unido";
 import { useAgentes } from "@/hooks/useAgentes";
-import { useAgora, useRuns } from "@/hooks/useRuns";
+import { useAgora } from "@/hooks/useRuns";
 import { useCanvas } from "@/hooks/useCanvas";
 import type { Aresta, No, Op, Snapshot, TipoNo } from "../../../src/canvas.ts";
 import { PainelRun } from "./canvas/PainelRun";
@@ -172,6 +172,8 @@ function ControleZoom({ temNos, onAjustar }: { temNos: boolean; onAjustar: () =>
 
 export type CanvasProps = {
   projeto: string;
+  /** Estado das runs do App (um useRuns so' por aba: um 2o reducer recebia o replay fora de ordem). */
+  runsEstado: Estado;
   onRunSel?: (runId: string | null) => void;
 };
 
@@ -182,9 +184,9 @@ export type CanvasHandle = {
 };
 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
-  { projeto, onRunSel }, ref,
+  { projeto, runsEstado, onRunSel }, ref,
 ) {
-  const { estado, conectado, enviar } = useCanvas(projeto);
+  const { estado, conectado, carregado, enviar } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
   const [arestas, setArestas] = useState<Edge[]>([]);
   const bloqueado = !conectado; // sem SSE vivo: os cards nao mandam ops ("reconectando…")
@@ -194,7 +196,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
 
   // --- F2 S5d: runs do projeto, agentes e relogio (o layout automatico entra no `modelo` abaixo) ---
   const { agentes, linhasPorId, conversas, carregarHistorico, mensagem, abortar, encerrar, reiniciar, trocarModelo, modelos, assinarPty } = useAgentes(projeto);
-  const { estado: runsEstado } = useRuns();
   const agora = useAgora();
   const [fecharAgente, setFecharAgente] = useState<{ noId: string; agenteId: string } | null>(null);
   // Painel direito: largura/recolhido vivem no layout persistido (dev-orchestra.layout.canvas); `painel` espelha.
@@ -263,7 +264,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
 
   // Agente de planejador novo: persistido UMA vez, quando aparece no canvas (id novo no `ag:<id>`).
   useEffect(() => {
-    if (bloqueado) return;
+    if (bloqueado || !carregado) return; // sem o snapshot, todo agente pareceria novo
     const jaTem = new Set(estado.nos.map((n) => n.id));
     const novos = modelo.nos.filter(
       (n) => n.tipo === "agente" && typeof n.dados.agenteId === "string"
@@ -276,23 +277,27 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
       return { op: "upsert", tipo: "no", item: { ...n, rev } };
     });
     enviar(ops);
-  }, [modelo, estado, bloqueado, enviar]);
+  }, [modelo, estado, bloqueado, carregado, enviar]);
 
   // Ao trocar de projeto, o proximo grafo carregado merece um enquadramento novo.
   useEffect(() => { ajusteFeito.current = false; }, [projeto]);
 
   // Primeiro grafo do projeto: enquadra tudo (o `fitView` do componente roda com a lista ainda vazia).
+  // Espera o snapshot salvo: as runs chegam antes (SSE compartilhado) e enquadrariam um grafo parcial.
   useEffect(() => {
-    if (ajusteFeito.current || modelo.nos.length === 0) return;
+    if (ajusteFeito.current || !carregado || modelo.nos.length === 0) return;
     ajusteFeito.current = true;
     const id = window.setTimeout(() => { void instancia.current?.fitView({ maxZoom: 1, padding: 0.25 }); }, 150);
     return () => window.clearTimeout(id);
-  }, [modelo]);
+  }, [modelo, carregado]);
 
   // modelo -> react-flow; grupos primeiro (ficam atras) e, em cada reconstrucao, `measured` (que o
   // xyflow preenche via onNodesChange) e herdado do no' antigo (mesclarNosRf) — sem
   // medida o xyflow nao posiciona as alcas e nenhuma aresta e' desenhada.
+  // Sem o snapshot salvo ainda, nada aparece: as runs chegam antes (SSE compartilhado) e o card
+  // piscaria no estado padrao (ex. slice viva aberta) ate' o salvo chegar.
   useEffect(() => {
+    if (!carregado) { setNos([]); setArestas([]); return; }
     const porId = new Map(modelo.nos.map((n) => [n.id, n]));
     // Pedido em andamento de uma aresta "pedido" (ag:<pedinte> -> ag:<planejador>): olha o cwd do
     // planejador-alvo e anima enquanto nenhuma run daquele cwd recebeu o painel final (pedidoAtivo).
@@ -305,7 +310,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     const ordenados = [...modelo.nos].sort((a, b) => (a.tipo === "grupo" ? 0 : 1) - (b.tipo === "grupo" ? 0 : 1));
     setNos((antigos) => mesclarNosRf(ordenados.map((n) => noParaRf(n, porId)), antigos));
     setArestas(modelo.arestas.map((a) => arestaParaRf(a, porId, emConversa, pedidoEmAndamento)));
-  }, [modelo, emConversa, cwdDeAgente, runsProjeto]);
+  }, [modelo, emConversa, cwdDeAgente, runsProjeto, carregado]);
 
   // Atalhos de vista: Shift+1 enquadra tudo, Ctrl+0 volta a 100%. Ignorados com foco em campo de texto.
   useEffect(() => {

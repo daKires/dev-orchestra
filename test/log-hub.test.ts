@@ -36,7 +36,8 @@ test("lerRuns ignora <id>.instrucao.jsonl (nao vira run fantasma) (CA-16)", () =
 test("hub: corpo com acento partido entre chunks chega integro; /runs/acao com id invalido -> 400 (CA-17, CA-18)", async (t) => {
   await ui.iniciarUI();
   t.after(() => ui.pararUI());
-  const corpo = Buffer.from(JSON.stringify({ raiz: "D:\\proj\\acentos", nome: "Ação" }), "utf8");
+  const raiz = mkdtempSync(path.join(TMP, "acentos-")); // pasta real: /canvas/projetos esconde raiz inexistente
+  const corpo = Buffer.from(JSON.stringify({ raiz, nome: "Ação" }), "utf8");
   const corte = corpo.indexOf(Buffer.from("ç", "utf8")) + 1; // no meio dos 2 bytes do 'ç'
   const status = await new Promise<number>((ok, falha) => {
     const req = http.request({ host: "127.0.0.1", port: PORTA, path: "/canvas/projetos", method: "POST",
@@ -47,7 +48,7 @@ test("hub: corpo com acento partido entre chunks chega integro; /runs/acao com i
   });
   assert.equal(status, 204);
   const projetos: Array<{ raiz: string; nome: string }> = (await (await fetch(BASE + "/canvas/projetos")).json()) as any;
-  assert.equal(projetos.find((p) => p.raiz === "D:\\proj\\acentos")?.nome, "Ação");
+  assert.equal(projetos.find((p) => p.raiz === raiz)?.nome, "Ação");
 
   for (const id of ["../x", "A..B", "run%2F..%2Fx"]) {
     const r = await fetch(`${BASE}/runs/acao?run=${id}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Dev-Orchestra": "1" }, body: JSON.stringify({ acao: "merge" }) });

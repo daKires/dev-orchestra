@@ -203,7 +203,8 @@ export async function rotasCanvas(req: IncomingMessage, res: ServerResponse, cam
       return true;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(mesclarProjetos(raizesDescobertas(), lerProjetosSalvos())));
+    // Pasta apagada some da lista (nada e' removido: se a pasta voltar, o projeto reaparece).
+    res.end(JSON.stringify(mesclarProjetos(raizesDescobertas(), lerProjetosSalvos()).filter((p) => fs.existsSync(p.raiz))));
     return true;
   }
   if (caminho === "/canvas") {
