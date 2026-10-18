@@ -9,6 +9,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
+// S6: as rotas das acoes da run (G1/S2 merge|pr|descartar e G3 instrucao|pausa) moram aqui; o ui.ts
+// fica so' com o roteador, que chama rotasRuns.
+import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-run.js";
+import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 
 export const PORT = Number(process.env.DEV_ORCHESTRA_UI_PORT || "4123");
 // Dados do hub fora do TEMP (o Windows limpa %TEMP%): tudo vive em ~/.dev-orchestra/dados.
@@ -351,6 +355,12 @@ export function hostLocal(cabecalho: string | string[] | undefined, porta: numbe
   return alvo === "127.0.0.1:" + porta || alvo === "localhost:" + porta;
 }
 
+// Resposta HTTP simples de texto puro (S4c: generica, usada por varias rotas do ui.ts).
+export function responderTexto(res: ServerResponse, status: number, texto: string): void {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(texto);
+}
+
 // Le o corpo de um POST com teto de bytes; null = estourou o limite (o chamador responde 400).
 // Decodifica so' no fim: acento partido entre chunks chega integro.
 export function lerCorpo(req: IncomingMessage, limite: number): Promise<string | null> {
@@ -367,4 +377,94 @@ export function lerCorpo(req: IncomingMessage, limite: number): Promise<string |
     req.on("end", () => { if (!cortou) ok(Buffer.concat(partes).toString("utf8")); });
     req.on("error", () => { if (!cortou) { cortou = true; ok(null); } });
   });
+}
+
+// ---- acoes da run no card: POST /runs/acao?run=<id> {acao} -> merge | pr | descartar (G1/S2) ----
+const LIMITE_BODY = 64 * 1024; // 64KB: teto padrao dos demais POSTs; acima disso e' abuso -> 400
+const ACOES_RUN = new Set(["merge", "pr", "descartar"]);
+
+// Eventos da run: da memoria (rescan) ou, se ainda nao lidos, do JSONL em disco. null = run desconhecida.
+export function eventosDaRun(id: string): Evento[] | null {
+  const emMemoria = estado.get(id);
+  if (emMemoria) return emMemoria;
+  try { return parse(fs.readFileSync(path.join(RUNS_DIR, id + ".jsonl"), "utf8")); } catch { return null; }
+}
+
+// Corpo do PR: resumo por slice (ultima linha de cada uma) + gate ok + custo total (soma das metricas).
+export function corpoDoPr(evs: Evento[]): string {
+  const slices = new Map<number, { tarefa: string; status: string }>();
+  let gateOk = false;
+  let custo = 0;
+  for (const ev of evs) {
+    if (ev.t === "slice") slices.set(ev.idx, { tarefa: ev.tarefa, status: ev.status });
+    else if (ev.t === "gate" && ev.status === "ok") gateOk = true;
+    else if (ev.t === "metrica") custo += ev.custoUSD;
+  }
+  const linhas = [...slices.entries()].sort((a, b) => a[0] - b[0]).map(([n, s]) => `- S${n} ${s.tarefa}: ${s.status}`);
+  let corpo = "## Resumo\n" + linhas.join("\n");
+  if (gateOk) corpo += "\n\nGate: ok";
+  corpo += `\n\nCusto total: $${custo.toFixed(3).replace(".", ",")}`;
+  return corpo;
+}
+
+// Rotas das acoes da run: /runs/acao (merge|pr|descartar) e /runs/instrucao|pausa (G3). true = respondeu.
+// Mesmo contrato do rotasCanvas/rotasAgentes: o roteador do ui.ts so' despacha.
+export async function rotasRuns(req: IncomingMessage, res: ServerResponse, caminho: string, url: string): Promise<boolean> {
+  if (caminho === "/runs/acao") {
+    // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
+    const corpo = await lerCorpo(req, LIMITE_BODY);
+    if (corpo === null) { res.writeHead(400); res.end(); return true; }
+    if (!acaoValida(req)) { res.writeHead(400); res.end(); return true; }
+    let j: any = null;
+    try { j = JSON.parse(corpo); } catch {}
+    const acao = j && typeof j.acao === "string" ? j.acao : "";
+    if (!ACOES_RUN.has(acao)) { res.writeHead(400); res.end(); return true; }
+    const id = new URL(url, "http://x").searchParams.get("run") || "";
+    if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return true; }
+    const evs = eventosDaRun(id);
+    const runEv = evs && evs.find((e) => e.t === "run");
+    if (!runEv || runEv.t !== "run") { res.writeHead(404); res.end(); return true; }
+    const painel = [...evs!].reverse().find((e) => e.t === "painel");
+    if (!painel || painel.t !== "painel") { responderTexto(res, 409, "run ainda rodando"); return true; }
+    if ((acao === "merge" || acao === "pr") && painel.status !== "COMPLETE") { responderTexto(res, 409, "só para runs COMPLETE"); return true; }
+    let r: ResultadoAcao;
+    if (acao === "merge") r = mergeLocal({ cwd: runEv.cwd, branch: painel.branch, base: painel.base });
+    else if (acao === "descartar") r = descartarRun({ cwd: runEv.cwd, branch: painel.branch, base: painel.base });
+    else r = abrirPr({ cwd: runEv.cwd, branch: painel.branch, feature: runEv.feature, corpo: corpoDoPr(evs!), base: painel.base });
+    res.writeHead(r.ok ? 200 : 409, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(r));
+    return true;
+  }
+  // G3: instruir e pausar a slice RODANDO pelo card do canvas (POST /runs/instrucao e /runs/pausa).
+  // Ordem: drena o corpo -> X-Dev-Orchestra -> JSON -> slice inteiro >= 1 -> validarAcaoSlice -> acao/texto.
+  if (caminho !== "/runs/instrucao" && caminho !== "/runs/pausa") return false;
+  const corpo = await lerCorpo(req, LIMITE_BODY);
+  if (corpo === null) { res.writeHead(400); res.end(); return true; }
+  if (!acaoValida(req)) { res.writeHead(400); res.end(); return true; }
+  let j: any = null;
+  try { j = JSON.parse(corpo); } catch {}
+  if (!j || typeof j !== "object") { res.writeHead(400); res.end(); return true; }
+  const slice = Number(j.slice);
+  if (!Number.isInteger(slice) || slice < 1) { res.writeHead(400); res.end(); return true; }
+  const id = new URL(url, "http://x").searchParams.get("run") || "";
+  if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return true; }
+  const cancelado = fs.existsSync(arquivoCancel(id));
+  const erro = validarAcaoSlice(eventosDaRun(id), slice, cancelado);
+  if (erro) { responderTexto(res, erro.status, erro.erro); return true; }
+  if (caminho === "/runs/instrucao") {
+    const e = validarTexto(j.texto, true);
+    if (e) { responderTexto(res, 400, e); return true; }
+    gravarInstrucao(RUNS_DIR, id, slice, j.texto.trim());
+    res.writeHead(204); res.end(); return true;
+  }
+  const acao = typeof j.acao === "string" ? j.acao : "";
+  if (acao === "pausar") { pausarSlice(RUNS_DIR, id, slice); res.writeHead(204); res.end(); return true; }
+  if (acao === "retomar") {
+    const e = validarTexto(j.texto, false);
+    if (e) { responderTexto(res, 400, e); return true; }
+    retomarSlice(RUNS_DIR, id, slice, typeof j.texto === "string" ? j.texto.trim() : undefined);
+    res.writeHead(204); res.end(); return true;
+  }
+  res.writeHead(400); res.end();
+  return true;
 }
