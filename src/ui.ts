@@ -8,11 +8,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { execSync, spawn } from "node:child_process";
-import { aplicarOps, idProjeto, mesclarProjetos, validarAsset, validarOps, type Aresta, type No, type Op, type Projeto, type Snapshot } from "./canvas.js";
+import { idProjeto, mesclarProjetos, type Aresta, type No, type Snapshot } from "./canvas.js";
 import { urlPermitida, formatarLeitura, resolverElemento, nomeShot } from "./navegador.js";
-import type { Elemento, Leitura } from "./navegador.js";
 import { randomBytes } from "node:crypto";
 import {
   conectados, resolverAlvo, slugNome, Conversas, FilaEntregas,
@@ -32,28 +30,49 @@ import { mergeLocal, descartarRun, abrirPr, type ResultadoAcao } from "./acoes-r
 // G3: caixa de instrucoes e pausa por slice (arquivos no RUNS_DIR, mesmo padrao do <runId>.cancel).
 import { validarAcaoSlice, validarTexto, gravarInstrucao, pausarSlice, retomarSlice } from "./instrucoes.js";
 
-const PORT = Number(process.env.DEV_ORCHESTRA_UI_PORT || "4123");
-// Dados do hub fora do TEMP (o Windows limpa %TEMP%): tudo vive em ~/.dev-orchestra/dados.
-const DADOS_DIR = path.join(os.homedir(), ".dev-orchestra", "dados");
-export const RUNS_DIR = process.env.DEV_ORCHESTRA_RUNS_DIR || path.join(DADOS_DIR, "runs"); // barramento em disco, compartilhado entre processos
-// Registros dos planejadores: um JSON por worktree com o chat do planejador.
-export const PLANEJADORES_DIR = process.env.DEV_ORCHESTRA_PLANEJADORES_DIR || path.join(DADOS_DIR, "planejadores");
-// Canvas (S2): um subdiretorio por projeto (idProjeto) com canvas.json + assets/. Injetavel por env.
-export const CANVAS_DIR = process.env.DEV_ORCHESTRA_CANVAS_DIR || path.join(DADOS_DIR, "canvas");
-// Agentes (F2/S3): um JSON por agente do canvas (validado por validarAgente). Injetavel por env.
-export const AGENTES_DIR = process.env.DEV_ORCHESTRA_AGENTES_DIR || path.join(DADOS_DIR, "agentes");
-const SWARM_ID = randomUUID().slice(0, 8);                        // um id por processo/sessao
-const PODA_MS = 7 * 24 * 3600 * 1000;                             // historico de 7 dias
-const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
+// S1 do partir-ui: o nucleo do hub (pastas de dados, JSONL das runs, planejadores, SSE e utilitarios
+// HTTP) mora em ./hub.js; aqui ficam o servidor/rotas, os agentes, o canvas e o navegador. A API
+// publica deste modulo NAO muda: o que saiu daqui e' reexportado do hub logo abaixo.
+import {
+  PORT, WEB_DIR, DADOS_DIR, RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR, AGENTES_DIR,
+  clientes, estado, planejadores, sse, enviar, rescan, podar, servirEstatico,
+  acaoValida, broadcast, lerCorpo, parse, limparPlanejadores, arquivoCancel, versaoUI, hostLocal,
+  migrarDadosAntigos, definirGanchosHub, type Cliente, type Planejador, type Evento,
+} from "./hub.js";
 
-// Copia o antigo pro novo uma vez so': nunca toca num destino que ja existe.
-export function migrarDadosAntigos(antigo: string, novo: string): boolean {
-  try {
-    if (!fs.existsSync(antigo) || fs.existsSync(novo)) return false;
-    fs.cpSync(antigo, novo, { recursive: true });
-    return true;
-  } catch { return false; }
-}
+// S2 do partir-ui: o canvas (grafo por projeto, projetos/assets em disco e as rotas /canvas*) mora em
+// ./canvas-hub.js; aqui fica so' o roteador do servidor, que chama rotasCanvas.
+import {
+  rotasCanvas, lerCanvas, aplicarOpsProjeto, descarregarCanvas, raizesDescobertas, lerProjetosSalvos,
+  definirGanchosCanvas,
+} from "./canvas-hub.js";
+
+// S3 do partir-ui: o navegador dos agentes (driver injetado + resolucao dos nos 'navegador') mora em
+// ./navegador-hub.js; aqui ficam as rotas /cli/browser-*, que usam as funcoes desse modulo.
+import {
+  definirNavegador, pararNavegador, obterNavegador, lerNavegador, resolverNavegador, elementosDoNavegador,
+  type Navegador,
+} from "./navegador-hub.js";
+
+export {
+  RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR, AGENTES_DIR, migrarDadosAntigos, comoAbrirDashboard,
+  runAtual, arquivoCancel, emitir, lerRuns, lerPlanejadores, limparPlanejadores, linhaDe,
+  versaoUI, hostLocal,
+} from "./hub.js";
+export type { SlicePlano, Planejador, Evento, Emitir, DepsLimpeza } from "./hub.js";
+
+// O hub nao importa o ui (dependencia de mao unica): liga aqui os efeitos que dependem deste modulo —
+// um planejador novo ganha token/identidade (F3/S2) e a lista nova reabre as pontes do /event (F2.2).
+definirGanchosHub({
+  aoMudarPlanejadores: (lista) => {
+    for (const p of lista) void garantirTokenPlanejador(p); // F3/S2: identidade do planejador (uma vez)
+    void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
+  },
+});
+
+// O canvas-hub nao conhece agentes: a sincronizacao do contexto em disco (nos 'agente') continua aqui e
+// e' ligada por gancho — mesma dependencia de mao unica do hub.
+definirGanchosCanvas({ aoAplicarOps: (snap) => sincronizarContexto(snap) });
 
 // Antes do primeiro mkdirSync, e so' sem env de pasta: puxa o local antigo (nome anterior do produto).
 const PASTAS_PADRAO = !process.env.DEV_ORCHESTRA_RUNS_DIR && !process.env.DEV_ORCHESTRA_PLANEJADORES_DIR
@@ -64,204 +83,7 @@ if (PASTAS_PADRAO) {
 
 try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch {}
 
-export type SlicePlano = { tarefa: string; arquivos_alvo: string[]; descricao: string };
-
-// Registro de um planejador: o worktree onde o OpenCode roda e a URL do chat.
-export type Planejador = {
-  slug: string; projeto: string; raiz: string; cwd: string;
-  feature: string; url: string; base: string; pid: number; ts: number;
-};
-
-export type Evento = { ts?: number } & (
-  | { t: "run"; feature: string; cwd: string; total: number; plano?: SlicePlano[]; cmds?: string[]; gate?: string[]; pid?: number }
-  | { t: "fase"; nome: string; info?: string }
-  | { t: "slice"; idx: number; total: number; tarefa: string; status: "fila" | "rodando" | "ok" | "incompleta" | "pulada";
-      escritos?: string[]; comandos?: string[]; motivo?: string; ms?: number; semMudancas?: boolean }
-  | { t: "tool"; slice: number; nome: string; alvo?: string; ok: boolean; resumo?: string; saida?: string }
-  | { t: "gerando"; slice: number; tokens: number }
-  | { t: "comando"; slice: number; cmd: string; status: "rodando" }
-  | { t: "gate"; cmd: string; status: "rodando" | "ok" | "falha"; tentativa?: number; saida?: string }
-  | { t: "diff"; arquivo: string; patch: string }
-  | { t: "painel"; status: string; branch: string; baseline?: string; base?: string; linhas: string[] }
-  | { t: "metrica"; slice: number; iteracoes: number; passouDePrimeira: boolean; tocouNoTeste: number; falhasAmbiente?: number; tokensIn: number; tokensOut: number; custoUSD: number; ms?: number }
-  | { t: "instrucao"; slice: number; texto: string; descartada?: boolean }
-  | { t: "pausa"; slice: number; estado: "pausada" | "retomada"; motivo?: string }
-  | { t: "log"; texto: string }
-);
-
-export type Emitir = (ev: Evento) => void;
-
-// S3: como abrir o dashboard — o app Dev Orchestra instalado vence; senao o navegador do sistema. Pura.
-export function comoAbrirDashboard(exe: string | null, url: string, plataforma: NodeJS.Platform): { comando: string; args: string[] } {
-  if (exe) return { comando: exe, args: [] };
-  if (plataforma === "win32") return { comando: "cmd", args: ["/c", "start", "", url] };
-  if (plataforma === "darwin") return { comando: "open", args: [url] };
-  return { comando: "xdg-open", args: [url] };
-}
-
-// Run corrente deste processo: cada evento "run" abre um arquivo NOVO (nunca trunca o anterior).
-// O sufixo sequencial garante ids distintos mesmo se duas runs abrirem no MESMO milissegundo.
-let runId = "";
-let runFile = "";
-let seq = 0;
-export function runAtual(): string { return runId; }
-export function arquivoCancel(id: string): string { return path.join(RUNS_DIR, id + ".cancel"); }
-
-// Unica porta de saida deste processo: grava o evento no JSONL da run corrente. Best-effort.
-export function emitir(ev: Evento): void {
-  try {
-    if (ev.ts == null) ev.ts = Date.now();
-    if (ev.t === "run" || !runFile) {
-      runId = SWARM_ID + "-" + Date.now().toString(36) + "-" + (seq++).toString(36);
-      runFile = path.join(RUNS_DIR, runId + ".jsonl");
-    }
-    fs.appendFileSync(runFile, JSON.stringify(ev) + "\n");
-  } catch {}
-}
-
-// Parse de um JSONL de run; linha corrompida e' ignorada. Pura (dado o texto).
-function parse(txt: string): Evento[] {
-  const evs: Evento[] = [];
-  for (const l of txt.split("\n")) if (l) { try { evs.push(JSON.parse(l)); } catch {} }
-  return evs;
-}
-
-// <runId>.instrucao.jsonl e' a caixa de instrucoes da slice, nao uma run.
-function ehJsonlDeRun(f: string): boolean {
-  return f.endsWith(".jsonl") && !f.endsWith(".instrucao.jsonl");
-}
-
-// Le a pasta de runs e devolve os eventos agrupados por run (basename do arquivo). Testavel.
-export function lerRuns(dir: string): Map<string, Evento[]> {
-  const m = new Map<string, Evento[]>();
-  let files: string[] = [];
-  try { files = fs.readdirSync(dir).filter(ehJsonlDeRun); } catch { return m; }
-  for (const f of files) {
-    try { m.set(f.slice(0, -6), parse(fs.readFileSync(path.join(dir, f), "utf8"))); } catch {}
-  }
-  return m;
-}
-
-// ---- registros de planejadores ----
-// Valida/estrutura um registro cru; null se faltar campo obrigatorio (JSON incompleto e' descartado).
-function planejadorDe(j: any): Planejador | null {
-  if (!j || typeof j !== "object") return null;
-  for (const k of ["slug", "projeto", "raiz", "cwd", "feature", "url", "base"]) if (typeof j[k] !== "string" || !j[k]) return null;
-  if (typeof j.pid !== "number" || !j.pid) return null;
-  if (typeof j.ts !== "number") return null;
-  return {
-    slug: j.slug, projeto: j.projeto, raiz: j.raiz, cwd: j.cwd,
-    feature: j.feature, url: j.url, base: j.base, pid: j.pid, ts: j.ts,
-  };
-}
-
-// Le a pasta de registros. Tolerante: JSON corrompido/sem campos obrigatorios e' ignorado; pasta
-// inexistente vira []. Sincrona (usada no replay do SSE e no rescan do intervalo).
-export function lerPlanejadores(dir: string): Planejador[] {
-  const out: Planejador[] = [];
-  let files: string[] = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")); } catch { return out; }
-  for (const f of files) {
-    try {
-      const p = planejadorDe(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")));
-      if (p) out.push(p);
-    } catch {}
-  }
-  return out;
-}
-
-export type DepsLimpeza = {
-  existeCwd: (cwd: string) => boolean;
-  vivo: (pid: number) => boolean;
-  ehOpencode: (pid: number) => Promise<boolean>;
-  matar: (pid: number) => void;
-  remover: (arquivo: string) => void;
-};
-
-// Worktree que o registro descreve (<raiz>/.claude/worktrees/<slug>).
-function worktreeDe(p: Planejador): string {
-  return path.join(p.raiz, ".claude", "worktrees", p.slug);
-}
-
-// process.kill(pid, 0): sem erro = vivo; EPERM (processo de outro usuario) tambem conta como vivo.
-function vivoReal(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (e: any) { return e?.code === "EPERM"; }
-}
-
-// tasklist com filtro de PID: imagem do processo contem 'opencode'? Falha do tasklist -> false (conservador).
-function ehOpencodeReal(pid: number): Promise<boolean> {
-  return new Promise((ok) => {
-    try {
-      const saida = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: "utf8", timeout: 4000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-      ok(/opencode/i.test(saida));
-    } catch { ok(false); }
-  });
-}
-
-const depsReais: DepsLimpeza = {
-  existeCwd: (cwd) => { try { return fs.existsSync(cwd); } catch { return true; } },
-  vivo: vivoReal,
-  ehOpencode: ehOpencodeReal,
-  matar: (pid) => { try { process.kill(pid); } catch {} },
-  remover: (arq) => { try { fs.unlinkSync(arq); } catch {} },
-};
-
-// Limpa registros de planejadores que nao servem mais:
-//   pid morto -> so' remove o JSON (nao ha o que matar);
-//   worktree sumiu + pid vivo + opencode -> mata o orfao e remove;
-//   worktree sumiu + pid vivo + NAO opencode -> pid reutilizado: so' remove (nunca mata alheio);
-//   worktree existe + pid vivo -> mantem.
-export async function limparPlanejadores(dir: string, deps: DepsLimpeza = depsReais): Promise<void> {
-  let arquivos: string[] = [];
-  try { arquivos = fs.readdirSync(dir).filter((f) => f.endsWith(".json")); } catch { return; }
-  for (const f of arquivos) {
-    const arq = path.join(dir, f);
-    let p: Planejador | null = null;
-    try { p = planejadorDe(JSON.parse(fs.readFileSync(arq, "utf8"))); } catch {}
-    if (!p) continue;
-    if (!deps.vivo(p.pid)) { deps.remover(arq); continue; }
-    if (deps.existeCwd(worktreeDe(p))) continue;
-    if (await deps.ehOpencode(p.pid)) deps.matar(p.pid);
-    deps.remover(arq);
-  }
-}
-
-// Deriva a linha de texto crua (stderr + DEV_ORCHESTRA_LOG) de um evento, preservando o log ao vivo de sempre.
-export function linhaDe(ev: Evento): string {
-  switch (ev.t) {
-    case "run": return `PLANO recebido: ${ev.total} slice(s)`;
-    case "fase": return ev.nome.toUpperCase() + (ev.info ? " " + ev.info : "");
-    case "slice":
-      if (ev.status === "fila") return "";
-      if (ev.status === "rodando") return `Tarefa ${ev.idx}/${ev.total}: ${ev.tarefa}`;
-      if (ev.status === "ok") return `[T${ev.idx}] concluida: ${(ev.escritos ?? []).length} arq${ev.semMudancas ? " (sem mudancas)" : ""}${ev.comandos?.length ? ", " + ev.comandos.length + " cmd" : ""}`;
-      if (ev.status === "pulada") return `[T${ev.idx}] PULADA: ${ev.motivo ?? ""}`;
-      return `[T${ev.idx}] INCOMPLETA: ${ev.motivo ?? ""}`;
-    case "tool": {
-      const alvoTxt = ev.alvo ? " " + ev.alvo : "";
-      return ev.ok ? `[T${ev.slice}] ${ev.nome}${alvoTxt} ok` : `[T${ev.slice}] REJEITADO ${ev.nome}${alvoTxt}: ${ev.resumo ?? ""}`;
-    }
-    case "gerando": return "";
-    case "comando": return "";
-    case "gate": {
-      const marca = ev.status === "ok" ? "OK" : ev.status === "falha" ? "FALHA" : "rodando";
-      return `GATE ${marca}: ${ev.cmd}${ev.tentativa ? " (reparo " + ev.tentativa + ")" : ""}`;
-    }
-    case "diff": return "";
-    case "painel": return "";
-    case "metrica": return `[T${ev.slice}] metrica: ${ev.iteracoes} iter, ${ev.passouDePrimeira ? "1a" : "reparo"}, teste:${ev.tocouNoTeste}, amb:${ev.falhasAmbiente ?? 0}, ${ev.tokensIn}+${ev.tokensOut} tok, $ ${ev.custoUSD.toFixed(4)}`;
-    case "instrucao": return `[T${ev.slice}] instrucao: ${ev.texto}${ev.descartada ? " (descartada)" : ""}`;
-    case "pausa": return `[T${ev.slice}] pausa ${ev.estado}${ev.motivo ? ": " + ev.motivo : ""}`;
-    case "log": return ev.texto;
-  }
-}
-
-// ---- hub: quem pega a porta serve o dashboard lendo TODOS os arquivos de run ----
-type Cliente = { res: http.ServerResponse; offsets: Map<string, number> };
-const clientes = new Set<Cliente>();
-const estado = new Map<string, Evento[]>();
-const vistos = new Map<string, string>(); // arquivo -> "size:mtime" (so rele o que mudou)
+// ---- servidor/rotas deste processo: o estado do SSE e as pastas de dados vem de ./hub.js ----
 let servidor: http.Server | null = null;
 // Promessa do fechamento do ultimo servidor: o proximo escutar() espera o socket ser liberado de fato
 // (sem isso, um iniciarUI imediatamente apos pararUI liga numa porta ainda presa pelo socket antigo).
@@ -270,254 +92,10 @@ let intervalo: NodeJS.Timeout | null = null;
 let watcher: fs.FSWatcher | null = null;
 let limpeza: NodeJS.Timeout | null = null;   // poda os registros de planejadores orfaos
 let reassumir: NodeJS.Timeout | null = null; // quem ficou sem porta tenta de novo
-let planejadores: Planejador[] = [];         // ultima lista empurrada via SSE
-let planejadoresAssinatura = "";             // muda -> avisa os clientes
 let onCeder: (() => void) | null = null;     // chamado no fim do ceder() (modo --ui encerra o processo)
 let sempreAssumir = false;                   // modo --ui: assume a porta de QUALQUER hub Dev Orchestra (sem comparar versao)
 
-function sse(c: Cliente, dado: unknown): void {
-  try { c.res.write(`data: ${JSON.stringify(dado)}\n\n`); } catch {}
-}
-
-// Envia pro cliente so os eventos ainda nao enviados (deltas), por run.
-function enviar(c: Cliente): void {
-  for (const [run, evs] of estado) {
-    const sent = c.offsets.get(run) || 0;
-    for (let i = sent; i < evs.length; i++) sse(c, { swarm: run, ev: evs[i] });
-    c.offsets.set(run, evs.length);
-  }
-}
-
-// Rele os registros de planejadores; se a lista mudou, empurra pra quem esta conectado. Chamada no
-// rescan (intervalo + fs.watch); o replay do novo cliente usa `planejadores` direto.
-function atualizarPlanejadores(): void {
-  const lista = lerPlanejadores(PLANEJADORES_DIR);
-  const assinatura = JSON.stringify(lista);
-  if (assinatura === planejadoresAssinatura) return;
-  planejadoresAssinatura = assinatura;
-  planejadores = lista;
-  for (const c of clientes) sse(c, { planejadores: lista });
-  for (const p of lista) void garantirTokenPlanejador(p); // F3/S2: identidade do planejador (uma vez)
-  void reconectarPontes(); // a lista mudou: reabre as pontes das bases dos planejadores (F2.2)
-}
-
-// Rele so os arquivos que mudaram e empurra novidades/drops. Chamada por fs.watch e por um intervalo
-// (o fs.watch no Windows coalesce/perde eventos — o intervalo e' a rede de seguranca).
-function rescan(): void {
-  atualizarPlanejadores();
-  let files: string[] = [];
-  try { files = fs.readdirSync(RUNS_DIR).filter(ehJsonlDeRun); } catch { return; }
-  const drops: string[] = [];
-  const presentes = new Set(files.map((f) => f.slice(0, -6)));
-  for (const run of estado.keys()) if (!presentes.has(run)) drops.push(run);
-  for (const f of files) {
-    const run = f.slice(0, -6);
-    try {
-      const st = fs.statSync(path.join(RUNS_DIR, f));
-      const marca = st.size + ":" + st.mtimeMs;
-      if (vistos.get(f) === marca) continue;
-      vistos.set(f, marca);
-      const evs = parse(fs.readFileSync(path.join(RUNS_DIR, f), "utf8"));
-      if (evs.length < (estado.get(run)?.length ?? 0)) drops.push(run); // arquivo reescrito: reenvia do zero
-      estado.set(run, evs);
-    } catch {}
-  }
-  for (const run of drops) if (!presentes.has(run)) { estado.delete(run); vistos.delete(run + ".jsonl"); }
-  for (const c of clientes) {
-    for (const run of drops) { sse(c, { swarm: run, drop: true }); c.offsets.delete(run); }
-    enviar(c);
-  }
-}
-
-// Remove logs (e pedidos de cancelamento) mais velhos que PODA_MS.
-function podar(): void {
-  const limite = Date.now() - PODA_MS;
-  try {
-    for (const f of fs.readdirSync(RUNS_DIR)) {
-      if (!f.endsWith(".jsonl") && !f.endsWith(".cancel") && !f.endsWith(".pausa")) continue;
-      const p = path.join(RUNS_DIR, f);
-      try { if (fs.statSync(p).mtimeMs < limite) fs.unlinkSync(p); } catch {}
-    }
-  } catch {}
-}
-
-// Versao da UI = mtime do index.html compilado: build mais novo vence no handoff da porta.
-export function versaoUI(): number {
-  try { return fs.statSync(path.join(WEB_DIR, "index.html")).mtimeMs; } catch { return 0; }
-}
-
-const TIPOS: Record<string, string> = {
-  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json",
-  ".woff2": "font/woff2", ".woff": "font/woff", ".wasm": "application/wasm", ".map": "application/json",
-};
-
-function servirEstatico(url: string, res: http.ServerResponse): void {
-  let rel = "index.html";
-  try { rel = decodeURIComponent(url.split("?")[0]).replace(/^\/+/, "") || "index.html"; } catch {}
-  let alvo = path.resolve(WEB_DIR, rel);
-  if (alvo !== WEB_DIR && !alvo.startsWith(WEB_DIR + path.sep)) { res.writeHead(403); res.end(); return; }
-  if (!fs.existsSync(alvo) || fs.statSync(alvo).isDirectory()) alvo = path.join(WEB_DIR, "index.html"); // SPA
-  fs.readFile(alvo, (err, buf) => {
-    if (err) { res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" }); res.end("UI nao compilada: rode npm run build no dev-orchestra"); return; }
-    res.writeHead(200, { "Content-Type": TIPOS[path.extname(alvo)] || "application/octet-stream" });
-    res.end(buf);
-  });
-}
-
-// Acoes so via POST com header X-Dev-Orchestra: header custom forca preflight CORS, que este servidor nao
-// responde -> site externo aberto no browser nao consegue cancelar run nem derrubar o hub.
-function acaoValida(req: http.IncomingMessage): boolean {
-  return req.method === "POST" && req.headers["x-dev-orchestra"] === "1";
-}
-
-function broadcast(dado: unknown): void { for (const c of clientes) sse(c, dado); }
-
-// Barra DNS rebinding: dominio alheio que resolve pra 127.0.0.1 chega com o Host dele (e o X-Dev-Orchestra).
-export function hostLocal(cabecalho: string | string[] | undefined, porta: number): boolean {
-  const h = Array.isArray(cabecalho) ? cabecalho[0] : cabecalho;
-  if (typeof h !== "string") return false;
-  const alvo = h.toLowerCase();
-  return alvo === "127.0.0.1:" + porta || alvo === "localhost:" + porta;
-}
-
-// ---- canvas (S2): grafo por projeto, persistido em <CANVAS_DIR>/<idProjeto>/canvas.json ----
-const LIMITE_BODY_CANVAS = 2 * 1024 * 1024;        // 2MB: lotes de ops
-const LIMITE_BODY_CANVAS_ASSET = 40 * 1024 * 1024; // 40MB: imagem em base64 (infla ~33%)
-const CANVAS_DEBOUNCE_MS = 300;                    // gravacao em disco com debounce
-
-const canvasCache = new Map<string, Snapshot>();       // idProjeto -> snapshot em memoria
-const canvasTimers = new Map<string, NodeJS.Timeout>(); // idProjeto -> gravacao pendente
-
-// Content-type das imagens servidas em GET /canvas/asset (so' imagem entra no canvas).
-const TIPOS_IMG: Record<string, string> = {
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-  ".webp": "image/webp", ".bmp": "image/bmp", ".svg": "image/svg+xml", ".avif": "image/avif", ".ico": "image/x-icon",
-};
-
-function arquivoCanvas(id: string): string { return path.join(CANVAS_DIR, id, "canvas.json"); }
-
-// Cache por projeto: no primeiro acesso (ou apos restart) le do disco; projeto novo = vazio.
-function lerCanvas(id: string): Snapshot {
-  const emCache = canvasCache.get(id);
-  if (emCache) return emCache;
-  let s: Snapshot = { nos: [], arestas: [] };
-  try {
-    const j = JSON.parse(fs.readFileSync(arquivoCanvas(id), "utf8"));
-    if (j && Array.isArray(j.nos) && Array.isArray(j.arestas)) s = { nos: j.nos, arestas: j.arestas };
-  } catch {}
-  canvasCache.set(id, s);
-  return s;
-}
-
-function gravarCanvasAgora(id: string): void {
-  const s = canvasCache.get(id);
-  if (!s) return;
-  try {
-    fs.mkdirSync(path.join(CANVAS_DIR, id), { recursive: true });
-    fs.writeFileSync(arquivoCanvas(id), JSON.stringify(s));
-  } catch {}
-}
-
-// Debounce ~300ms: rajadas de ops (arrastar varios nos) viram UMA gravacao.
-function gravarCanvasDebounced(id: string): void {
-  const t = canvasTimers.get(id);
-  if (t) clearTimeout(t);
-  const timer = setTimeout(() => { canvasTimers.delete(id); gravarCanvasAgora(id); }, CANVAS_DEBOUNCE_MS);
-  timer.unref?.();
-  canvasTimers.set(id, timer);
-}
-
-// Grava o que estiver pendente (chamado no pararUI pra nao perder ops na janela do debounce).
-function descarregarCanvas(): void {
-  for (const [id, t] of canvasTimers) { clearTimeout(t); gravarCanvasAgora(id); }
-  canvasTimers.clear();
-}
-
-// Raizes descobertas: cwd das runs EM MEMORIA + raiz dos planejadores.
-function raizesDescobertas(): string[] {
-  const out: string[] = [];
-  for (const evs of estado.values()) for (const ev of evs) if (ev.t === "run" && ev.cwd) out.push(ev.cwd);
-  for (const p of planejadores) out.push(p.raiz);
-  return out;
-}
-
-function lerProjetosSalvos(): Projeto[] {
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(CANVAS_DIR, "projetos.json"), "utf8"));
-    if (!Array.isArray(j)) return [];
-    return j
-      .filter((p: any) => p && typeof p.raiz === "string" && typeof p.nome === "string")
-      .map((p: any) => (typeof p.cor === "string" ? { raiz: p.raiz, nome: p.nome, cor: p.cor } : { raiz: p.raiz, nome: p.nome }));
-  } catch { return []; }
-}
-
-function gravarProjetosSalvos(salvos: Projeto[]): void {
-  try {
-    fs.mkdirSync(CANVAS_DIR, { recursive: true });
-    fs.writeFileSync(path.join(CANVAS_DIR, "projetos.json"), JSON.stringify(salvos));
-  } catch {}
-}
-
-function nomeBase(raiz: string): string {
-  const base = raiz.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
-  return base || raiz;
-}
-
-// Upsert por idProjeto: mesma raiz (grafias diferentes) nao duplica; campo ausente preserva o salvo.
-function salvarProjeto(raiz: string, nome?: unknown, cor?: unknown): void {
-  const id = idProjeto(raiz);
-  const salvos = lerProjetosSalvos();
-  const i = salvos.findIndex((p) => idProjeto(p.raiz) === id);
-  const atual = i >= 0 ? salvos[i] : undefined;
-  const nomeLimpo = typeof nome === "string" ? nome.trim() : "";
-  const novo: Projeto = { raiz: atual?.raiz ?? raiz, nome: nomeLimpo || atual?.nome || nomeBase(raiz) };
-  const corLimpa = typeof cor === "string" ? cor.trim() : "";
-  if (corLimpa) novo.cor = corLimpa;
-  else if (atual?.cor !== undefined) novo.cor = atual.cor;
-  if (i >= 0) salvos[i] = novo; else salvos.push(novo);
-  gravarProjetosSalvos(salvos);
-}
-
-// Le o corpo de um POST com teto de bytes; null = estourou o limite (o chamador responde 400).
-// Decodifica so' no fim: acento partido entre chunks chega integro.
-function lerCorpo(req: http.IncomingMessage, limite: number): Promise<string | null> {
-  return new Promise((ok) => {
-    const partes: Buffer[] = [];
-    let total = 0;
-    let cortou = false;
-    req.on("data", (d: Buffer) => {
-      if (cortou) return;
-      partes.push(d);
-      total += d.length;
-      if (total > limite) { cortou = true; ok(null); }
-    });
-    req.on("end", () => { if (!cortou) ok(Buffer.concat(partes).toString("utf8")); });
-    req.on("error", () => { if (!cortou) { cortou = true; ok(null); } });
-  });
-}
-
-// GET /canvas/asset/<idProjeto>/<arquivo>: so' imagem, id hex, recusa traversal e inexistente -> 404.
-function servirCanvasAsset(caminho: string, res: http.ServerResponse): void {
-  const resto = caminho.slice("/canvas/asset/".length);
-  const barra = resto.indexOf("/");
-  if (barra < 0) { res.writeHead(404); res.end(); return; }
-  let id = resto.slice(0, barra);
-  let arquivo = resto.slice(barra + 1);
-  try { id = decodeURIComponent(id); arquivo = decodeURIComponent(arquivo); } catch { res.writeHead(400); res.end(); return; }
-  if (!/^[0-9a-f]+$/i.test(id)) { res.writeHead(400); res.end(); return; }
-  if (!arquivo || /[\\/]/.test(arquivo) || arquivo.includes("..")) { res.writeHead(400); res.end(); return; }
-  const alvo = path.join(CANVAS_DIR, id, "assets", arquivo);
-  fs.readFile(alvo, (err, buf) => {
-    if (err) { res.writeHead(404); res.end(); return; }
-    // sandbox: SVG aberto direto nao roda script na origem do hub.
-    res.writeHead(200, {
-      "Content-Type": TIPOS_IMG[path.extname(arquivo).toLowerCase()] || "application/octet-stream",
-      "Content-Security-Policy": "sandbox",
-    });
-    res.end(buf);
-  });
-}
+// ---- canvas (S2): grafo por projeto, projetos/assets e rotas /canvas* em ./canvas-hub.js ----
 
 // Agentes (F2/S3, CA-4a/4c/5/9): registros em disco, ponte do /event do OpenCode,
 // rotas /agentes e sincronizacao do contexto do canvas.
@@ -1102,71 +680,6 @@ async function garantirTokenPlanejador(p: Planejador): Promise<void> {
   await entregarColab(id, linhaIdentidade(ag.nome, id, token));
 }
 
-// Aplica um lote de ops no canvas do projeto pelo MESMO caminho do POST /canvas/op.
-function aplicarOpsProjeto(projeto: string, ops: Op[]): void {
-  const id = idProjeto(projeto);
-  const snapNovo = aplicarOps(lerCanvas(id), ops);
-  canvasCache.set(id, snapNovo);
-  gravarCanvasDebounced(id);
-  broadcast({ canvasOp: { projeto, ops } });
-  try { sincronizarContexto(snapNovo); } catch {}
-}
-
-// ---- navegador controlado por agentes (F4/S2): rotas /cli/browser-* ----
-// Driver injetado pelo app desktop. Sem ele, toda rota browser-* responde 400 (abra o app Dev Orchestra).
-type Navegador = {
-  ler(noId: string): Promise<Leitura>;
-  clicar(noId: string, n: number): Promise<void>;
-  digitar(noId: string, n: number, valor: string, enter: boolean): Promise<void>;
-  navegar(noId: string, acao: string): Promise<void>;
-  capturar(noId: string): Promise<Buffer>;
-};
-
-let navegadorAtual: Navegador | undefined;
-const browserCache = new Map<string, Elemento[]>(); // "<idProjeto>\\n<noId>" -> elementos lidos
-
-function chaveElementos(projeto: string, noId: string): string { return idProjeto(projeto) + "\\n" + noId; }
-
-// Navegadores do projeto acessiveis ao agente: criados por ele ou ligados por aresta (qualquer direcao).
-function navegadoresAcessiveis(snap: Snapshot, agenteId: string): No[] {
-  const noAg = "ag:" + agenteId;
-  return snap.nos.filter((n) => n.tipo === "navegador" && (
-    n.dados.criador === agenteId ||
-    snap.arestas.some((a) => (a.de === noAg && a.para === n.id) || (a.para === noAg && a.de === n.id))
-  ));
-}
-
-// Resolve por noId exato ou pelo slug do nome (case-insensitive); o primeiro que casar.
-function acharNavegador(navs: No[], alvo: string): No | undefined {
-  const exato = navs.find((n) => n.id === alvo);
-  if (exato) return exato;
-  const slug = slugNome(alvo);
-  return navs.find((n) => slugNome(String(n.dados.nome ?? "")) === slug);
-}
-
-// Sem `nav`, usa o unico acessivel; com `nav`, so' entre os acessiveis. Inacessivel -> erro do contrato.
-function resolverNavegador(snap: Snapshot, agenteId: string, bruto: unknown): { ok: No } | { erro: string } {
-  const navs = navegadoresAcessiveis(snap, agenteId);
-  if (bruto === undefined || bruto === null || bruto === "") {
-    if (navs.length === 1) return { ok: navs[0] };
-    return { erro: navs.length === 0 ? "nenhum navegador conectado a você" : "navegador não especificado (há mais de um conectado a você)" };
-  }
-  const s = String(bruto);
-  const achado = acharNavegador(navs, s);
-  if (!achado) return { erro: `navegador ${s} não está conectado a você` };
-  return { ok: achado };
-}
-
-// Elementos na cache do noId; sem cache, faz uma leitura antes (mesmo contrato do read).
-async function elementosDoNavegador(projeto: string, noId: string): Promise<Elemento[]> {
-  const k = chaveElementos(projeto, noId);
-  const emCache = browserCache.get(k);
-  if (emCache) return emCache;
-  const l = await navegadorAtual!.ler(noId);
-  browserCache.set(k, l.elementos);
-  return l.elementos;
-}
-
 // Arvore do worktree do agente: `git ls-files` + nao rastreados (exclui ignorados), barras '/', ate 5000.
 function listarArvore(cwd: string): string[] {
   const opcoes = { cwd, encoding: "utf8" as const, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] as ("ignore" | "pipe")[] };
@@ -1463,71 +976,7 @@ function criarServidor(): http.Server {
       res.writeHead(400); res.end(); return;
     }
     // ---- canvas (S2) ----
-    if (caminho === "/canvas/op") {
-      // Drena o corpo ANTES de responder 400: corpo sem ler deixa a conexao suja (reset no cliente).
-      const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS);
-      if (corpo === null) { res.writeHead(400); res.end(); return; }
-      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
-      let j: any = null;
-      try { j = JSON.parse(corpo); } catch {}
-      const projeto = j && typeof j.projeto === "string" ? j.projeto.trim() : "";
-      const ops = j ? validarOps(j.ops) : null;
-      if (!projeto || !ops) { res.writeHead(400); res.end(); return; }
-      const id = idProjeto(projeto);
-      const snapNovo = aplicarOps(lerCanvas(id), ops);
-      canvasCache.set(id, snapNovo);
-      gravarCanvasDebounced(id);
-      broadcast({ canvasOp: { projeto, ops } });
-      try { sincronizarContexto(snapNovo); } catch {}
-      res.writeHead(204); res.end();
-      return;
-    }
-    if (caminho === "/canvas/asset") {
-      // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
-      const corpo = await lerCorpo(req, LIMITE_BODY_CANVAS_ASSET);
-      if (corpo === null) { res.writeHead(400); res.end(); return; }
-      if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
-      let j: any = null;
-      try { j = JSON.parse(corpo); } catch {}
-      const projeto = j && typeof j.projeto === "string" ? j.projeto.trim() : "";
-      const v = j ? validarAsset(j.nome, j.dadosB64) : null;
-      if (!projeto || !v) { res.writeHead(400); res.end(); return; }
-      const id = idProjeto(projeto);
-      const arquivo = randomUUID() + "." + v.ext;
-      try {
-        fs.mkdirSync(path.join(CANVAS_DIR, id, "assets"), { recursive: true });
-        fs.writeFileSync(path.join(CANVAS_DIR, id, "assets", arquivo), v.bytes);
-      } catch { res.writeHead(500); res.end(); return; }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ url: `/canvas/asset/${id}/${arquivo}` }));
-      return;
-    }
-    if (caminho.startsWith("/canvas/asset/")) { servirCanvasAsset(caminho, res); return; }
-    if (caminho === "/canvas/projetos") {
-      if (req.method === "POST") {
-        // Drena o corpo ANTES de responder 400 (mesmo motivo de /canvas/op).
-        const corpo = await lerCorpo(req, LIMITE_BODY);
-        if (corpo === null) { res.writeHead(400); res.end(); return; }
-        if (!acaoValida(req)) { res.writeHead(400); res.end(); return; }
-        let j: any = null;
-        try { j = JSON.parse(corpo); } catch {}
-        const raiz = j && typeof j.raiz === "string" ? j.raiz.trim() : "";
-        if (!raiz) { res.writeHead(400); res.end(); return; }
-        salvarProjeto(raiz, j.nome, j.cor);
-        res.writeHead(204); res.end();
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(mesclarProjetos(raizesDescobertas(), lerProjetosSalvos())));
-      return;
-    }
-    if (caminho === "/canvas") {
-      const projeto = new URL(url, "http://x").searchParams.get("projeto") || "";
-      if (!projeto) { res.writeHead(400); res.end(); return; }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(lerCanvas(idProjeto(projeto))));
-      return;
-    }
+    if (await rotasCanvas(req, res, caminho, url)) return;
     // ---- agentes (F2/S3) ----
     if (caminho === "/agentes/modelos") {
       const cwd = new URL(url, "http://x").searchParams.get("cwd") || "";
@@ -1826,7 +1275,8 @@ function criarServidor(): http.Server {
       }
       // ---- navegador (F4/S2): create/read/click/type/nav/shot ----
       if (cmd.startsWith("browser-")) {
-        if (!navegadorAtual) { responderTexto(res, 400, "navegador indisponível: abra o app Dev Orchestra"); return; }
+        const drv = obterNavegador();
+        if (!drv) { responderTexto(res, 400, "navegador indisponível: abra o app Dev Orchestra"); return; }
         try { // erro do driver (webview fechada, pagina carregando...) vira 400, nunca request pendurada
         if (cmd === "browser-create") {
           const nome = typeof j?.nome === "string" ? j.nome.trim() : "";
@@ -1848,8 +1298,7 @@ function criarServidor(): http.Server {
         if (cmd === "browser-read") {
           const nav = resolverNavegador(snap, c.id, j?.nav);
           if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
-          const l = await navegadorAtual.ler(nav.ok.id);
-          browserCache.set(chaveElementos(c.projeto, nav.ok.id), l.elementos);
+          const l = await lerNavegador(c.projeto, nav.ok.id);
           responderTexto(res, 200, formatarLeitura(l));
           return;
         }
@@ -1862,12 +1311,12 @@ function criarServidor(): http.Server {
           const el = resolverElemento(els, alvo);
           if ("erro" in el) { responderTexto(res, 400, el.erro); return; }
           if (cmd === "browser-click") {
-            await navegadorAtual.clicar(nav.ok.id, el.ok.n);
+            await drv.clicar(nav.ok.id, el.ok.n);
             responderTexto(res, 200, `clique em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
           } else {
             const valor = typeof j?.valor === "string" ? j.valor : "";
             const enter = j?.enter === true;
-            await navegadorAtual.digitar(nav.ok.id, el.ok.n, valor, enter);
+            await drv.digitar(nav.ok.id, el.ok.n, valor, enter);
             responderTexto(res, 200, `digitação em [${el.ok.n}] ${el.ok.papel} "${el.ok.rotulo}"`);
           }
           return;
@@ -1878,7 +1327,7 @@ function criarServidor(): http.Server {
           const acao = typeof j?.acao === "string" ? j.acao : "";
           const ehControle = acao === "back" || acao === "forward" || acao === "reload";
           if (!ehControle && !urlPermitida(acao)) { responderTexto(res, 400, "ação inválida"); return; }
-          await navegadorAtual.navegar(nav.ok.id, acao);
+          await drv.navegar(nav.ok.id, acao);
           if (!ehControle) {
             // url nova: atualiza dados.url do no (back/forward/reload nao revelam a url resultante).
             const no = snap.nos.find((n) => n.id === nav.ok.id);
@@ -1890,7 +1339,7 @@ function criarServidor(): http.Server {
         if (cmd === "browser-shot") {
           const nav = resolverNavegador(snap, c.id, j?.nav);
           if ("erro" in nav) { responderTexto(res, 400, nav.erro); return; }
-          const png = await navegadorAtual.capturar(nav.ok.id);
+          const png = await drv.capturar(nav.ok.id);
           const nome = String(nav.ok.dados.nome ?? "");
           garantirExclude(c.cwd); // .orchestra/ no info/exclude do repo do agente
           const dir = path.join(c.cwd, ".orchestra", "shots");
@@ -2035,7 +1484,7 @@ export async function iniciarUI(opts: OpcoesUI = {}): Promise<void> {
   sempreAssumir = opts.sempreAssumir ?? false;
   subirServeAtual = opts.subirServe ?? subirServeReal;
   matarProcessoAtual = opts.matarProcesso ?? ((pid: number) => { try { process.kill(pid); } catch {} });
-  navegadorAtual = opts.navegador; // F4/S2: sem driver, toda rota browser-* responde 400
+  definirNavegador(opts.navegador); // F4/S2: sem driver, toda rota browser-* responde 400
   ptyAtual = opts.pty; // F4/S3: sem driver, POST /agentes tipo 'claude' responde 'falhou'
   carregarAgentes();
   if (!(await escutar())) await tentarAssumir();
@@ -2069,8 +1518,7 @@ export function pararUI(): void {
   fecharServidor(); // fecha conexoes abertas e guarda a promessa: o proximo escutar espera o socket liberar
   onCeder = null;
   sempreAssumir = false;
-  navegadorAtual = undefined; // F4/S2: solta o driver do navegador entre sessoes de teste
-  browserCache.clear();
+  pararNavegador(); // F4/S2: solta o driver do navegador e descarta a cache entre sessoes de teste
   for (const p of ptyProcs.values()) { try { p.kill(); } catch {} } // F4/S3: encerra os PTYs dos agentes Claude
   ptyProcs.clear();
   ptyBuffers.clear();
