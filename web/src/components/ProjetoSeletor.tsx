@@ -23,9 +23,10 @@ function nomeDaPasta(raiz: string): string {
 type Props = {
   projeto: string;
   onProjeto: (raiz: string) => void;
+  onLista?: (raizes: string[]) => void; // projetos com pasta existente (o hub ja' filtra)
 };
 
-export function ProjetoSeletor({ projeto, onProjeto }: Props) {
+export function ProjetoSeletor({ projeto, onProjeto, onLista }: Props) {
   const [projetos, setProjetos] = useState<Projeto[]>([]);
   const [dlg, setDlg] = useState(false);
   const [pasta, setPasta] = useState("");
@@ -37,7 +38,7 @@ export function ProjetoSeletor({ projeto, onProjeto }: Props) {
     try {
       const r = await fetch("/canvas/projetos");
       const j = r.ok ? await r.json() : null;
-      if (Array.isArray(j)) setProjetos(j as Projeto[]);
+      if (Array.isArray(j)) { setProjetos(j as Projeto[]); onLista?.((j as Projeto[]).map((p) => p.raiz)); }
     } catch {
       /* sem hub: mantem o que ja' tem */
     }

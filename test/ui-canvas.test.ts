@@ -118,9 +118,14 @@ test("rotas /canvas/projetos: cria, renomeia e lista (CA-3)", async (t) => {
   t.after(() => ui.pararUI());
   assert.equal((await post("/canvas/projetos", { raiz: "E:\\Pesquisa", nome: "Pesquisa", cor: "laranja" }, false)).status, 400, "sem X-Hermes");
   assert.equal((await post("/canvas/projetos", { nome: "sem raiz" })).status, 400, "sem raiz");
-  let r = await post("/canvas/projetos", { raiz: "E:\\Pesquisa", nome: "Pesquisa", cor: "laranja" });
+  // Pasta real: a lista esconde raiz que nao existe (conferido abaixo com "Sumiu").
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), "Pesquisa-"));
+  t.after(() => fs.rm(pasta, { recursive: true, force: true }));
+  let r = await post("/canvas/projetos", { raiz: pasta, nome: "Pesquisa", cor: "laranja" });
   assert.ok(r.status === 200 || r.status === 204);
-  r = await post("/canvas/projetos", { raiz: "e:/pesquisa/", nome: "Pesquisa 2", cor: "lilas" });
+  r = await post("/canvas/projetos", { raiz: pasta.replace(/\\/g, "/") + "/", nome: "Pesquisa 2", cor: "lilas" });
+  assert.ok(r.status === 200 || r.status === 204);
+  r = await post("/canvas/projetos", { raiz: path.join(pasta, "nao-existe"), nome: "Sumiu" });
   assert.ok(r.status === 200 || r.status === 204);
 
   const lista = (await (await fetch(`${BASE}/canvas/projetos`)).json()) as Array<{ raiz: string; nome: string; cor?: string }>;
@@ -128,6 +133,8 @@ test("rotas /canvas/projetos: cria, renomeia e lista (CA-3)", async (t) => {
   assert.equal(p.length, 1, "mesma raiz nao duplica");
   assert.equal(p[0].nome, "Pesquisa 2");
   assert.equal(p[0].cor, "lilas");
+  assert.ok(!lista.some((x) => x.nome === "Sumiu"), "pasta inexistente nao aparece na lista");
   const salvo = JSON.parse(await fs.readFile(path.join(DIR, "projetos.json"), "utf8"));
   assert.ok(Array.isArray(salvo) && salvo.some((x: any) => x.nome === "Pesquisa 2"), "persistido em projetos.json");
+  assert.ok(salvo.some((x: any) => x.nome === "Sumiu"), "escondida, mas nao apagada do projetos.json");
 });

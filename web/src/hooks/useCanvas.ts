@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aplicarOpsLocal, Historico, inversoDe } from "@/lib/canvas";
 import type { MsgCanvasOp } from "@/lib/estado";
+import { assinarEventos } from "@/lib/sse";
 import type { Op, Snapshot } from "../../../src/canvas.ts";
 
 /**
@@ -20,6 +21,8 @@ export type CanvasRemoto = {
   estado: Snapshot;
   /** SSE vivo? false = a UI mostra "reconectando…" e bloqueia edicao. */
   conectado: boolean;
+  /** Snapshot do GET /canvas ja' chegou (ou falhou)? Antes disso o grafo so' tem as runs. */
+  carregado: boolean;
   /** Aplica otimista, manda pro hub (POST /canvas/op com X-Dev-Orchestra: 1) e registra no historico. */
   enviar: (ops: Op[]) => void;
   /** Desfaz a ultima acao LOCAL (ops inversas com rev novo); nao entra no historico. */
@@ -36,6 +39,7 @@ export type CanvasRemoto = {
 export function useCanvas(projeto: string): CanvasRemoto {
   const [estado, setEstado] = useState<Snapshot>({ nos: [], arestas: [] });
   const [conectado, setConectado] = useState(false);
+  const [carregado, setCarregado] = useState(false);
   const atual = useRef(projeto);
   atual.current = projeto;
   // Ultimo estado renderizado: base para o inverso de cada acao local (o "antes").
@@ -48,6 +52,7 @@ export function useCanvas(projeto: string): CanvasRemoto {
   useEffect(() => {
     let vivo = true;
     setEstado({ nos: [], arestas: [] });
+    setCarregado(false);
     historico.current = new Historico(); // historico e' por projeto
     fetch(`/canvas?projeto=${encodeURIComponent(projeto)}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -55,24 +60,21 @@ export function useCanvas(projeto: string): CanvasRemoto {
         if (!vivo || !j) return;
         if (Array.isArray(j.nos) && Array.isArray(j.arestas)) setEstado({ nos: j.nos, arestas: j.arestas });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (vivo) setCarregado(true); });
     return () => { vivo = false; };
   }, [projeto]);
 
   // SSE: as ops do canvas deste projeto entram no estado (o hub emite {canvasOp:{projeto,ops}}).
   useEffect(() => {
-    const es = new EventSource("/events");
-    es.onopen = () => setConectado(true);
-    es.onerror = () => setConectado(false);
-    es.onmessage = (m) => {
+    return assinarEventos({ estado: setConectado, msg: (m) => {
       let d: { canvasOp?: MsgCanvasOp } | null = null;
       try { d = JSON.parse(m.data); } catch { return; }
       const op = d?.canvasOp;
       if (!op || typeof op.projeto !== "string" || !Array.isArray(op.ops)) return;
       if (chaveProjeto(op.projeto) !== chaveProjeto(atual.current)) return; // so' o canvas deste projeto
       setEstado((s) => aplicarOpsLocal(s, op.ops));
-    };
-    return () => es.close();
+    } });
   }, []);
 
   // Envio cru (sem historico): carimba rev = Date.now() em cada op, aplica local ANTES do eco do hub
@@ -110,5 +112,5 @@ export function useCanvas(projeto: string): CanvasRemoto {
     if (ops) postar(ops);
   }, [postar]);
 
-  return { estado, conectado, enviar, desfazer, refazer };
+  return { estado, conectado, carregado, enviar, desfazer, refazer };
 }

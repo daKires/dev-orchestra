@@ -12,6 +12,8 @@ import { Canvas, type CanvasHandle } from "@/components/Canvas";
 import { ModalArquivo } from "@/components/canvas/Explorador";
 import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
 import { useAgentes } from "@/hooks/useAgentes";
+import { chaveProjeto } from "@/hooks/useCanvas";
+import { raiz } from "@/lib/estado";
 import { badgesArquivos, projetoInicial, runsNovas } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 
@@ -32,10 +34,18 @@ export default function App() {
   const runSel = runSelId ? estado.runs[runSelId] ?? null : null;
 
   const runs = useMemo(() => Object.values(estado.runs), [estado.runs]);
-  const projetoPadrao = useMemo(() => projetoInicial(null, runs, agora), [runs, agora]);
+  // Projetos com pasta existente (do seletor); null = lista ainda nao carregou. Run de pasta apagada
+  // nao vira projeto padrao, e projeto salvo cuja pasta sumiu volta pro da run ativa.
+  const [validos, setValidos] = useState<string[] | null>(null);
+  const existe = (p: string) => !validos || validos.some((v) => chaveProjeto(v) === chaveProjeto(p));
+  const projetoPadrao = useMemo(
+    () => projetoInicial(null, runs.filter((r) => existe(raiz(r.cwd))), agora),
+    [runs, agora, validos], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   useEffect(() => {
     if (!projeto && projetoPadrao) setProjeto(projetoPadrao);
-  }, [projeto, projetoPadrao]); // eslint-disable-line react-hooks/exhaustive-deps
+    else if (projeto && validos?.length && !existe(projeto)) setProjeto(projetoPadrao);
+  }, [projeto, projetoPadrao, validos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { agentes } = useAgentes(projeto ?? "");
 
@@ -90,7 +100,7 @@ export default function App() {
             <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-bold text-primary-foreground">D</span>
             Dev <span className="font-normal text-muted-foreground">Orchestra</span>
           </span>
-          <ProjetoSeletor projeto={projeto ?? ""} onProjeto={setProjeto} />
+          <ProjetoSeletor projeto={projeto ?? ""} onProjeto={setProjeto} onLista={setValidos} />
           {runSel?.branch && (
             <span
               className="shrink-0 truncate rounded border bg-background/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
@@ -126,7 +136,7 @@ export default function App() {
             <ResizablePanel id="canvas" minSize={400}>
               {projeto ? (
                 <Canvas
-                  ref={canvasRef} projeto={projeto}
+                  ref={canvasRef} projeto={projeto} runsEstado={estado}
                   onRunSel={setRunSelId}
                 />
               ) : (

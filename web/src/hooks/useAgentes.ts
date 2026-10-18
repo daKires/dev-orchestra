@@ -3,6 +3,7 @@
 // de conversa (POST). Nada de runtime do hub/OpenCode aqui — no maximo tipos, via `import type`.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Conversa } from "@/lib/colab";
+import { assinarEventos } from "@/lib/sse";
 
 /** Resumo de um agente como o hub devolve em GET /agentes e no SSE {agentes}. */
 export type AgenteVisivel = {
@@ -88,8 +89,7 @@ export function useAgentes(projeto: string): Agentes {
   // SSE: so' {agentes} (lista inteira), {agenteLinhas} (transcricao inteira de um id) e {conversas}
   useEffect(() => {
     if (!ativo) return;
-    const es = new EventSource("/events");
-    es.onmessage = (m) => {
+    return assinarEventos({ msg: (m) => {
       let d: {
         agentes?: AgenteVisivel[];
         agenteLinhas?: { id: string; linhas: Linha[] };
@@ -113,8 +113,7 @@ export function useAgentes(projeto: string): Agentes {
       if (Array.isArray(d?.conversas)) {
         setConversas(d.conversas.filter((c) => c && typeof c.q === "string" && typeof c.de === "string" && typeof c.para === "string"));
       }
-    };
-    return () => es.close();
+    } });
   }, [ativo]);
 
   // Recarrega a lista do projeto atual (GET /agentes?projeto=): usado pelo reiniciar pra refletir o
