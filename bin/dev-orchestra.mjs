@@ -112,9 +112,15 @@ function instalarApp() {
   const args = ["install", "--omit=dev", "--prefer-offline", "--no-audit", "--no-fund"];
   const n = comandoNpm(process.execPath, existsSync);
   const cmdFallback = "npm " + args.join(" ");
+  // O npm roda os scripts do pacote (ex.: prepare), que chamam `node` pelo PATH. Com o PATH velho
+  // da maquina isso quebra ('node' nao reconhecido): poe a pasta do node em execucao na frente.
+  const env = { ...process.env };
+  const atual = env.PATH ?? env.Path ?? "";
+  delete env.Path;
+  env.PATH = path.dirname(process.execPath) + path.delimiter + atual;
   const inst = n
-    ? spawnSync(n.comando, [...n.args, ...args], { cwd: pastaApp, encoding: "utf8", windowsHide: true })
-    : spawnSync(cmdFallback, { cwd: pastaApp, shell: true, encoding: "utf8" });
+    ? spawnSync(n.comando, [...n.args, ...args], { cwd: pastaApp, env, encoding: "utf8", windowsHide: true })
+    : spawnSync(cmdFallback, { cwd: pastaApp, env, shell: true, encoding: "utf8" });
   if (inst.status !== 0) {
     const saida = `${inst.stderr ?? ""}${inst.stdout ?? ""}`.replace(/\s+/g, " ").trim().slice(0, 300);
     const detalhe = inst.error ? msgErro(inst.error) : saida || `npm install saiu com codigo ${inst.status}`;
