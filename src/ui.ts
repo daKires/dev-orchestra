@@ -6,6 +6,9 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+
+import { tituloSessao, comoAbrirSessao } from "./sessao.js";
 
 // Aqui ficam so' o roteador e o handoff da porta; o resto mora em hub/canvas-hub/navegador-hub/agentes-hub
 // (nenhum deles importa este modulo). A API publica continua aqui, reexportada.
@@ -13,7 +16,8 @@ import {
   PORT, DADOS_DIR, RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR,
   clientes, planejadores, sse, enviar, rescan, podar, servirEstatico,
   acaoValida, limparPlanejadores, arquivoCancel, versaoUI, hostLocal,
-  responderTexto, rotasRuns, migrarDadosAntigos, definirGanchosHub, type Cliente,
+  responderTexto, rotasRuns, migrarDadosAntigos, definirGanchosHub,
+  lerRuns, eventosDaRun, lerCorpo, type Cliente,
 } from "./hub.js";
 
 import {
@@ -106,6 +110,45 @@ function ceder(): void {
   onCeder?.();
 }
 
+// GET /sessoes: { idDaRun: titulo } para cada run cujo evento 'run' tem sessao (runs sem sessao ficam
+// de fora). Le a pasta fresca a cada chamada e o titulo usa cache por mtime: renomear o chat aparece ja'
+// na proxima chamada. POST /runs/sessao?run=<id>: reabre a sessao SALVA no log (o cliente nunca manda
+// URL/comando); com DEV_ORCHESTRA_ABRIR_LOG ligado so' grava {comando,args} (sem spawnar), senao spawna.
+const LIMITE_BODY_SESSAO = 64 * 1024;
+async function rotasSessoes(req: http.IncomingMessage, res: http.ServerResponse, caminho: string, url: string): Promise<boolean> {
+  if (caminho === "/sessoes") {
+    const out: Record<string, string> = {};
+    for (const [id, evs] of lerRuns(RUNS_DIR)) {
+      const runEv = evs.find((e) => e.t === "run");
+      if (!runEv || runEv.t !== "run" || !runEv.sessao) continue;
+      out[id] = tituloSessao(runEv.sessao, runEv.cwd);
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(out));
+    return true;
+  }
+  if (caminho !== "/runs/sessao") return false;
+  const corpo = await lerCorpo(req, LIMITE_BODY_SESSAO); // drena antes de responder (mesmo motivo de /runs/acao)
+  if (corpo === null) { res.writeHead(400); res.end(); return true; }
+  if (!acaoValida(req)) { res.writeHead(400); res.end(); return true; }
+  const id = new URL(url, "http://x").searchParams.get("run") || "";
+  if (!/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return true; }
+  const evs = eventosDaRun(id);
+  const runEv = evs && evs.find((e) => e.t === "run");
+  if (!runEv || runEv.t !== "run" || !runEv.sessao) { res.writeHead(404); res.end(); return true; }
+  const como = comoAbrirSessao(runEv.sessao, runEv.cwd, process.platform);
+  if (!como) { res.writeHead(400); res.end(); return true; }
+  const log = process.env.DEV_ORCHESTRA_ABRIR_LOG;
+  if (log) {
+    try { fs.appendFileSync(log, JSON.stringify({ comando: como.comando, args: como.args }) + "\n"); } catch {}
+  } else {
+    try { spawn(como.comando, como.args, { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch {}
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ comandoCopia: como.copia }));
+  return true;
+}
+
 function criarServidor(): http.Server {
   return http.createServer(async (req, res) => {
     const url = req.url || "/";
@@ -149,6 +192,7 @@ function criarServidor(): http.Server {
       setTimeout(ceder, 50);
       return;
     }
+    if (await rotasSessoes(req, res, caminho, url)) return;
     // ---- acoes da run no card (G1/S2 merge|pr|descartar e G3 instrucao|pausa): rotasRuns no hub ----
     if (await rotasRuns(req, res, caminho, url)) return;
     if (await rotasCanvas(req, res, caminho, url)) return;

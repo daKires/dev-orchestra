@@ -17,6 +17,7 @@ import {
 import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
 import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
+import { sessaoAtual, runMaisRecenteDaSessao, type RunDaSessao } from "./sessao.js";
 import { escolherProvedor, comTentativas, CanceladoError, retentavel, erroHttp } from "./deepseek.js";
 import { paraOpenAI, novoEstado, consumirSSE, finalizar } from "./openai.js";
 
@@ -31,12 +32,19 @@ function toFile(s: string) { try { appendFileSync(LOG_FILE, s); } catch {} }
 const PORTA_DASH = Number(process.env.DEV_ORCHESTRA_UI_PORT || "4123");
 const URL_DASH = `http://127.0.0.1:${PORTA_DASH}`;
 
-// S3: na PRIMEIRA run do processo, abre o dashboard (app Dev Orchestra instalado vence; senao o navegador
-// do sistema). DEV_ORCHESTRA_ABRIR_LOG troca o abrir por um append JSON (hook de teste). Nunca derruba a run.
-let dashboardAberto = false;
-function abrirDashboard(url: string): void {
-  if (dashboardAberto) return;
-  dashboardAberto = true;
+// Dispara o abrir detached (ou so' registra, quando DEV_ORCHESTRA_ABRIR_LOG e' o hook de teste).
+// Nunca derruba a run.
+function disparar(comando: string, args: string[]): void {
+  try {
+    const log = process.env.DEV_ORCHESTRA_ABRIR_LOG;
+    if (log) { appendFileSync(log, JSON.stringify({ comando, args }) + "\n"); return; }
+    spawn(comando, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch {}
+}
+
+// Abre uma URL no app Dev Orchestra instalado (se houver) ou no navegador do sistema. Sem guard:
+// pode repetir (o botao/tool abrir_run abre quantas vezes quiser). Nunca derruba a run.
+function abrirUrl(url: string): void {
   try {
     let exe: string | null = null;
     if (process.platform === "win32") {
@@ -44,10 +52,31 @@ function abrirDashboard(url: string): void {
       if (existsSync(p)) exe = p;
     }
     const { comando, args } = comoAbrirDashboard(exe, url, process.platform);
-    const log = process.env.DEV_ORCHESTRA_ABRIR_LOG;
-    if (log) { appendFileSync(log, JSON.stringify({ comando, args }) + "\n"); return; }
-    spawn(comando, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    disparar(comando, args);
   } catch {}
+}
+
+// abrir_run abre SEMPRE o navegador do sistema (comoAbrirDashboard com exe=null): o app desktop
+// instalado e' aberto SEM a URL e perderia a run.
+function abrirNoNavegador(url: string): void {
+  try {
+    const { comando, args } = comoAbrirDashboard(null, url, process.platform);
+    disparar(comando, args);
+  } catch {}
+}
+
+// S3: na PRIMEIRA run do processo, abre o dashboard (app instalado vence; senao o navegador do sistema).
+let dashboardAberto = false;
+function abrirDashboard(url: string): void {
+  if (dashboardAberto) return;
+  dashboardAberto = true;
+  abrirUrl(url);
+}
+
+// Link do dashboard FORA da moldura ASCII (WIDTH=64 cortaria a URL): quem chamou status_orchestra
+// recebe a linha pronta pra clicar.
+function linkDaRun(mcpRunId?: string): string {
+  return mcpRunId ? `\nrun: ${URL_DASH}/?run=${mcpRunId}` : "";
 }
 
 // Cor ANSI por tipo de linha (pra quem ainda acompanha via arquivo/stderr). O painel final fica sem cor.
@@ -80,7 +109,7 @@ function frame(opts: { titulo: string; cwd: string; linhas: string[]; status: st
 // quem decide (e conserta) e' o orquestrador que chamou o MCP (gate falhou = GATE-FAILED com a saida).
 // Todo evento vai pro dashboard web (SSE) E deriva uma linha pro stderr/arquivo (retrocompat). Nunca lanca.
 // Allowlist/gate vem do package.json do ALVO (override do planner vence; fallback pro env legado).
-async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, onLinha?: (l: string) => void): Promise<string> {
+async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: Override, onLinha?: (l: string) => void, mcpRunId?: string): Promise<string> {
   try { writeFileSync(LOG_FILE, ""); } catch {} // trunca: cada run comeca limpa
   const vivo: string[] = [];
   const header = ["", SEP, row("DEV ORCHESTRA // " + feature), row("CWD: " + cwd), SEP].join("\n") + "\n";
@@ -99,7 +128,9 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
   };
   // Resolve a verificacao POR-PROJETO (package.json do alvo), com override opcional e fallback pro env.
   const { cmds, gate: gateCmds, origem, scripts } = await resolverComandos(cwd, override);
-  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds, gate: gateCmds, pid: process.pid });
+  // A sessao do planejador vai no evento "run" (o mcpRunId liga a run ao botao abrir_run do dashboard).
+  const sessao = sessaoAtual(process.env, cwd);
+  emit({ t: "run", feature, cwd, total: plano.length, plano, cmds, gate: gateCmds, pid: process.pid, sessao, mcpRunId });
   // Cancelamento: SO pelo botao da UI (arquivo <run>.cancel, visto por poll de 1s).
   const porArquivo = new AbortController();
   const cancelFile = arquivoCancel(runAtual());
@@ -120,7 +151,7 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
       const painel = frame({ titulo: "DEV ORCHESTRA // AMBIENTE (custo $0)", cwd, linhas, status: "ENV-FAILED" }) +
         "\n" + pfTexto + "\nNenhum agente rodou. Conserte o ambiente/comandos e rode doctor_orchestra de novo.";
       toFile(painel + "\n");
-      return painel;
+      return painel + linkDaRun(mcpRunId);
     }
     const { baselineRef, branch, base: baseRun } = await baseline(cwd, feature, emit); // foto do original ANTES dos agentes
     // Retomada: pula o prefixo ja' ok da run morta. EPERM (processo de outro usuario) conta como vivo.
@@ -195,13 +226,14 @@ async function rodar(cwd: string, feature: string, plano: Tarefa[], override?: O
     toFile(painel + "\n");
     // o frame corta linha longa: a saida completa do que falhou vai DEPOIS do painel (orquestrador decide)
     const falha = amb ?? (g.rodou && !g.ok && !parou && !cancelado ? { cmd: g.cmd, saida: g.saida } : null);
-    return falha ? painel + "\nSAIDA (" + falha.cmd + "):\n" + falha.saida.trim().slice(-1500) : painel;
+    const corpo = falha ? painel + "\nSAIDA (" + falha.cmd + "):\n" + falha.saida.trim().slice(-1500) : painel;
+    return corpo + linkDaRun(mcpRunId);
   } catch (e: any) {
     emit({ t: "log", texto: "ERRO: " + (e?.message ?? e) });
     emit({ t: "painel", status: "FAILED", branch: "", linhas: vivo });
     const painel = frame({ titulo: "DEV ORCHESTRA // FALHA", cwd, linhas: vivo, status: "FAILED" });
     toFile(painel + "\n");
-    return painel;
+    return painel + linkDaRun(mcpRunId);
   } finally {
     clearInterval(poll);
     try { unlinkSync(cancelFile); } catch {}
@@ -603,7 +635,7 @@ server.registerTool(
   },
   async ({ cwd, feature, plano, override }) => {
     try {
-      const runId = iniciar((progresso) => rodar(cwd, feature, plano as Tarefa[], override as Override | undefined, progresso));
+      const runId = iniciar((progresso, mcpRunId) => rodar(cwd, feature, plano as Tarefa[], override as Override | undefined, progresso, mcpRunId));
       abrirDashboard(URL_DASH);
       return {
         content: [{
@@ -678,6 +710,57 @@ server.registerTool(
         content: [{
           type: "text",
           text: `${prefixo} ${runId}\n${linhas}\nchame status_orchestra de novo`,
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: "ERRO: " + (e?.message ?? e) }], isError: true };
+    }
+  },
+);
+
+function runsSalvas(): RunDaSessao[] {
+  const out: RunDaSessao[] = [];
+  for (const [id, evs] of lerRuns(RUNS_DIR)) {
+    const ev = evs.find((e) => e.t === "run");
+    if (!ev || ev.t !== "run") continue;
+    out.push({ id, ts: ev.ts, sessao: ev.sessao, mcpRunId: ev.mcpRunId });
+  }
+  return out;
+}
+
+// Id do dashboard (?run=) da run mais recente desta sessao; sem sessao/run desta sessao -> null.
+function idDaRunDaSessao(): string | null {
+  try {
+    const sessao = sessaoAtual(process.env, process.cwd());
+    if (!sessao) return null;
+    const runs = runsSalvas();
+    const id = runMaisRecenteDaSessao(runs, sessao.id);
+    if (!id) return null;
+    return runs.find((r) => r.id === id)?.mcpRunId ?? id;
+  } catch { return null; }
+}
+
+server.registerTool(
+  "abrir_run",
+  {
+    title: "Abrir Run (dashboard)",
+    description:
+      "Abre o dashboard web focado numa run (?run=<runId>). Sem runId, abre a run mais recente desta " +
+      "sessao do planejador (Claude Code ou OpenCode); se nenhuma run nasceu nesta sessao, " +
+      "responde 'nenhuma run nesta sessao' e abre o dashboard geral.",
+    inputSchema: {
+      runId: z.string().optional().describe("runId devolvido por executar_orchestra; sem ele, a run mais recente desta sessao"),
+    },
+  },
+  async ({ runId }) => {
+    try {
+      const id = typeof runId === "string" && runId ? runId : idDaRunDaSessao();
+      const url = id ? `${URL_DASH}/?run=${encodeURIComponent(id)}` : URL_DASH;
+      abrirNoNavegador(url);
+      return {
+        content: [{
+          type: "text",
+          text: id ? `abrindo ${url}` : `nenhuma run nesta sessao\nabrindo o dashboard geral: ${URL_DASH}`,
         }],
       };
     } catch (e: any) {

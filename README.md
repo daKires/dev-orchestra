@@ -42,6 +42,9 @@ tests, and calls the swarm through the `dev-orchestra` MCP server.
 The dashboard opens by itself on the first run, so you can watch every slice, tool call, the gate and
 the diff grow live.
 
+Every run is tied to the planner session that asked for it (Claude Code or OpenCode): the **Pedido**
+card opens that chat, and the sidebar finds runs from all your projects by the chat title.
+
 ## Cost and safety
 
 - **It costs money.** Every run calls a paid API; the dashboard shows the cost per run.

@@ -14,8 +14,8 @@ Antes de planejar, LEIA a skill `plan-sdd` (instalada junto com esta) e siga o m
 o plano: spec com criterios de aceite, esclarecer TODA ambiguidade perguntando ao usuario, os
 portoes, e tarefas + validacao.
 
-As tools sao do servidor MCP `dev-orchestra`: `executar_orchestra`, `status_orchestra` e
-`doctor_orchestra`. Cada ferramenta pode aparecer com um prefixo do seu cliente, por exemplo
+As tools sao do servidor MCP `dev-orchestra`: `executar_orchestra`, `status_orchestra`,
+`doctor_orchestra` e `abrir_run`. Cada ferramenta pode aparecer com um prefixo do seu cliente, por exemplo
 `mcp__dev-orchestra__executar_orchestra` ou `dev-orchestra_executar_orchestra` — use a forma que o
 seu cliente expuser.
 
@@ -72,9 +72,11 @@ Passos (em PT-BR):
    A tool e ASSINCRONA: volta na hora com `RUN INICIADA: <runId>`. Chame `status_orchestra` com esse
    runId EM LOOP (cada chamada espera ~20s) enquanto vier `RODANDO`; pare quando vier o painel final.
    Cancelar e so pelo botao do dashboard (parar o chat NAO cancela a run).
-7. Mostre INTEGRALMENTE o painel final que `status_orchestra` retornar, incluindo o LINK DO DASHBOARD
-   que vem na propria resposta. Lembre o usuario que o progresso ao vivo (cada slice, tool call, o
-   gate e o diff crescendo) fica nesse dashboard — o painel aqui e so o resumo final.
+7. Mostre INTEGRALMENTE o painel final que `status_orchestra` retornar e, no fim, REPITA a linha
+   `run: <url>` que vem na propria resposta: e o link direto desta run no dashboard. Lembre o usuario
+   que o progresso ao vivo (cada slice, tool call, o gate e o diff crescendo) fica nesse dashboard —
+   o painel aqui e so o resumo final. Se o usuario pedir "abre a run", chame a tool `abrir_run` (sem
+   argumento ela abre a run mais recente desta sessao; com `runId`, aquela run).
 8. REVISE o resultado e BARRE se quebrou. Rode `git diff` (e/ou leia o painel). NAO declare sucesso
    se: o STATUS for NEEDS-REVIEW, GATE-FAILED, ENV-FAILED, FAILED ou CANCELED, houver slices com
    [!!]/motivo, ou o diff parecer quebrar algo (arquivo que perdeu estrutura, ficou vazio, encolheu
