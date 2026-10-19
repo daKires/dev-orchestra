@@ -8,11 +8,12 @@ import { StatusIcon } from "./StatusIcon";
 
 type Props = {
   aberto: boolean; onAberto: (v: boolean) => void; estado: Estado; r: Run | null; agora: number;
+  titulos: Record<string, string>; // titulo do chat por run, entra no value pra busca do Ctrl+K
   onRun: (id: string) => void; onSlice: (i: number) => void; onArquivo: (f: string) => void;
 };
 
 // Ctrl+K: pula pra run, slice (da run aberta) ou arquivo de diff.
-export function CommandPalette({ aberto, onAberto, estado, r, agora, onRun, onSlice, onArquivo }: Props) {
+export function CommandPalette({ aberto, onAberto, estado, r, agora, titulos, onRun, onSlice, onArquivo }: Props) {
   const ir = (f: () => void) => { f(); onAberto(false); };
   return (
     <CommandDialog open={aberto} onOpenChange={onAberto} title="Ir para…" description="Runs, slices e arquivos" className="sm:max-w-xl">
@@ -43,7 +44,10 @@ export function CommandPalette({ aberto, onAberto, estado, r, agora, onRun, onSl
             {g.runs.map((x) => {
               const st = statusVisivel(x, agora);
               return (
-                <CommandItem key={x.id} value={`run ${g.projeto} ${x.feature} ${x.id}`} onSelect={() => ir(() => onRun(x.id))}>
+                <CommandItem
+                  key={x.id} value={`run ${g.projeto} ${x.feature} ${titulos[x.id] ?? ""} ${x.id}`}
+                  onSelect={() => ir(() => onRun(x.id))}
+                >
                   {st === "rodando" ? <Play className="text-run" /> : <ListTree />}
                   <span className="truncate">{x.feature}</span>
                   <span className={"ml-auto text-xs " + tomStatus(st).texto}>{tomStatus(st).rotulo} · {fmtIdade(x.inicioTs, agora)}</span>

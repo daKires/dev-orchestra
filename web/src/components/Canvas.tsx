@@ -175,6 +175,9 @@ export type CanvasProps = {
   /** Estado das runs do App (um useRuns so' por aba: um 2o reducer recebia o replay fora de ordem). */
   runsEstado: Estado;
   onRunSel?: (runId: string | null) => void;
+  titulos?: Record<string, string>;
+  onAbrirSessao?: (runId: string) => void;
+  onFiltrarSessao?: (runId: string) => void;
 };
 
 export type CanvasHandle = {
@@ -184,7 +187,7 @@ export type CanvasHandle = {
 };
 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
-  { projeto, runsEstado, onRunSel }, ref,
+  { projeto, runsEstado, onRunSel, titulos, onAbrirSessao, onFiltrarSessao }, ref,
 ) {
   const { estado, conectado, carregado, enviar } = useCanvas(projeto);
   const [nos, setNos] = useState<Node[]>([]);
@@ -379,6 +382,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const arquivoDiff = runMostrada && arquivoPedido?.runId === runMostrada.id ? arquivoPedido.arquivo : null;
   const onRunSelRef = useRef(onRunSel);
   onRunSelRef.current = onRunSel;
+  // Abrir/filtrar a sessao da run — o POST /runs/sessao, o toast e a busca ficam no App.
+  const abrirSessaoRef = useRef(onAbrirSessao);
+  abrirSessaoRef.current = onAbrirSessao;
+  const filtrarSessaoRef = useRef(onFiltrarSessao);
+  filtrarSessaoRef.current = onFiltrarSessao;
 
   // Avisa o dono da tela quando a run mostrada no painel muda (o relogio nao redispara: o id e' estavel).
   useEffect(() => { onRunSelRef.current?.(runMostrada?.id ?? null); }, [runMostrada?.id]);
@@ -426,11 +434,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
     setTimeout(() => void instancia.current?.fitView({ nodes: [{ id: `run:${runId}` }], maxZoom: 1, padding: 0.4 }), 60);
   };
 
-  // Run que entra em foco abre inteira; recolher vale so' ate' trocar de run.
+  // Run que entra em foco abre inteira; recolher vale so' ate' trocar de run. Depende de `carregado`:
+  // o foco pode chegar antes do snapshot do canvas (card ainda inexistente) e precisa reabrir depois.
   useEffect(() => {
     const no = foco ? buscarNo(`run:${foco.id}`) : undefined;
     if (no && no.dados.expandida !== true) upsertNo(no, { expandida: true });
-  }, [foco?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [foco?.id, carregado]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * abrirDiff do card de arquivo (RunsCtx): o painel direito passa a mostrar a run daquele arquivo com
@@ -519,10 +528,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
   const runsValor = {
     runs: runsEstado.runs,
     agora,
+    titulos: titulos ?? {},
     alternar: alternarRun,
     alternarSlice,
     abrirDiff,
     abrirRun,
+    abrirSessao: (runId: string) => abrirSessaoRef.current?.(runId),
+    filtrarSessao: (runId: string) => filtrarSessaoRef.current?.(runId),
     focar,
     abrirDetalhes,
   };

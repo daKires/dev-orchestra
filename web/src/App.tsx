@@ -14,6 +14,7 @@ import { useAgora, useLocal, useRuns } from "@/hooks/useRuns";
 import { useAgentes } from "@/hooks/useAgentes";
 import { chaveProjeto } from "@/hooks/useCanvas";
 import { raiz } from "@/lib/estado";
+import type { Consulta } from "@/lib/busca";
 import { badgesArquivos, projetoInicial, runsNovas } from "@/lib/unido";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,14 @@ export default function App() {
   const [paleta, setPaleta] = useState(false);
   const [cancelar, setCancelar] = useState(false);
   const [arquivo, setArquivo] = useState<string | null>(null); // previa (ModalArquivo) de um arquivo sem diff
+  // busca global da sidebar (texto livre ou filtro por sessao) e o titulo do chat por run (/sessoes).
+  const [busca, setBusca] = useState<Consulta>("");
+  const [titulos, setTitulos] = useState<Record<string, string>>({});
+  // toast do canto (abrir a sessao de uma run) com o comando de copia devolvido pela rota.
+  const [toast, setToast] = useState<{ texto: string; comandoCopia: string } | null>(null);
+  // ?run=<id ou mcpRunId>: abre o dashboard focado naquela run (resolvida quando o estado carrega).
+  const runDaUrl = useMemo(() => new URLSearchParams(window.location.search).get("run"), []);
+  const [runPendente, setRunPendente] = useState<string | null>(runDaUrl);
   const canvasRef = useRef<CanvasHandle | null>(null);
   const lateral = usePanelRef();
   const layout = useDefaultLayout({ id: "dev-orchestra.layout.app", storage: localStorage });
@@ -46,6 +55,23 @@ export default function App() {
     if (!projeto && projetoPadrao) setProjeto(projetoPadrao);
     else if (projeto && validos?.length && !existe(projeto)) setProjeto(projetoPadrao);
   }, [projeto, projetoPadrao, validos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ?run= na URL: ignora o projeto salvo e deixa o padrao decidir (a run pedida troca depois, se achar).
+  useEffect(() => { if (runDaUrl) setProjeto(null); }, [runDaUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // titulo do chat por run (GET /sessoes); erro ignora e recarrega a cada 30s pra pegar renomeacoes.
+  useEffect(() => {
+    let vivo = true;
+    const puxar = () => {
+      fetch("/sessoes")
+        .then((r) => (r.ok ? r.json() : {}))
+        .then((j) => { if (vivo && j && typeof j === "object") setTitulos(j as Record<string, string>); })
+        .catch(() => {});
+    };
+    puxar();
+    const t = window.setInterval(puxar, 30_000);
+    return () => { vivo = false; window.clearInterval(t); };
+  }, []);
 
   const { agentes } = useAgentes(projeto ?? "");
 
@@ -74,7 +100,53 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lateral]);
 
-  const abrirRun = (id: string) => { canvasRef.current?.abrirRun(id); };
+  // toast do canto (abrir a sessao de uma run) some sozinho em ~6s: estado local, sem lib nova.
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  /**
+   * Reabre o chat da sessao salva na run (POST /runs/sessao com o header de acao) e mostra o toast
+   * "Abrindo no Claude…" com o comando de copia devolvido pela rota.
+   */
+  const abrirSessao = async (id: string) => {
+    const r = estado.runs[id];
+    const ferramenta = r?.sessao?.planejador === "claude" ? "Claude" : "OpenCode";
+    try {
+      const res = await fetch(`/runs/sessao?run=${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "X-Dev-Orchestra": "1" },
+      });
+      const j = res.ok ? await res.json().catch(() => null) : null;
+      const comandoCopia = j && typeof j.comandoCopia === "string" ? j.comandoCopia : "";
+      setToast({ texto: `Abrindo no ${ferramenta}…`, comandoCopia });
+    } catch {
+      setToast({ texto: `Falha ao abrir no ${ferramenta}`, comandoCopia: "" });
+    }
+  };
+
+  const filtrarSessao = (id: string) => {
+    const sessao = estado.runs[id]?.sessao;
+    if (!sessao) return;
+    setBusca({ sessao: sessao.id, titulo: titulos[id] ?? "" });
+  };
+
+  // 'abrir run pendente' — quem pede (Sidebar/paleta/atalho/URL) so' passa o id; o efeito abaixo
+  // troca o projeto (raiz do cwd) se preciso e so' abre depois do render com o projeto batendo.
+  const abrirRun = (id: string) => setRunPendente(id);
+
+  // Resolve a run pendente por id ou mcpRunId assim que o estado carrega; desconhecida = ignora.
+  useEffect(() => {
+    if (!runPendente) return;
+    const r = runs.find((x) => x.id === runPendente || x.mcpRunId === runPendente);
+    if (!r) return;
+    const alvo = raiz(r.cwd);
+    if (alvo && chaveProjeto(alvo) !== chaveProjeto(projeto ?? "")) { setProjeto(alvo); return; }
+    setRunPendente(null);
+    canvasRef.current?.abrirRun(r.id);
+  }, [runPendente, runs, projeto]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const focar = (noId: string) => {
     if (noId.startsWith("run:")) canvasRef.current?.abrirRun(noId.slice(5));
@@ -129,6 +201,7 @@ export default function App() {
             >
               <Sidebar
                 projeto={projeto ?? ""} estado={estado} agora={agora} agentes={agentes} runSel={runSel} novas={novas}
+                titulos={titulos} busca={busca} onBusca={setBusca}
                 onRun={abrirRun} onFocar={focar} onArquivo={abrirArquivo}
               />
             </ResizablePanel>
@@ -137,7 +210,8 @@ export default function App() {
               {projeto ? (
                 <Canvas
                   ref={canvasRef} projeto={projeto} runsEstado={estado}
-                  onRunSel={setRunSelId}
+                  onRunSel={setRunSelId} titulos={titulos}
+                  onAbrirSessao={(id) => void abrirSessao(id)} onFiltrarSessao={filtrarSessao}
                 />
               ) : (
                 <div className="grid h-full place-items-center">
@@ -152,11 +226,29 @@ export default function App() {
       </div>
 
       <CommandPalette
-        aberto={paleta} onAberto={setPaleta} estado={estado} r={runSel} agora={agora}
+        aberto={paleta} onAberto={setPaleta} estado={estado} r={runSel} agora={agora} titulos={titulos}
         onRun={abrirRun} onSlice={() => { if (runSel) abrirRun(runSel.id); }} onArquivo={abrirDiff}
       />
       <CancelDialog r={runSel} aberto={cancelar} onAberto={setCancelar} />
       <ModalArquivo aberto={arquivo !== null} projeto={projeto ?? ""} caminho={arquivo ?? ""} onFechar={() => setArquivo(null)} />
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed right-4 bottom-4 z-50 flex items-center gap-3 rounded-md border bg-sidebar px-3 py-2 text-xs shadow-lg"
+        >
+          <span className="truncate">{toast.texto}</span>
+          {toast.comandoCopia && (
+            <button
+              type="button"
+              className="shrink-0 rounded border border-input px-2 py-1 font-medium hover:bg-sidebar-accent"
+              onClick={() => { void navigator.clipboard?.writeText(toast.comandoCopia).catch(() => {}); }}
+            >
+              Copiar comando
+            </button>
+          )}
+        </div>
+      )}
     </TooltipProvider>
   );
 }

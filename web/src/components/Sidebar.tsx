@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { arvoreDeCaminhos, type NoArvore } from "@/lib/colab";
+import { filtrarRuns, type Consulta } from "@/lib/busca";
 import { kpis, progresso, runsDoProjeto, statusVisivel, type Estado, type Run } from "@/lib/estado";
 import { fmtIdade, fmtUSD, tomStatus } from "@/lib/formato";
 import { agentesDoPool, badgesArquivos, type Badge } from "@/lib/unido";
@@ -19,6 +20,9 @@ type Props = {
   agentes: AgenteSidebar[];
   runSel: Run | null;
   novas: Set<string>;
+  titulos: Record<string, string>;   // titulo do chat por run (texto pequeno no item e na busca)
+  busca: Consulta;                    // texto livre ou filtro por sessao ({ sessao, titulo })
+  onBusca: (c: Consulta) => void;
   onRun: (runId: string) => void;
   onFocar: (noId: string) => void;
   onArquivo: (caminho: string) => void;
@@ -46,6 +50,15 @@ export function Sidebar(p: Props) {
     () => agentesDoPool(p.agentes, runsDoProjeto(Object.values(p.estado.runs), p.projeto), p.agora),
     [p.agentes, p.estado, p.projeto, p.agora],
   );
+
+  // busca global. Sem busca (texto vazio) = runs do projeto atual (como hoje); com busca = grupos por
+  // projeto (filtrarRuns em lib/busca.ts). O filtro por sessao chega como { sessao, titulo }.
+  const buscando = typeof p.busca !== "string" || p.busca.trim() !== "";
+  const grupos = useMemo(
+    () => (buscando ? filtrarRuns(Object.values(p.estado.runs), p.busca, p.titulos, p.projeto) : []),
+    [buscando, p.estado, p.busca, p.titulos, p.projeto],
+  );
+  const totalBusca = useMemo(() => grupos.reduce((a, g) => a + g.runs.length, 0), [grupos]);
 
   const [caminhos, setCaminhos] = useState<string[]>([]);
   const [erroArvore, setErroArvore] = useState(false);
@@ -112,41 +125,56 @@ export function Sidebar(p: Props) {
       <section className="flex h-full min-h-0 flex-col">
         <div className={ROTULO}>
           <span>Runs recentes</span>
-          <span className="shrink-0 pl-2 font-normal tracking-normal">{runs.length}</span>
+          <span className="shrink-0 pl-2 font-normal tracking-normal">{buscando ? totalBusca : runs.length}</span>
+        </div>
+        {/* busca global. Filtro por sessao (chip) ou caixa de texto; sem busca, a lista do projeto atual. */}
+        <div className="shrink-0 px-2 pb-1">
+          {typeof p.busca === "string" ? (
+            <input
+              type="text"
+              value={p.busca}
+              onChange={(e) => p.onBusca(e.target.value)}
+              placeholder="Buscar runs…"
+              className="h-7 w-full rounded border border-input bg-background/40 px-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+            />
+          ) : (
+            <div className="flex items-center gap-1 rounded border bg-sidebar-accent/60 px-2 py-1 text-xs">
+              <span className="min-w-0 truncate">Sessão: {p.busca.titulo || p.busca.sessao}</span>
+              <button
+                type="button" aria-label="Limpar filtro de sessão" onClick={() => p.onBusca("")}
+                className="ml-auto shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-auto pb-1">
-          {runs.length === 0 ? (
+          {buscando ? (
+            totalBusca === 0 ? (
+              <p className="px-4 py-3 text-xs leading-relaxed text-muted-foreground">Nenhuma run encontrada.</p>
+            ) : grupos.map((g) => (
+              <div key={g.cwd}>
+                <div className="flex items-center justify-between px-3 pt-2 pb-0.5 text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                  <span className="truncate">{g.projeto}</span>
+                  <span className="shrink-0 pl-2 font-normal tracking-normal">{g.runs.length}</span>
+                </div>
+                {g.runs.map((r) => (
+                  <ItemRun
+                    key={r.id} r={r} agora={p.agora} sel={p.runSel?.id === r.id}
+                    nova={p.novas.has(r.id)} titulo={p.titulos[r.id]} onRun={p.onRun}
+                  />
+                ))}
+              </div>
+            ))
+          ) : runs.length === 0 ? (
             <p className="px-4 py-3 text-xs leading-relaxed text-muted-foreground">Nenhuma run neste projeto.</p>
-          ) : runs.map((r) => {
-            const st = statusVisivel(r, p.agora);
-            const tom = tomStatus(st);
-            const sel = p.runSel?.id === r.id;
-            const { feitas, total } = progresso(r);
-            const k = kpis(r);
-            return (
-              <button
-                key={r.id} type="button" onClick={() => p.onRun(r.id)}
-                className={cn(
-                  "relative flex w-full flex-col gap-0.5 py-1.5 pr-2 pl-3 text-left transition-colors hover:bg-sidebar-accent/60",
-                  sel && "bg-sidebar-accent text-sidebar-accent-foreground",
-                  p.novas.has(r.id) && "sb-nova",
-                )}
-              >
-                {sel && <span className="absolute inset-y-0 left-0 w-0.5 bg-primary" />}
-                <span className="flex w-full items-center gap-2">
-                  <PontoStatus rodando={st === "rodando"} cor={tom.ponto} />
-                  <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">#{r.id.slice(0, 8)}</span>
-                  <span className={cn("shrink-0 text-[10.5px]", tom.texto)}>{tom.rotulo}</span>
-                  <span className="truncate text-[13px]">{r.feature}</span>
-                </span>
-                <span className="flex w-full items-center gap-2 pl-4 text-[11px] text-muted-foreground">
-                  {total > 0 && <span className="shrink-0 font-mono">{feitas}/{total} slices</span>}
-                  {k.n > 0 && <span className="shrink-0 font-mono">{fmtUSD(k.custo)}</span>}
-                  <span className="ml-auto shrink-0">{r.inicioTs ? fmtIdade(r.inicioTs, p.agora) : ""}</span>
-                </span>
-              </button>
-            );
-          })}
+          ) : runs.map((r) => (
+            <ItemRun
+              key={r.id} r={r} agora={p.agora} sel={p.runSel?.id === r.id}
+              nova={p.novas.has(r.id)} titulo={p.titulos[r.id]} onRun={p.onRun}
+            />
+          ))}
         </div>
       </section>
       </ResizablePanel>
@@ -181,6 +209,39 @@ export function Sidebar(p: Props) {
       </section>
       </ResizablePanel>
     </ResizablePanelGroup>
+  );
+}
+
+function ItemRun({ r, agora, sel, nova, titulo, onRun }: {
+  r: Run; agora: number; sel: boolean; nova: boolean; titulo?: string; onRun: (id: string) => void;
+}) {
+  const st = statusVisivel(r, agora);
+  const tom = tomStatus(st);
+  const { feitas, total } = progresso(r);
+  const k = kpis(r);
+  return (
+    <button
+      type="button" onClick={() => onRun(r.id)}
+      className={cn(
+        "relative flex w-full flex-col gap-0.5 py-1.5 pr-2 pl-3 text-left transition-colors hover:bg-sidebar-accent/60",
+        sel && "bg-sidebar-accent text-sidebar-accent-foreground",
+        nova && "sb-nova",
+      )}
+    >
+      {sel && <span className="absolute inset-y-0 left-0 w-0.5 bg-primary" />}
+      <span className="flex w-full items-center gap-2">
+        <PontoStatus rodando={st === "rodando"} cor={tom.ponto} />
+        <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">#{r.id.slice(0, 8)}</span>
+        <span className={cn("shrink-0 text-[10.5px]", tom.texto)}>{tom.rotulo}</span>
+        <span className="truncate text-[13px]">{r.feature}</span>
+      </span>
+      {titulo && <span className="w-full truncate pl-4 text-[10.5px] text-muted-foreground italic">{titulo}</span>}
+      <span className="flex w-full items-center gap-2 pl-4 text-[11px] text-muted-foreground">
+        {total > 0 && <span className="shrink-0 font-mono">{feitas}/{total} slices</span>}
+        {k.n > 0 && <span className="shrink-0 font-mono">{fmtUSD(k.custo)}</span>}
+        <span className="ml-auto shrink-0">{r.inicioTs ? fmtIdade(r.inicioTs, agora) : ""}</span>
+      </span>
+    </button>
   );
 }
 
