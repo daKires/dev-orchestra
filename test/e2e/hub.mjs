@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { BASE, REPO, RUNS, PORTA, RUN_A, RUN_B, RUN_C } from "./dirs.mjs";
+import { BASE, REPO, RUNS, PORTA, RUN_A, RUN_B, RUN_C, OUTRO, RUN_D, SESSAO, TITULO, ABRIR_LOG } from "./dirs.mjs";
 
 fs.rmSync(BASE, { recursive: true, force: true });
 for (const d of ["runs", "canvas", "agentes", "planejadores"]) fs.mkdirSync(path.join(BASE, d), { recursive: true });
@@ -62,13 +62,29 @@ const terminada = (id, b, ts) => [
   { t: "metrica", slice: 1, iteracoes: 2, passouDePrimeira: false, tocouNoTeste: 0, tokensIn: 1000, tokensOut: 200, custoUSD: 0.012, ts: ts + 8 },
   { t: "painel", status: "COMPLETE", branch: `orchestra/${b}`, base: "master", linhas: [`STATUS: COMPLETE`, `branch orchestra/${b}`], ts: ts + 9 },
 ];
-gravar(RUN_B, terminada(RUN_B, "b", agora - 3_600_000));
+// Run B ligada a uma sessao do Claude Code (desktop); run C sem sessao (como runs antigas).
+const sessao = { planejador: "claude", id: SESSAO, host: "local_e2e-1" };
+const comSessao = (evs, id) => { evs[0] = { ...evs[0], sessao, mcpRunId: "mcp-" + id }; return evs; };
+gravar(RUN_B, comSessao(terminada(RUN_B, "b", agora - 3_600_000), RUN_B));
 gravar(RUN_C, terminada(RUN_C, "c", agora - 7_200_000));
+// Run D: outro projeto, mesma sessao, a mais antiga (nao muda o projeto padrao).
+fs.mkdirSync(OUTRO, { recursive: true });
+const d = terminada(RUN_D, "d", agora - 10_800_000);
+d[0] = { ...d[0], feature: "relatorio do outro projeto", cwd: OUTRO };
+gravar(RUN_D, comSessao(d, RUN_D));
+// Transcript fake do Claude Code com o titulo do chat.
+const projetos = path.join(BASE, "claude-projects");
+fs.mkdirSync(path.join(projetos, "D--e2e"), { recursive: true });
+fs.writeFileSync(path.join(projetos, "D--e2e", SESSAO + ".jsonl"),
+  JSON.stringify({ type: "custom-title", customTitle: TITULO, sessionId: SESSAO }) + "\n");
 
 process.env.DEV_ORCHESTRA_UI_PORT = String(PORTA);
 process.env.DEV_ORCHESTRA_RUNS_DIR = RUNS;
 process.env.DEV_ORCHESTRA_CANVAS_DIR = path.join(BASE, "canvas");
 process.env.DEV_ORCHESTRA_AGENTES_DIR = path.join(BASE, "agentes");
 process.env.DEV_ORCHESTRA_PLANEJADORES_DIR = path.join(BASE, "planejadores");
+process.env.DEV_ORCHESTRA_CLAUDE_PROJECTS = projetos;
+process.env.DEV_ORCHESTRA_OPENCODE_DB = path.join(BASE, "opencode.db"); // inexistente
+process.env.DEV_ORCHESTRA_ABRIR_LOG = ABRIR_LOG;
 const ui = await import(pathToFileURL(path.join(import.meta.dirname, "..", "..", "dist", "ui.js")).href);
 await ui.iniciarUI();

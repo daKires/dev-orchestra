@@ -18,9 +18,11 @@ export type Atividade =
   | { tipo: "comando"; slice: number; cmd: string; desde: number }
   | null;
 
+export type SessaoRun = { planejador: string; id: string; host?: string };
 export type Run = {
   id: string; feature: string; cwd: string; projeto: string; inicioTs: number; ultimoEventoTs: number;
   status: string; branch: string; baseline: string;
+  sessao?: SessaoRun; mcpRunId?: string;
   plano: SlicePlano[]; cmds: string[]; gateCmds: string[];
   slices: SliceEstado[]; feed: FeedItem[]; gate: GateItem[];
   diffs: Record<string, string>; ordemDiffs: string[];
@@ -89,6 +91,9 @@ function mutar(r: Run, ev: Evento): void {
     case "run":
       r.feature = ev.feature; r.cwd = ev.cwd; r.projeto = projetoDe(ev.cwd); r.inicioTs = ts; r.status = "rodando";
       r.plano = ev.plano ?? []; r.cmds = ev.cmds ?? []; r.gateCmds = ev.gate ?? [];
+      // a sessao do planejador (e o mcpRunId) vem no evento "run"; so' sobrescreve quando vier.
+      if (ev.sessao) r.sessao = ev.sessao;
+      if (ev.mcpRunId) r.mcpRunId = ev.mcpRunId;
       break;
     case "fase":
       if (ev.nome === "branch" && ev.info) r.branch = ev.info.replace(" (existente)", "");

@@ -23,16 +23,20 @@ import type { No } from "../../../../src/canvas.ts";
 export const RunsCtx = createContext<{
   runs: Record<string, Run>;
   agora: number;
+  titulos: Record<string, string>;
   alternar: (runId: string) => void;
   alternarSlice: (runId: string, idx: number) => void;
   abrirDiff: (runId: string, arquivo: string) => void;
   /** Abre a run no canvas: grava expandida=true no card run:<id> e centraliza nele (painel Runs). */
   abrirRun: (runId: string) => void;
+  abrirSessao: (runId: string) => void;
+  filtrarSessao: (runId: string) => void;
   focar: (noId: string) => void;
   abrirDetalhes: (runId: string) => void;
 }>({
-  runs: {}, agora: Date.now(),
+  runs: {}, agora: Date.now(), titulos: {},
   alternar: () => {}, alternarSlice: () => {}, abrirDiff: () => {}, abrirRun: () => {},
+  abrirSessao: () => {}, filtrarSessao: () => {},
   focar: () => {}, abrirDetalhes: () => {},
 });
 
