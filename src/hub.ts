@@ -49,7 +49,8 @@ export type Planejador = {
 };
 
 export type Evento = { ts?: number } & (
-  | { t: "run"; feature: string; cwd: string; total: number; plano?: SlicePlano[]; cmds?: string[]; gate?: string[]; pid?: number }
+  | { t: "run"; feature: string; cwd: string; total: number; plano?: SlicePlano[]; cmds?: string[]; gate?: string[]; pid?: number;
+      sessao?: { planejador: "claude" | "opencode"; id: string; host?: string }; mcpRunId?: string }
   | { t: "fase"; nome: string; info?: string }
   | { t: "slice"; idx: number; total: number; tarefa: string; status: "fila" | "rodando" | "ok" | "incompleta" | "pulada";
       escritos?: string[]; comandos?: string[]; motivo?: string; ms?: number; semMudancas?: boolean }

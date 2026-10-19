@@ -16,10 +16,11 @@ let ativa: string | null = null;
 
 /**
  * Dispara `fn` em background e devolve o runId na hora.
+ * `fn` recebe o runId gerado (para carimbar os eventos da propria run) como 2o argumento.
  * Se ja houver uma run ativa (nao terminada), lanca erro e nao chama `fn`.
  */
 export function iniciar(
-  fn: (progresso: (linha: string) => void) => Promise<string>,
+  fn: (progresso: (linha: string) => void, runId: string) => Promise<string>,
 ): string {
   if (ativa !== null) {
     throw new Error(`ja existe run ${ativa} rodando`);
@@ -36,7 +37,7 @@ export function iniciar(
   };
 
   // Dispara sem await: a run roda em background e nao bloqueia o retorno.
-  void fn(progresso).then(
+  void fn(progresso, runId).then(
     (painel) => concluir(runId, { fim: painel }),
     (erro: unknown) =>
       concluir(runId, {
