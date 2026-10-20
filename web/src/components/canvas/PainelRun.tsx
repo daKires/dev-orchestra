@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 import { kpis, progresso, statusVisivel, type Run } from "@/lib/estado";
-import { fmtDur, fmtHora, fmtTok, fmtUSD, tomStatus } from "@/lib/formato";
+import { fmtDur, fmtHora, fmtTok, fmtUSD, tituloDaSlice, tomStatus } from "@/lib/formato";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -33,7 +33,7 @@ export type PainelRunProps = {
 };
 
 
-type TipoAcao = "merge" | "pr" | "descartar" | "cancelar";
+export type TipoAcao = "merge" | "pr" | "descartar" | "cancelar";
 export type Resultado = {
   tipo: TipoAcao;
   ok: boolean;
@@ -101,7 +101,16 @@ function Contador({ children, tom }: { children: ReactNode; tom: string }) {
   return <span className={cn("ml-1.5 rounded px-1 font-mono text-[10px] tracking-normal", tom)}>{children}</span>;
 }
 
-function tituloConfirmacao(a: TipoAcao): string {
+export function rotuloExecucao(a: TipoAcao): string {
+  switch (a) {
+    case "merge": return "Fazendo merge…";
+    case "pr": return "Abrindo PR…";
+    case "descartar": return "Descartando…";
+    case "cancelar": return "Cancelando…";
+  }
+}
+
+export function tituloConfirmacao(a: TipoAcao): string {
   switch (a) {
     case "merge": return "Merge --no-ff";
     case "descartar": return "Descartar worktree";
@@ -110,12 +119,12 @@ function tituloConfirmacao(a: TipoAcao): string {
   }
 }
 
-function descricaoConfirmacao(a: TipoAcao, run: Run): string {
+export function descricaoConfirmacao(a: TipoAcao, run: Run): string {
   switch (a) {
-    case "merge": return `Fazer merge --no-ff de ${run.branch || "?"} na base?`;
+    case "merge": return `Fazer merge --no-ff de ${run.branch || "?"} em ${run.base || "base"}?`;
     case "descartar": return `Apagar ${run.branch || "?"} e o worktree? Isso não pode ser desfeito.`;
     case "cancelar": return `Pedir o cancelamento da run ${run.feature || run.id}?`;
-    case "pr": return `Abrir um PR da run ${run.feature || run.id}?`;
+    case "pr": return `Fazer push de ${run.branch || "?"} para origin e abrir PR contra ${run.base || "base"} (${run.feature || run.id})?`;
   }
 }
 
@@ -205,7 +214,7 @@ function Metricas({ r }: { r: Run }) {
         {r.metricas.map((m, i) => (
           <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
             <td className="px-3 py-1">S{m.slice}</td>
-            <td className="max-w-72 truncate px-3 py-1 font-sans text-xs text-foreground/85">{nome(m.slice)}</td>
+            <td className="max-w-72 truncate px-3 py-1 font-sans text-xs text-foreground/85">{tituloDaSlice(m.slice, nome(m.slice))}</td>
             <td className="px-3 py-1">{m.iteracoes}</td>
             <td className={cn("px-3 py-1", m.passouDePrimeira ? "text-ok" : "text-muted-foreground")}>{m.passouDePrimeira ? "sim" : "não"}</td>
             <td className={cn("px-3 py-1", m.tocouNoTeste ? "text-err" : "")}>{m.tocouNoTeste}</td>
@@ -224,6 +233,8 @@ function Metricas({ r }: { r: Run }) {
 export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }: PainelRunProps) {
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [confirmar, setConfirmar] = useState<TipoAcao | null>(null);
+  const [executando, setExecutando] = useState<TipoAcao | null>(null);
+  useEffect(() => { setResultado(null); setConfirmar(null); setExecutando(null); }, [run.id]);
   const [sliceSel, setSliceSel] = useState<number | null>(null);
   const [abaInterna, setAbaInterna] = useState("feed");
   // Largura da lista de arquivos da aba Diff (persistida).
@@ -250,6 +261,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
 
   const acao = async (a: "merge" | "pr" | "descartar") => {
     setResultado(null);
+    setExecutando(a);
     try {
       const r = await fetch(`/runs/acao?run=${encodeURIComponent(run.id)}`, {
         method: "POST",
@@ -257,21 +269,29 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
         body: JSON.stringify({ acao: a }),
       });
       const j = (await r.json().catch(() => null)) as { ok?: boolean; base?: string; url?: string; erro?: string; conflitos?: string[] } | null;
-      if (j?.ok) setResultado({ tipo: a, ok: true, base: j.base, url: j.url });
+      if (j?.ok) {
+        setResultado({ tipo: a, ok: true, base: j.base, url: j.url });
+        if (a === "pr" && j.url && typeof window !== "undefined") window.open(j.url, "_blank", "noopener,noreferrer");
+      }
       else setResultado({ tipo: a, ok: false, erro: j?.erro || `O hub recusou a ação (HTTP ${r.status}).`, conflitos: j?.conflitos });
     } catch (e) {
       setResultado({ tipo: a, ok: false, erro: "Falha de rede ao executar a ação: " + String((e as Error).message) });
+    } finally {
+      setExecutando(null);
     }
   };
 
   const cancelar = async () => {
     setResultado(null);
+    setExecutando("cancelar");
     try {
       const r = await fetch(`/cancel?run=${encodeURIComponent(run.id)}`, { method: "POST", headers: { "X-Dev-Orchestra": "1" } });
       if (r.ok || r.status === 204) setResultado({ tipo: "cancelar", ok: true });
       else setResultado({ tipo: "cancelar", ok: false, erro: `O hub recusou o cancelamento (HTTP ${r.status}).` });
     } catch (e) {
       setResultado({ tipo: "cancelar", ok: false, erro: "Falha de rede ao pedir o cancelamento: " + String((e as Error).message) });
+    } finally {
+      setExecutando(null);
     }
   };
 
@@ -358,7 +378,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
               return (
                 <div key={i} className="flex items-center gap-2 py-1" style={{ borderTop: `1px solid ${BORDA}` }}>
                   <span className="w-8 shrink-0 font-mono" style={{ color: CINZA }}>S{i + 1}</span>
-                  <span className="min-w-0 flex-1 truncate" title={item.tarefa}>{item.tarefa}</span>
+                  <span className="min-w-0 flex-1 truncate" title={item.tarefa}>{tituloDaSlice(i + 1, item.tarefa)}</span>
                   <span className={cn("shrink-0", tomStatus(sStatus).texto)}>{tomStatus(sStatus).rotulo}</span>
                   <span className="w-16 shrink-0 text-right font-mono tabular-nums" style={{ color: CINZA }}>{custo != null ? fmtUSD(custo) : "—"}</span>
                 </div>
@@ -368,8 +388,15 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
         </TabsContent>
       </Tabs>
 
-      {/* Resultado da acao aparece acima do rodape */}
-      {resultado ? (
+      {/* Estado de execucao em andamento ou resultado da acao aparece acima do rodape */}
+      {executando ? (
+        <div className="shrink-0 px-2.5 pb-1.5">
+          <div className="flex items-center gap-2 rounded-md px-2 py-1.5" style={{ background: "#191919", border: `1px solid ${BORDA}`, font: FONTE, color: AZUL }}>
+            <span className="size-2 animate-pulse rounded-full" style={{ background: AZUL }} />
+            <span className="truncate">{rotuloExecucao(executando)}</span>
+          </div>
+        </div>
+      ) : resultado ? (
         <div className="shrink-0 px-2.5 pb-1.5">
           <ResultadoAcao r={resultado} onFechar={() => setResultado(null)} />
         </div>
@@ -377,23 +404,23 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
 
       {/* Rodape FIXO com as acoes da run */}
       <footer className="flex shrink-0 items-center gap-2 px-2.5 py-2" style={{ background: CABECALHO, borderTop: `1px solid ${BORDA}` }}>
-        <button type="button" disabled={!completo} onClick={() => setConfirmar("merge")} className={btn} style={btnEstilo("#eee")}>
-          Merge (--no-ff)
+        <button type="button" disabled={!completo || executando !== null} onClick={() => setConfirmar("merge")} className={btn} style={btnEstilo("#eee")}>
+          {executando === "merge" ? "Fazendo merge…" : "Merge (--no-ff)"}
         </button>
-        <button type="button" disabled={!completo} onClick={() => void acao("pr")} className={btn} style={btnEstilo(AZUL)}>
-          Abrir PR
+        <button type="button" disabled={!completo || executando !== null} onClick={() => setConfirmar("pr")} className={btn} style={btnEstilo(AZUL)}>
+          {executando === "pr" ? "Abrindo PR…" : "Abrir PR"}
         </button>
-        <button type="button" disabled={!terminada} onClick={() => setConfirmar("descartar")} className={btn} style={btnEstilo(VERMELHO)}>
-          Descartar
+        <button type="button" disabled={!terminada || executando !== null} onClick={() => setConfirmar("descartar")} className={btn} style={btnEstilo(VERMELHO)}>
+          {executando === "descartar" ? "Descartando…" : "Descartar"}
         </button>
         {rodandoAgora ? (
-          <button type="button" onClick={() => setConfirmar("cancelar")} className={cn(btn, "ml-auto")} style={btnEstilo(VERMELHO)}>
-            Cancelar run
+          <button type="button" disabled={executando !== null} onClick={() => setConfirmar("cancelar")} className={cn(btn, "ml-auto")} style={btnEstilo(VERMELHO)}>
+            {executando === "cancelar" ? "Cancelando…" : "Cancelar run"}
           </button>
         ) : null}
       </footer>
 
-      {/* Confirmacao das acoes (merge, descartar e cancelar pedem confirmacao) */}
+      {/* Confirmacao das acoes (merge, PR, descartar e cancelar pedem confirmacao) */}
       <Dialog open={confirmar !== null} onOpenChange={(o) => { if (!o) setConfirmar(null); }}>
         <DialogContent className="max-w-sm" style={{ background: FUNDO, border: `1px solid ${BORDA}` }}>
           <DialogTitle style={{ color: "#eee", font: TITULO }}>
@@ -408,7 +435,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
               Cancelar
             </button>
             <button type="button" className="rounded px-2 py-1 text-xs"
-              style={{ background: confirmar === "merge" ? AZUL : VERMELHO, color: "#111", font: BOTAO }}
+              style={{ background: confirmar === "merge" || confirmar === "pr" ? AZUL : VERMELHO, color: "#111", font: BOTAO }}
               onClick={() => { const a = confirmar; setConfirmar(null); if (a) confirmarCom(a); }}>
               Confirmar
             </button>

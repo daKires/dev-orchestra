@@ -21,7 +21,7 @@ export type Atividade =
 export type SessaoRun = { planejador: string; id: string; host?: string };
 export type Run = {
   id: string; feature: string; cwd: string; projeto: string; inicioTs: number; ultimoEventoTs: number;
-  status: string; branch: string; baseline: string;
+  status: string; branch: string; baseline: string; base?: string;
   sessao?: SessaoRun; mcpRunId?: string;
   plano: SlicePlano[]; cmds: string[]; gateCmds: string[];
   slices: SliceEstado[]; feed: FeedItem[]; gate: GateItem[];
@@ -145,6 +145,7 @@ function mutar(r: Run, ev: Evento): void {
       r.status = ev.status; r.painel = ev.linhas; r.atividade = null;
       if (ev.branch) r.branch = ev.branch;
       if (ev.baseline) r.baseline = ev.baseline;
+      if (ev.base) r.base = ev.base;
       break;
     case "log":
       if (ev.texto) feed("log", ev.texto, /ERRO|tentativa/.test(ev.texto));

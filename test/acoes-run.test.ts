@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { baseDaBranch, mergeLocal, descartarRun, abrirPr, ehWorktree } from "../dist/acoes-run.js";
+import { corpoDoPr } from "../dist/hub.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -111,4 +112,11 @@ test("abrir PR: push da branch + gh pr create com titulo/corpo PT-BR e base; dev
   const falha = abrirPr({ cwd: r.cwd, branch: r.branch, feature: "f", corpo: "" }, (cmd) => { if (cmd === "gh") throw new Error("gh: command not found"); return ""; });
   assert.equal(falha.ok, false);
   assert.match((falha as { erro: string }).erro, /gh/);
+  const corpo = corpoDoPr([
+    { t: "slice", idx: 1, total: 2, tarefa: "S1 setup.ts: resiliencia", status: "ok" },
+    { t: "slice", idx: 2, total: 2, tarefa: "Dashboard Web", status: "ok" },
+  ]);
+  assert.match(corpo, /- S1 setup\.ts: resiliencia: ok/);
+  assert.doesNotMatch(corpo, /- S1 S1 /);
+  assert.match(corpo, /- S2 Dashboard Web: ok/);
 });

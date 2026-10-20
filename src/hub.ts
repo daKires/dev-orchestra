@@ -399,7 +399,8 @@ export function corpoDoPr(evs: Evento[]): string {
     else if (ev.t === "gate" && ev.status === "ok") gateOk = true;
     else if (ev.t === "metrica") custo += ev.custoUSD;
   }
-  const linhas = [...slices.entries()].sort((a, b) => a[0] - b[0]).map(([n, s]) => `- S${n} ${s.tarefa}: ${s.status}`);
+  const limpar = (n: number, t: string) => { const m = t.match(new RegExp(`^s${n}(?:\\s*[·:-]\\s*|\\s+)`, "i")); return (m && t.slice(m[0].length).trim()) || t; };
+  const linhas = [...slices.entries()].sort((a, b) => a[0] - b[0]).map(([n, s]) => `- S${n} ${limpar(n, s.tarefa)}: ${s.status}`);
   let corpo = "## Resumo\n" + linhas.join("\n");
   if (gateOk) corpo += "\n\nGate: ok";
   corpo += `\n\nCusto total: $${custo.toFixed(3).replace(".", ",")}`;
