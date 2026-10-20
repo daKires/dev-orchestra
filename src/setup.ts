@@ -91,6 +91,15 @@ function objetoOuVazio(v: unknown): any {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as any) : {};
 }
 
+// Arquivo de config do Antigravity nasce de 0 bytes (ou so' espacos): isso NAO e' JSON invalido, e' {}
+// (senao o instalador falharia na primeira instalacao). JSON quebrado de verdade continua estourando.
+function lerJsonOuVazio(arquivo: string): any {
+  if (!existsSync(arquivo)) return {};
+  const conteudo = readFileSync(arquivo, "utf8");
+  if (conteudo.trim() === "") return {};
+  return JSON.parse(conteudo);
+}
+
 function copiarEnv(origem: unknown): Env {
   const out: Env = {};
   const o = objetoOuVazio(origem);
@@ -287,8 +296,7 @@ export function chaveAtual(home: string, provedor: string): string {
 
 function gravarClaude(home: string, app: string, env: Env, node: string): void {
   const arquivo = path.join(home, ".claude.json");
-  let j: any = {};
-  if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8")); // invalido -> throw (nao sobrescreve)
+  let j: any = lerJsonOuVazio(arquivo); // vazio -> {}; invalido -> throw (nao sobrescreve)
   j = objetoOuVazio(j);
   j.mcpServers = objetoOuVazio(j.mcpServers);
   delete j.mcpServers["hermes-bridge"];
@@ -298,8 +306,7 @@ function gravarClaude(home: string, app: string, env: Env, node: string): void {
 
 function gravarOpencode(home: string, app: string, env: Env, node: string): void {
   const arquivo = path.join(home, ".config", "opencode", "opencode.json");
-  let j: any = {};
-  if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8"));
+  let j: any = lerJsonOuVazio(arquivo);
   j = objetoOuVazio(j);
   if (!j.$schema) j.$schema = "https://opencode.ai/config.json";
   j.mcp = objetoOuVazio(j.mcp);
@@ -309,8 +316,7 @@ function gravarOpencode(home: string, app: string, env: Env, node: string): void
 }
 
 function gravarFormatoCursor(arquivo: string, app: string, env: Env, node: string): void {
-  let j: any = {};
-  if (existsSync(arquivo)) j = JSON.parse(readFileSync(arquivo, "utf8"));
+  let j: any = lerJsonOuVazio(arquivo);
   j = objetoOuVazio(j);
   j.mcpServers = objetoOuVazio(j.mcpServers);
   delete j.mcpServers["hermes-bridge"];
@@ -394,7 +400,12 @@ function destinosSkills(home: string, ferramenta: string): string[] {
     case "cursor":
       return [path.join(home, ".cursor", "skills")];
     case "antigravity":
-      return [path.join(home, ".gemini", "skills"), path.join(home, ".gemini", "antigravity", "skills")];
+      // O Antigravity le skills de 3 pastas (dependendo da versao/instalacao): instala nas tres.
+      return [
+        path.join(home, ".gemini", "skills"),
+        path.join(home, ".gemini", "antigravity", "skills"),
+        path.join(home, ".gemini", "config", "skills"),
+      ];
     default:
       return [];
   }

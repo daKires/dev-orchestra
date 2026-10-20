@@ -113,7 +113,8 @@ export default function App() {
    */
   const abrirSessao = async (id: string) => {
     const r = estado.runs[id];
-    const ferramenta = r?.sessao?.planejador === "claude" ? "Claude" : "OpenCode";
+    const ferramenta =
+      r?.sessao?.planejador === "claude" ? "Claude" : r?.sessao?.planejador === "antigravity" ? "Antigravity" : "OpenCode";
     try {
       const res = await fetch(`/runs/sessao?run=${encodeURIComponent(id)}`, {
         method: "POST",
