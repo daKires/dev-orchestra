@@ -43,7 +43,9 @@ function NoPedido({ data, selected }: NodeProps) {
 
   // sessao do planejador ligada a esta run (ausente nas runs antigas) + o titulo do chat.
   const sessao = run.sessao;
-  const ferramenta = sessao ? (sessao.planejador === "claude" ? "Claude Code" : "OpenCode") : "";
+  const ferramenta = sessao
+    ? (sessao.planejador === "claude" ? "Claude Code" : sessao.planejador === "antigravity" ? "Antigravity" : "OpenCode")
+    : "";
   const titulo = sessao ? titulos[run.id] ?? "" : "";
 
   return (

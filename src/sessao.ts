@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
-export type PlanejadorSessao = "claude" | "opencode";
+export type PlanejadorSessao = "claude" | "opencode" | "antigravity";
 
 export type Sessao = { planejador: PlanejadorSessao; id: string; host?: string };
 
@@ -47,9 +48,40 @@ function abrirDbOpenCode(env: NodeJS.ProcessEnv): Db | null {
   return new Ctor(caminhoDbOpenCode(env), { readOnly: true });
 }
 
+// Antigravity guarda as conversas num SQLite em ~/.gemini/antigravity (injetavel pra testes).
+function caminhoDbAntigravity(env: NodeJS.ProcessEnv = process.env): string {
+  return env.DEV_ORCHESTRA_ANTIGRAVITY_DB
+    || process.env.DEV_ORCHESTRA_ANTIGRAVITY_DB
+    || path.join(os.homedir(), ".gemini", "antigravity", "conversation_summaries.db");
+}
+
+function abrirDbAntigravity(env: NodeJS.ProcessEnv = process.env): Db | null {
+  const Ctor = DatabaseSync;
+  if (!Ctor) return null;
+  return new Ctor(caminhoDbAntigravity(env), { readOnly: true });
+}
+
+function pastaAnnotationsAntigravity(): string {
+  return process.env.DEV_ORCHESTRA_ANTIGRAVITY_ANNOTATIONS
+    || path.join(os.homedir(), ".gemini", "antigravity", "annotations");
+}
+
+// workspace_uris e' um JSON de file:// URIs; URI invalida nao derruba a linha (vira "" e nunca casa).
+function workspacesDaConversa(workspaceUris: unknown): string[] {
+  let uris: unknown;
+  try { uris = JSON.parse(String(workspaceUris || "[]")); } catch { return []; }
+  if (!Array.isArray(uris)) return [];
+  const out: string[] = [];
+  for (const u of uris) {
+    try { out.push(normalizarCaminho(fileURLToPath(String(u)))); } catch {}
+  }
+  return out;
+}
+
 /**
  * Sessao do planejador desta run: Claude Code pelas envs (CLAUDE_CODE_SESSION_ID/HOST_SESSION_ID),
- * senao OpenCode (OPENCODE=1) pela sessao raiz (parent_id NULL) da MESMA pasta, a mais recente.
+ * senao OpenCode (OPENCODE=1) pela sessao raiz (parent_id NULL) da MESMA pasta, a mais recente,
+ * senao Antigravity (env direta ou o banco de conversas filtrado pelo workspace).
  * Nada disso presente (ou qualquer erro) -> undefined.
  */
 export function sessaoAtual(env: NodeJS.ProcessEnv, cwd: string): Sessao | undefined {
@@ -60,7 +92,13 @@ export function sessaoAtual(env: NodeJS.ProcessEnv, cwd: string): Sessao | undef
       ? { planejador: "claude", id: idCli, host }
       : { planejador: "claude", id: idCli };
   }
-  if (env.OPENCODE !== "1") return undefined;
+  const doOpenCode = env.OPENCODE === "1" ? sessaoOpenCode(env, cwd) : undefined;
+  if (doOpenCode) return doOpenCode;
+  return sessaoAntigravity(env, cwd);
+}
+
+// Sessao raiz do OpenCode na pasta: subsessoes (parent_id preenchido) sao de subagentes.
+function sessaoOpenCode(env: NodeJS.ProcessEnv, cwd: string): Sessao | undefined {
   try {
     const db = abrirDbOpenCode(env);
     if (!db) return undefined;
@@ -68,13 +106,48 @@ export function sessaoAtual(env: NodeJS.ProcessEnv, cwd: string): Sessao | undef
       const alvo = normalizarCaminho(cwd);
       let melhor: string | undefined;
       let maior = -Infinity;
-      // subsessoes (parent_id preenchido) sao de subagentes: so' a raiz identifica a sessao do usuario.
       for (const l of db.prepare("SELECT id, directory, time_updated FROM session WHERE parent_id IS NULL").all()) {
         if (normalizarCaminho(String(l.directory ?? "")) !== alvo) continue;
         const ts = Number(l.time_updated ?? 0);
         if (ts > maior) { maior = ts; melhor = String(l.id ?? ""); }
       }
       return melhor ? { planejador: "opencode", id: melhor } : undefined;
+    } finally { try { db.close(); } catch {} }
+  } catch { return undefined; }
+}
+
+/**
+ * Antigravity: a env ANTIGRAVITY_CONVERSATION_ID ja' diz a conversa; sem ela (mas rodando dentro do
+ * agente, ou com o banco injetado), acha a conversa RAIZ mais recente cujo workspace e' a pasta atual
+ * ou um pai dela (o cwd costuma ser uma subpasta do workspace aberto no app).
+ */
+function sessaoAntigravity(env: NodeJS.ProcessEnv, cwd: string): Sessao | undefined {
+  const idEnv = env.ANTIGRAVITY_CONVERSATION_ID;
+  if (typeof idEnv === "string" && RE_UUID.test(idEnv)) return { planejador: "antigravity", id: idEnv };
+  const dbDefinido = env.DEV_ORCHESTRA_ANTIGRAVITY_DB || process.env.DEV_ORCHESTRA_ANTIGRAVITY_DB;
+  if (env.ANTIGRAVITY_AGENT !== "1" && !dbDefinido) return undefined;
+  try {
+    const db = abrirDbAntigravity(env);
+    if (!db) return undefined;
+    try {
+      const alvo = normalizarCaminho(cwd);
+      let melhor: string | undefined;
+      let maiorTs = -Infinity;
+      let melhorLm = "";
+      // so' conversas raiz (parent_conversation_id vazio): as filhas sao de subagentes.
+      for (const l of db.prepare("SELECT conversation_id, workspace_uris, last_modified_time FROM conversation_summaries WHERE parent_conversation_id = ''").all()) {
+        const casa = workspacesDaConversa(l.workspace_uris).some((ws) => ws !== "" && (alvo === ws || alvo.startsWith(ws + "/")));
+        if (!casa) continue;
+        const lm = String(l.last_modified_time ?? "");
+        const parsed = Date.parse(lm);
+        const ts = Number.isFinite(parsed) ? parsed : 0;
+        if (melhor === undefined || ts > maiorTs || (ts === maiorTs && lm > melhorLm)) {
+          melhor = String(l.conversation_id ?? "");
+          maiorTs = ts;
+          melhorLm = lm;
+        }
+      }
+      return melhor ? { planejador: "antigravity", id: melhor } : undefined;
     } finally { try { db.close(); } catch {} }
   } catch { return undefined; }
 }
@@ -125,10 +198,28 @@ function tituloOpenCode(id: string): string {
   } catch { return ""; } finally { try { db.close(); } catch {} }
 }
 
+// O titulo do Antigravity vive no SQLite (conversation_summaries.title); quando o banco nao tem a
+// conversa (ou node:sqlite nao existe), cai no annotations/<id>.pbtxt, onde o titulo e' o campo title.
+function tituloAntigravity(id: string): string {
+  const db = abrirDbAntigravity();
+  if (db) {
+    try {
+      const l = db.prepare("SELECT title FROM conversation_summaries WHERE conversation_id = ?").get(id);
+      if (l && typeof l.title === "string" && l.title) return l.title;
+    } catch {} finally { try { db.close(); } catch {} }
+  }
+  try {
+    const txt = fs.readFileSync(path.join(pastaAnnotationsAntigravity(), id + ".pbtxt"), "utf8");
+    const m = /title:\s*"((?:[^"\\]|\\.)*)"/.exec(txt);
+    return m ? m[1] : "";
+  } catch { return ""; }
+}
+
 export function tituloSessao(sessao: Sessao, _pasta?: string): string {
   try {
     if (sessao.planejador === "claude") return tituloClaude(sessao.id);
     if (sessao.planejador === "opencode") return tituloOpenCode(sessao.id);
+    if (sessao.planejador === "antigravity") return tituloAntigravity(sessao.id);
   } catch { return ""; }
   return "";
 }
@@ -177,14 +268,22 @@ function abrirOpenCode(id: string, pasta: string, plataforma: NodeJS.Platform): 
   return { comando: "xdg-open", args: [pasta], copia };
 }
 
+// Antigravity: deep link do app pra conversa (so' o id validado entra na URL).
+function abrirAntigravity(id: string, plataforma: NodeJS.Platform): ComoAbrir | null {
+  if (!RE_UUID.test(id)) return null;
+  return { ...comandoNavegador(`antigravity://conversation/${id}`, plataforma), copia: id };
+}
+
 /**
- * Como reabrir a sessao: deep link do app Claude (id/host validados) ou terminal novo do OpenCode
- * (id validado, pasta existente e sem metacaractere). Planejador desconhecido/entrada invalida -> null.
+ * Como reabrir a sessao: deep link do app Claude (id/host validados), terminal novo do OpenCode
+ * (id validado, pasta existente e sem metacaractere) ou deep link do Antigravity (id UUID).
+ * Planejador desconhecido/entrada invalida -> null.
  */
 export function comoAbrirSessao(sessao: Sessao, pasta: string, plataforma: NodeJS.Platform): ComoAbrir | null {
   try {
     if (sessao.planejador === "claude") return abrirClaude(sessao, plataforma);
     if (sessao.planejador === "opencode") return abrirOpenCode(sessao.id, pasta, plataforma);
+    if (sessao.planejador === "antigravity") return abrirAntigravity(sessao.id, plataforma);
   } catch { return null; }
   return null;
 }
