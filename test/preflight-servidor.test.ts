@@ -67,3 +67,16 @@ test("status: esperar aceita o prefixo de 8 chars do runId", async () => {
   assert.deepEqual(await esperar(id.slice(0, 8), 1000), { fim: "PAINEL" });
   await assert.rejects(esperar(id.slice(0, 7), 10), /nao existe/);
 });
+
+test("abrir_run e /cancel: resolverIdRun aceita id, mcpRunId e prefixo unico", async () => {
+  const { resolverIdRun } = await import("../dist/hub.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pf-runs-"));
+  const run = (id: string, mcp: string) => writeFileSync(path.join(dir, id + ".jsonl"), JSON.stringify({ t: "run", ts: 1, mcpRunId: mcp }) + "\n");
+  run("e46823c3-aaa-1", "268e3a30-083c-4952-a1b9-0551cb130d1b");
+  run("e46823c3-bbb-2", "c2fe97b2-0874-4897-9ecb-8e69bcf65b6b");
+  assert.equal(resolverIdRun("e46823c3-bbb-2", dir), "e46823c3-bbb-2", "id completo");
+  assert.equal(resolverIdRun("268e3a30-083c-4952-a1b9-0551cb130d1b", dir), "e46823c3-aaa-1", "mcpRunId completo");
+  assert.equal(resolverIdRun("c2fe97b2", dir), "e46823c3-bbb-2", "prefixo do mcpRunId");
+  assert.equal(resolverIdRun("e46823c3", dir), null, "prefixo ambiguo (mesmo processo)");
+  assert.equal(resolverIdRun("c2fe97b", dir), null, "prefixo curto demais");
+});

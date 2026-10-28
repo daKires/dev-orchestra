@@ -119,6 +119,19 @@ export function lerRuns(dir: string): Map<string, Evento[]> {
   return m;
 }
 
+// Id da run no hub a partir do id completo, do mcpRunId (o que executar_orchestra devolve) ou de um
+// prefixo unico (>= 8 chars) de qualquer um dos dois; null se nao achar ou se o prefixo for ambiguo.
+export function resolverIdRun(q: string, dir = RUNS_DIR): string | null {
+  const achados = new Set<string>();
+  for (const [id, evs] of lerRuns(dir)) {
+    const ev = evs.find((e) => e.t === "run");
+    const m = ev && ev.t === "run" ? ev.mcpRunId ?? "" : "";
+    if (id === q || m === q) return id;
+    if (q.length >= 8 && (id.startsWith(q) || (m && m.startsWith(q)))) achados.add(id);
+  }
+  return achados.size === 1 ? [...achados][0] : null;
+}
+
 // ---- registros de planejadores ----
 // Valida/estrutura um registro cru; null se faltar campo obrigatorio (JSON incompleto e' descartado).
 function planejadorDe(j: any): Planejador | null {
