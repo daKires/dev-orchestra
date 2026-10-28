@@ -58,7 +58,9 @@ export function esperar(
   runId: string,
   ms: number,
 ): Promise<{ fim: string } | { rodando: string[] }> {
-  const run = runs.get(runId);
+  // Aceita o prefixo curto (>= 8 chars) do id, se ele for unico.
+  const ids = runId.length >= 8 ? [...runs.keys()].filter((k) => k.startsWith(runId)) : [];
+  const run = runs.get(runId) ?? (ids.length === 1 ? runs.get(ids[0]) : undefined);
   if (!run) {
     return Promise.reject(new Error(`run ${runId} nao existe`));
   }

@@ -413,7 +413,7 @@ export function PainelRun({ run, agora, arquivoDiff, onArquivoDiff, aba, onAba }
         <button type="button" disabled={!terminada || executando !== null} onClick={() => setConfirmar("descartar")} className={btn} style={btnEstilo(VERMELHO)}>
           {executando === "descartar" ? "Descartando…" : "Descartar"}
         </button>
-        {rodandoAgora ? (
+        {run.status === "rodando" ? (
           <button type="button" disabled={executando !== null} onClick={() => setConfirmar("cancelar")} className={cn(btn, "ml-auto")} style={btnEstilo(VERMELHO)}>
             {executando === "cancelar" ? "Cancelando…" : "Cancelar run"}
           </button>

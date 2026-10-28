@@ -35,8 +35,9 @@ export function StatusBar({ r, agora, onCancelar, onPaleta }: Props) {
             {k && k.n > 0 && <span>{fmtTok(k.tokensIn + k.tokensOut)} tok</span>}
             {k && k.n > 0 && <span>{fmtUSD(k.custo)}</span>}
           </span>
-          {st === "rodando" && (
-            <button onClick={onCancelar} className="flex items-center gap-1 rounded px-1.5 hover:bg-black/20">
+          {/* status bruto: preflight longo sem evento vira INTERROMPIDA na tela, mas o processo segue vivo */}
+          {r.status === "rodando" && (
+            <button onClick={onCancelar} className="flex items-center gap-1 rounded bg-destructive px-2 font-medium text-white hover:bg-destructive/85">
               <CircleStop className="size-3.5" />Cancelar run
             </button>
           )}
