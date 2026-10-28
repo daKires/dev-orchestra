@@ -44,7 +44,7 @@ export { envClaude };
 
 export {
   RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR, AGENTES_DIR, migrarDadosAntigos, comoAbrirDashboard,
-  runAtual, arquivoCancel, emitir, lerRuns, resolverIdRun, lerPlanejadores, limparPlanejadores, linhaDe,
+  runAtual, arquivoCancel, emitir, lerRuns, lerPlanejadores, limparPlanejadores, linhaDe,
   versaoUI, hostLocal,
 } from "./hub.js";
 export type { SlicePlano, Planejador, Evento, Emitir, DepsLimpeza } from "./hub.js";

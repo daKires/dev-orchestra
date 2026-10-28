@@ -14,7 +14,8 @@ import {
   PAUSA_MAX_MS,
   type Tarefa, type Override, type CaixaSlice,
 } from "./swarm.js";
-import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, resolverIdRun, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
+import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
+import { resolverIdRun } from "./hub.js";
 import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
 import { sessaoAtual, runMaisRecenteDaSessao, type RunDaSessao } from "./sessao.js";
