@@ -17,7 +17,7 @@ import {
   clientes, planejadores, sse, enviar, rescan, podar, servirEstatico,
   acaoValida, limparPlanejadores, arquivoCancel, versaoUI, hostLocal,
   responderTexto, rotasRuns, migrarDadosAntigos, definirGanchosHub,
-  lerRuns, eventosDaRun, lerCorpo, type Cliente,
+  lerRuns, resolverIdRun, eventosDaRun, lerCorpo, type Cliente,
 } from "./hub.js";
 
 import {
@@ -44,7 +44,7 @@ export { envClaude };
 
 export {
   RUNS_DIR, PLANEJADORES_DIR, CANVAS_DIR, AGENTES_DIR, migrarDadosAntigos, comoAbrirDashboard,
-  runAtual, arquivoCancel, emitir, lerRuns, lerPlanejadores, limparPlanejadores, linhaDe,
+  runAtual, arquivoCancel, emitir, lerRuns, resolverIdRun, lerPlanejadores, limparPlanejadores, linhaDe,
   versaoUI, hostLocal,
 } from "./hub.js";
 export type { SlicePlano, Planejador, Evento, Emitir, DepsLimpeza } from "./hub.js";
@@ -181,7 +181,7 @@ function criarServidor(): http.Server {
     if (url.startsWith("/cancel")) {
       const id = new URL(url, "http://x").searchParams.get("run") || "";
       if (!acaoValida(req) || !/^[a-z0-9-]+$/.test(id)) { res.writeHead(400); res.end(); return; }
-      try { fs.writeFileSync(arquivoCancel(id), String(Date.now())); res.writeHead(204); }
+      try { fs.writeFileSync(arquivoCancel(resolverIdRun(id) ?? id), String(Date.now())); res.writeHead(204); }
       catch { res.writeHead(500); }
       res.end();
       return;

@@ -2,13 +2,12 @@
 // Quem planeja e o Claude; aqui chega o plano pronto (slices). Quem revisa/barra e o Claude (ver /orchestra).
 import { mensagem as mensagemReal, CanceladoError, PROVEDOR_ID, type MensagemFn, type Ferramenta, type Msg } from "./deepseek.js";
 import { type Evento, type Emitir } from "./ui.js";
-import { execFile, exec } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs, appendFileSync } from "node:fs";
 import path from "node:path";
 
 const pexec = promisify(execFile); // git
-const pshell = promisify(exec);    // comandos allowlisted / gate (build/teste/typecheck)
 const MAX_TURNS = Number(process.env.DEV_ORCHESTRA_MAX_TURNS || "25");
 const CMD_TIMEOUT = Number(process.env.DEV_ORCHESTRA_CMD_TIMEOUT_MS || "120000");
 // O GATE tem timeout proprio (suite de teste pode passar de 2 min): separado do CMD_TIMEOUT dos agentes.
@@ -25,6 +24,13 @@ export type Tarefa = { tarefa: string; arquivos_alvo: string[]; descricao: strin
 // Override opcional vindo do planner (tool): allowlist e/ou gate explicitos.
 export type Override = { cmds?: string[]; gate?: string[] };
 
+// Script de servidor/watch (dev, start, serve, preview, watch, dev:web, test:watch...) nunca termina: no
+// preflight estoura o timeout e vira ENV-FAILED. Fica fora do auto-detect; entra so por override.cmds.
+// ponytail: so pelo nome do script; um "check": "vite" escapa (add olhar o corpo se aparecer).
+export function ehServidor(nome: string): boolean {
+  return /^(dev|start|serve|preview|watch)\b|\bwatch$/i.test(nome);
+}
+
 // Resolve COMANDOS/gate a partir do package.json do alvo (auto-detect), com override do planner e
 // fallback pro env (DEV_ORCHESTRA_CMDS/DEV_ORCHESTRA_GATE). PURA -> testavel no selftest.
 export function resolverDeScripts(
@@ -37,7 +43,7 @@ export function resolverDeScripts(
   let gate: string[];
   let origem: string;
   if (scripts) {
-    cmds = Object.keys(scripts).map((k) => "npm run " + k);
+    cmds = Object.keys(scripts).filter((k) => !ehServidor(k)).map((k) => "npm run " + k);
     if (scripts.test) cmds.push("npm test");
     gate = [];
     if (scripts.typecheck) gate.push("npm run typecheck");
@@ -91,21 +97,41 @@ export function recusaComando(cmd: string, scripts: Record<string, string> = {})
   return null;
 }
 
+// Mata o processo E os filhos (npm -> vite): no Windows, matar so o shell deixa o vite orfao na porta.
+export function matarArvore(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") execFile("taskkill", ["/T", "/F", "/PID", String(pid)], { windowsHide: true }, () => {});
+  else try { process.kill(-pid, "SIGKILL"); } catch {} // grupo criado pelo detached do spawn
+}
+
 // Roda um comando no shell do bridge (o mesmo dos agentes e do gate). Nunca lanca, exceto cancelamento.
+// Timeout/cancelamento matam a arvore inteira (matarArvore).
 export async function rodarShell(cmd: string, cwd: string, signal?: AbortSignal, timeout = CMD_TIMEOUT): Promise<{ code: number | string; saida: string; timeout: boolean }> {
+  if (signal?.aborted) throw new CanceladoError();
   // Pasta do node na frente do PATH: a ferramenta que abriu o MCP pode ter um PATH velho sem node/npm.
   const env: NodeJS.ProcessEnv = { ...process.env };
   const atual = env.PATH ?? env.Path ?? "";
   delete env.Path;
   env.PATH = path.dirname(process.execPath) + path.delimiter + atual;
-  try {
-    const { stdout, stderr } = await pshell(cmd, { cwd, windowsHide: true, timeout, maxBuffer: 10 * 1024 * 1024, signal, env });
-    return { code: 0, saida: String(stdout + stderr).slice(-4000), timeout: false };
-  } catch (e: any) {
-    if (signal?.aborted) throw new CanceladoError();
-    const saida = String((e?.stdout ?? "") + (e?.stderr ?? "") || e?.message || "").slice(-4000);
-    return { code: e?.code ?? "?", saida, timeout: !!e?.killed };
-  }
+  return new Promise((ok, falha) => {
+    const p = spawn(cmd, { cwd, shell: true, windowsHide: true, env, detached: process.platform !== "win32" });
+    let saida = "";
+    let estourou = false;
+    const junta = (b: Buffer) => { saida = (saida + b).slice(-8000); };
+    p.stdout.on("data", junta);
+    p.stderr.on("data", junta);
+    // matar + soltar os pipes: neto que segura stdout nao pode prender o "close"
+    const matar = () => { matarArvore(p.pid); p.stdout.destroy(); p.stderr.destroy(); };
+    const timer = setTimeout(() => { estourou = true; matar(); }, timeout);
+    signal?.addEventListener("abort", matar, { once: true });
+    p.on("error", (e) => junta(Buffer.from(String(e?.message ?? e))));
+    p.on("close", (code, sinal) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", matar);
+      if (signal?.aborted) return falha(new CanceladoError());
+      ok({ code: code === 0 && !estourou ? 0 : code ?? sinal ?? "?", saida: saida.slice(-4000), timeout: estourou });
+    });
+  });
 }
 
 export type ItemPreflight = { cmd: string; classe: "ok" | "esperada" | "ambiente" | "recusado"; motivo?: string; saida: string; ms: number };

@@ -14,7 +14,7 @@ import {
   PAUSA_MAX_MS,
   type Tarefa, type Override, type CaixaSlice,
 } from "./swarm.js";
-import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
+import { iniciarUI, emitir as emitirUI, linhaDe, lerRuns, resolverIdRun, runAtual, arquivoCancel, RUNS_DIR, comoAbrirDashboard, type Evento } from "./ui.js";
 import { tomarInstrucoes, pausada, esperarRetomada, retomarSlice, estaPausada } from "./instrucoes.js";
 import { iniciar, esperar } from "./runs.js";
 import { sessaoAtual, runMaisRecenteDaSessao, type RunDaSessao } from "./sessao.js";
@@ -691,7 +691,7 @@ server.registerTool(
       "Aguarda ate ~20s: se a run terminar, devolve o painel final; senao devolve as ultimas linhas e " +
       "pede pra chamar de novo.",
     inputSchema: {
-      runId: z.string().describe("runId devolvido por executar_orchestra"),
+      runId: z.string().describe("runId devolvido por executar_orchestra (ou o prefixo de 8 chars)"),
     },
   },
   async ({ runId }) => {
@@ -749,12 +749,12 @@ server.registerTool(
       "sessao do planejador (Claude Code ou OpenCode); se nenhuma run nasceu nesta sessao, " +
       "responde 'nenhuma run nesta sessao' e abre o dashboard geral.",
     inputSchema: {
-      runId: z.string().optional().describe("runId devolvido por executar_orchestra; sem ele, a run mais recente desta sessao"),
+      runId: z.string().optional().describe("runId devolvido por executar_orchestra (ou o prefixo de 8 chars); sem ele, a run mais recente desta sessao"),
     },
   },
   async ({ runId }) => {
     try {
-      const id = typeof runId === "string" && runId ? runId : idDaRunDaSessao();
+      const id = typeof runId === "string" && runId ? resolverIdRun(runId) ?? runId : idDaRunDaSessao();
       const url = id ? `${URL_DASH}/?run=${encodeURIComponent(id)}` : URL_DASH;
       abrirNoNavegador(url);
       return {
